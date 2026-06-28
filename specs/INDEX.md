@@ -70,6 +70,7 @@ and a unique `key` here.
 | SPEC-0056 | UPDATE  | In-app Auto-Update (electron-updater via GitHub Releases; stable+beta) | feature | draft | `features/` |
 | SPEC-0057 | BRAND   | Brand Identity (Vellum visual language, color/type/motion) | feature | draft | `features/` |
 | SPEC-0058 | STATE   | UI State Model — Projection-Backed Reads (no live vault scans on the render path) | architecture | draft | `architecture/` |
+| SPEC-0059 | SRCDEL  | Source Deletion — Principal-initiated, git-committed removal | feature | draft | `features/` |
 | SPEC-0060 | VUX     | Vellum v3 UI — whole-app visual & IA direction (one language; top bar; rail; motion) | feature | active | `design/` |
 | SPEC-0061 | REFIT   | Functional Rethink — v3 flows ↔ backend fit (responsiveness/git/index/interaction-model bets) | architecture | draft | `architecture/` |
 
