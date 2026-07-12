@@ -45,16 +45,16 @@
 - **#531 (daemon) is deliberately Wave 3** — after index + push settle the topology it re-houses.
 - The 07-05 trust spine (edit rescue, sensitivity ceiling, evidence verification, SPEC-0059 source deletion, Reviews-B2) is **not re-issued here** — it remains ratified direction tracked via SPEC-0061/#503 and the 07-05 proposal doc.
 
-## Tracker hygiene — recommendations on pre-existing open issues (not acted on)
+## Tracker hygiene — executed 2026-07-12 (Principal-approved)
 
-| Issue | Recommendation | Reason |
+| Issue | Action taken | Reason |
 |---|---|---|
-| #398 tokens / #399 typography / #400 rename / #401 icon / #404 Explore retheme | **Close as shipped** | Delivered by the v2 reskin + v3 rebuild (SPEC-0060, all views merged) |
-| #403 "The Line" retheme | **Close as superseded** | The Status view was dissolved (VUX-4); its remains are deleted by #523 |
-| #405 Motion & feel | **Close as superseded by #520** | Motion system now scoped with AC |
-| #427 Dark mode 'night study' | **Close as superseded by #521** | Same goal, scoped to the funded token re-point |
-| #406 About panel + branded empties | Keep; cross-link #523/#524 | Partially covered (About re-token in #523; empties in #524) |
-| #402 Fractal-lattice motif | Keep (brand work, still valid) | Not addressed by this review |
-| #205 Jobs view stuck "Loading…" | Keep until #512/#520 land, then verify & close | Root causes now identified (sequential probes, bare Loading, BUG-14 walk) |
-| #192 set-aside items read as "stuck" | Keep; cross-link #516 | Quarantine surfacing gives it a home |
-| #56 TCC-protected vaults | Keep | Still valid; untouched by this review |
+| #398 tokens / #399 typography / #400 rename / #401 icon / #404 Explore retheme | **CLOSED (completed)** | Delivered by the v2 reskin + v3 rebuild (SPEC-0060, all views merged; rename/icon PR #412; Explore #501) |
+| #403 "The Line" retheme | **CLOSED (superseded)** | The Status view was dissolved (VUX-4); its remains are deleted by #523 |
+| #405 Motion & feel | **CLOSED (superseded by #520)** | Motion system now scoped with AC |
+| #427 Dark mode 'night study' | **CLOSED (superseded by #521)** | Same goal, scoped to the funded token re-point |
+| #406 About panel + branded empties | Kept; cross-linked #523/#524 | Partially covered (About re-token in #523; empties in #524); re-scope the remainder after those land |
+| #402 Fractal-lattice motif | Kept (brand work, still valid) | Not addressed by this review |
+| #205 Jobs view stuck "Loading…" | Kept; root causes commented | Verify & close once #512 + #520 land (sequential probes, bare Loading, BUG-14 walk) |
+| #192 set-aside items read as "stuck" | Kept; cross-linked #516 | Quarantine surfacing gives it a home |
+| #56 TCC-protected vaults | Kept | Still valid; untouched by this review |
