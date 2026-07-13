@@ -3,7 +3,7 @@ design: DESIGN-LATTICE
 implements: SPEC-0057
 title: Fractal-Lattice Motif — Reusable Generator + Color-Law Fix (#402)
 type: design
-status: draft   # §6 is NEW Principal-directed motion work — re-opens GATE 1 for a real (not light) pass
+status: draft   # §1-§5 tracked #402 (CLOSED, shipped #578); §6 is NEW work tracked as #580 — same spec file, gate-1 APPROVE, awaiting gate-2
 owners: [KB-Design-Lead, KB-Lead, Principal]
 created: 2026-07-13
 updated: 2026-07-13b
@@ -164,7 +164,13 @@ larger, separate effort — but this is explicitly the kind of visual call SPEC-
 Principal, and the guidelines' own wording ("fractal field") is genuinely ambiguous between the two
 readings. Flagging rather than deciding. **Still open** as of this update — no answer yet.
 
-## 6. Mechanical motion — Principal-directed (NEW, resolves §5.1)
+## 6. Mechanical motion — Principal-directed (NEW, resolves §5.1) — tracked as **#580**, not #402
+
+> #402 itself is closed (§1-§5's scope shipped in #578). This section was added to the same spec **file**
+> after that closed, so it's tracked against a fresh issue, **#580**, per PM's bookkeeping correction —
+> reference #580 for this section's gate-1/gate-2/dev-dispatch going forward, not #402.
+
+
 
 `BRAND_DIAMOND`/`SIDEBAR_WMARK` currently run `dLoom`/`dChurn` (`design-system.css:412-415`) — an organic
 opacity/scale pulse and a rotate-scale-dip flip. Per §5.1, these are **rejected outright**: no breathing,
