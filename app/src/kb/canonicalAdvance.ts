@@ -75,6 +75,15 @@ async function pruneStaleWorktreeBranches(git: ReturnType<typeof simpleGit>): Pr
 }
 
 /**
+ * `sparse-checkout init`/`set` are NOT worktree-local: cone mode sets `core.sparseCheckout(Cone)`
+ * in the repo's SHARED `.git/config` (writing it is only per-worktree once `extensions.worktreeConfig`
+ * is on, which cone-mode init doesn't enable) — so two ephemeral worktrees running `sparse-checkout
+ * init` concurrently (ORCH-20 cap>1) raced on `.git/config`'s lockfile and threw `could not lock
+ * config file ...: File exists` (git's lockfile has no retry/wait). One process-wide mutex serializes
+ * just this brief config-writing step; worktree creation and the actual per-item work stay concurrent. */
+const sparseCheckoutSetupLock = new Mutex();
+
+/**
  * #508 item 2: materialize ONLY `sparsePaths` in the ephemeral worktree instead of the whole
  * `checkpoint` tree. `git worktree add --no-checkout` + cone-mode `sparse-checkout set` before the
  * first real checkout — verified empirically (not just per git's docs) that a NEW file written under
@@ -91,8 +100,10 @@ async function checkoutWorktree(git: ReturnType<typeof simpleGit>, wt: string, w
   }
   await git.raw('worktree', 'add', '--force', '--no-checkout', '-B', workBranch, wt, checkpoint);
   const wtGit = boundedGit(wt);
-  await wtGit.raw('sparse-checkout', 'init', '--cone');
-  await wtGit.raw('sparse-checkout', 'set', ...sparsePaths);
+  await sparseCheckoutSetupLock.run(async () => {
+    await wtGit.raw('sparse-checkout', 'init', '--cone');
+    await wtGit.raw('sparse-checkout', 'set', ...sparsePaths);
+  }, 'sparse-checkout-setup');
   await wtGit.raw('checkout', workBranch);
 }
 
