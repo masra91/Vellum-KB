@@ -202,7 +202,8 @@ export async function runResearcher(root: string, r: ResearcherConfig, req: Rese
       origin: 'secondary',
       research: provenance,
     });
-  const out = deps.lock ? await deps.lock.run(doCapture, `researcher:${r.id}`) : await doCapture();
+  // #507 item 4: priority — a researcher-finding capture must never queue behind Connect's bulk sweep tail.
+  const out = deps.lock ? await deps.lock.run(doCapture, `researcher:${r.id}`, { priority: true }) : await doCapture();
 
   await appendAuditEvent(root, {
     actor: 'researcher',

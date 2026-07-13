@@ -265,9 +265,12 @@ export class Orchestrator {
     }
   }
 
-  /** Fire-and-forget capture (CAPTURE-2): preserve+commit under the lock, then poke. */
+  /** Fire-and-forget capture (CAPTURE-2): preserve+commit under the lock, then poke. #507 item 4:
+   *  priority — a capture must never queue behind a long bulk/sweep pass (Connect's link/orphan/dedup
+   *  tail, PERF-E3); it only needs to wait for whatever section is ALREADY running, never for every
+   *  background section already queued ahead of it. */
   async capture(surface: string, payloads: CapturePayload[]): Promise<CaptureOutcome> {
-    const res = await this.lock.run(() => captureToInbox(this.root, surface, payloads), 'capture');
+    const res = await this.lock.run(() => captureToInbox(this.root, surface, payloads), 'capture', { priority: true });
     void this.poke();
     return res;
   }
