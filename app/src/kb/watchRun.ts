@@ -49,6 +49,12 @@ export async function writeWatchLedger(root: string, id: string, ledger: WatchLe
   await fs.writeFile(p, JSON.stringify(ledger, null, 2) + '\n', 'utf8');
 }
 
+/** The minimal per-file stat shape the stability gate needs (#516 BUG-6). */
+export interface WatchFileStat {
+  mtimeMs: number;
+  size: number;
+}
+
 export interface RunWatchDeps {
   /** The REAL vault root (Obsidian/promotion target) — the loop-guard checks the folder against this. */
   vaultRoot: string;
@@ -58,7 +64,18 @@ export interface RunWatchDeps {
    *  against stage advances/other writers on the same git index. Production (`WatchScheduler`) always
    *  supplies it; tests that don't exercise concurrent writers may omit it. */
   lock?: Mutex;
+  /** Injectable file stat (#516 BUG-6 stability gate) — defaults to `fs.stat`; tests drive it without
+   *  real filesystem timing. */
+  stat?: (absPath: string) => Promise<WatchFileStat>;
+  /** Injectable ms clock for the stability-window comparison (#516 BUG-6); defaults to `Date.now`. */
+  nowMs?: () => number;
 }
+
+// #516 BUG-6: a file whose last write is more recent than this is treated as still-being-written and
+// skipped THIS pass — chokidar's own `awaitWriteFinish` (stabilityThreshold 2000ms in watchScheduler.ts)
+// already waits this long past a file's OWN last write before firing its event, so a file that legitimately
+// triggered the pass always clears this check; the gate exists for its SIBLINGS in the same drop.
+const STABILITY_WINDOW_MS = 2000;
 
 export interface RunWatchResult {
   /** PRIMARY source ids produced this pass. */
@@ -134,6 +151,8 @@ export async function ingestWatchedFile(
 export async function reconcileWatchFolder(root: string, c: WatchFolderConfig, deps: RunWatchDeps): Promise<RunWatchResult> {
   if (!isSafeWatchId(c.id)) throw new Error(`reconcileWatchFolder: refusing unsafe watch id ${JSON.stringify(c.id)}`);
   const now = deps.now ?? (() => new Date().toISOString());
+  const statFile = deps.stat ?? ((p: string) => fs.stat(p).then((s) => ({ mtimeMs: s.mtimeMs, size: s.size })));
+  const nowMs = deps.nowMs ?? Date.now;
 
   // WATCH-10 loop-guard: refuse before any read (the vault/.kb/.git or an ancestor → ingest loop).
   const guard = await checkWatchLoopSafe(deps.vaultRoot, c.folderPath);
@@ -188,7 +207,33 @@ export async function reconcileWatchFolder(root: string, c: WatchFolderConfig, d
 
   try {
     for (const f of scan.files) {
+      // #516 BUG-6: a mid-copy stability gate. chokidar's `awaitWriteFinish` only stabilizes the ONE
+      // file that triggered the live event — a multi-file drop's SIBLING files (dragging 10 files in
+      // at once) get scanned + read here with NO per-file check at all, ingesting a still-copying file
+      // truncated as an "immutable" source, then re-ingesting the completed copy as a SECOND source once
+      // it finally settles. Two-stat gate, applied uniformly to every file on every pass (a live event
+      // AND the startup/restart reconcile alike): skip a file whose last write is within the stability
+      // window (still fresh — maybe still being written), and skip it again if its size changed between
+      // the pre- and post-read stat (it grew/shrank WHILE we were reading it — a torn read). Either case
+      // is a quiet, bounded skip: the file is simply reconsidered on the NEXT pass once it settles —
+      // chokidar fires its OWN stabilized 'add'/'change' event per file, so nothing is dropped forever.
+      let preStat: WatchFileStat;
+      try {
+        preStat = await statFile(f.absPath);
+      } catch {
+        skipped++; // vanished between the scan and the stat — reconsidered next pass if it reappears
+        continue;
+      }
+      if (nowMs() - preStat.mtimeMs < STABILITY_WINDOW_MS) {
+        skipped++; // too recently modified — likely still mid-write
+        continue;
+      }
       const data = new Uint8Array(await fs.readFile(f.absPath));
+      const postStat = await statFile(f.absPath).catch(() => preStat); // best-effort — a vanished file post-read still had valid bytes in hand
+      if (postStat.size !== preStat.size) {
+        skipped++; // grew/shrank while we were reading it — unstable, not this pass
+        continue;
+      }
       const hash = hashContent(data);
       const prior = ledger[f.relPath];
       if (prior && prior.hash === hash) { skipped++; continue; } // unchanged re-save at this path → no-op (WATCH-3/8)

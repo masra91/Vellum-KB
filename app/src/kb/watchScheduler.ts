@@ -51,6 +51,10 @@ export interface WatchSchedulerDeps {
    *  Defaults to a fresh, unshared `Mutex` (tests / standalone use); production always passes the
    *  real per-vault lock. */
   lock?: Mutex;
+  /** Passed through to every reconcile pass's {@link RunWatchDeps} (#516 BUG-6 stability gate) — tests
+   *  drive it without real filesystem timing; production omits it (real `fs.stat`/`Date.now`). */
+  stat?: RunWatchDeps['stat'];
+  nowMs?: RunWatchDeps['nowMs'];
 }
 
 interface ActiveWatch {
@@ -70,6 +74,8 @@ export class WatchScheduler {
   private readonly log: DevLog;
   private readonly factory: WatcherFactory;
   private readonly now: () => string;
+  private readonly statFile: RunWatchDeps['stat'];
+  private readonly nowMsFn: RunWatchDeps['nowMs'];
   private readonly debounceMs: number;
   private readonly reconcileFn: (root: string, f: WatchFolderConfig, deps: RunWatchDeps) => Promise<unknown>;
   private readonly lock: Mutex;
@@ -84,6 +90,8 @@ export class WatchScheduler {
     this.log = log.child({ scope: 'watch-scheduler' });
     this.factory = deps.watcherFactory ?? defaultWatcherFactory;
     this.now = deps.now ?? (() => new Date().toISOString());
+    this.statFile = deps.stat;
+    this.nowMsFn = deps.nowMs;
     this.debounceMs = deps.debounceMs ?? 250;
     this.reconcileFn = deps.reconcile ?? reconcileWatchFolder;
     this.lock = deps.lock ?? new Mutex();
@@ -170,7 +178,7 @@ export class WatchScheduler {
     if (this.reconciling.has(f.id)) { this.pending.add(f.id); return; } // busy → coalesce, never drop
     this.reconciling.add(f.id);
     try {
-      await this.reconcileFn(this.root, f, { vaultRoot: this.vaultRoot, now: this.now, lock: this.lock });
+      await this.reconcileFn(this.root, f, { vaultRoot: this.vaultRoot, now: this.now, lock: this.lock, stat: this.statFile, nowMs: this.nowMsFn });
     } catch (err) {
       this.log.error('watch.reconcile-failed', { watchId: f.id, err });
     } finally {

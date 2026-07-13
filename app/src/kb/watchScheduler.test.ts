@@ -21,6 +21,12 @@ function gitInstalledSync(): boolean {
   }
 }
 const gitAvailable = gitInstalledSync();
+// #516 BUG-6: the stability gate skips a file whose mtime is within the last 2s (see watchRun.ts). These
+// tests write a file and immediately trigger a reconcile — report every file as already 10s-settled instead.
+const STABLE_STAT = async (p: string): Promise<{ mtimeMs: number; size: number }> => {
+  const s = await fs.stat(p);
+  return { mtimeMs: s.mtimeMs - 10_000, size: s.size };
+};
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Poll `fn` until it reaches `target` or the timeout — robust against the reconcile's git-commit timing. */
 async function waitUntil(fn: () => Promise<number>, target: number, timeoutMs = 4000): Promise<number> {
@@ -65,7 +71,7 @@ describe.skipIf(!gitAvailable)('WatchScheduler (SPEC-0037)', () => {
   it('startup reconcile ingests a pre-existing file; a live event ingests a newly-added one', async () => {
     await fs.writeFile(path.join(watched, 'a.md'), 'A');
     await upsertWatchFolder(vault, { id: 'drop', folderPath: watched, enabled: true, scope: 'global', sensitivity: 'internal' });
-    const sched = new WatchScheduler(vault, vault, undefined, { watcherFactory: factory, debounceMs: 0 });
+    const sched = new WatchScheduler(vault, vault, undefined, { watcherFactory: factory, debounceMs: 0, stat: STABLE_STAT });
 
     await sched.refresh(); // = what start() kicks off; awaited for determinism
     expect(sched.watchingIds().has('drop')).toBe(true);
