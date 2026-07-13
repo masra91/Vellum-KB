@@ -460,9 +460,14 @@ body.shell-active #app {
 .nav-icon svg { display: block; } /* inline line glyph; inherits currentColor → gilds gold on hover/active */
 .nav-label { flex: 1 1 auto; }
 
-/* Faint fractal-lattice watermark, low in the rail (gold, very low opacity; ambient drift). */
-.sidebar-wmark { position: absolute; left: -2.5rem; bottom: 4.5rem; opacity: 0.1; pointer-events: none; color: var(--viz-brass); animation: viz-drift var(--viz-dur-field) ease-in-out infinite; }
+/* Faint fractal-lattice watermark, low in the rail (gold, very low opacity; ambient drift). #402 §3:
+   `color` was `var(--viz-brass)` — the "needs you / caution" semantic state hue (terminology.md §3),
+   wrong for silent decorative chrome; the motif itself is gold-only (BRAND-GUIDELINES §3). */
+.sidebar-wmark { position: absolute; left: -2.5rem; bottom: 4.5rem; opacity: 0.1; pointer-events: none; color: var(--gold); animation: viz-drift var(--viz-dur-field) ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .sidebar-wmark { animation: none; } }
+/* #402 §4 (DARK-MODE-ADDENDUM "Field/watermark opacity: raise ~0.16 so the faint fractal field reads on
+   dark") — the light-mode opacities above are too faint against a dark ground; raised uniformly here. */
+:root[data-theme='dark'] .sidebar-wmark { opacity: 0.16; }
 /* #512 PERF-R8: this is persistent shell chrome (present the whole session, not view-scoped) — a
    perpetual compositor-active animation with zero purpose while the window is blurred/hidden.
    `.shell-idle` is toggled by shell.ts on blur/focus/visibilitychange. */
@@ -865,6 +870,10 @@ button:disabled {
   background: var(--viz-field-gradient); background-size: 200% 200%; opacity: 0.045;
   animation: viz-drift var(--viz-dur-drift) linear infinite;
 }
+/* #402 §4 — opacity only (not a full Explore dark-mode migration, out of scope here): the addendum's
+   ~0.16 target so the field reads against a dark ground; --viz-field-gradient already has its own
+   darker variant (design-system.css), this just raises how visible it is. */
+:root[data-theme='dark'] .explore::before { opacity: 0.16; }
 .explore-title { font-size: 1.4rem; margin: 0; color: var(--ink); }
 .explore-sub { color: var(--stone); margin: 0.25rem 0 1rem; max-width: 60ch; }
 /* Full-view empty (no entities) now renders via the shared `.viz-empty` hero (emptyState()) — see exploreView.ts. */
@@ -996,6 +1005,8 @@ button:disabled {
   background: var(--viz-field-gradient); background-size: 200% 200%; opacity: 0.05;
   animation: viz-drift var(--viz-dur-field) linear infinite;
 }
+/* #402 §4 — same DARK-MODE-ADDENDUM ~0.16 target as .explore::before above. */
+:root[data-theme='dark'] .exp-graph::before { opacity: 0.16; }
 .exp-svg { width: 100%; height: 100%; display: block; position: relative; z-index: 1; }
 /* floating controls over the graph (.viz-float = translucent linen + blur + depth, design-system.css) */
 .exp-bar { position: absolute; top: 0.9rem; left: 0.9rem; right: 0.9rem; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
