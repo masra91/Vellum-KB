@@ -91,6 +91,12 @@ const kbApi: KbApi = {
     ipcRenderer.on('kb:projection-changed', listener);
     return () => ipcRenderer.removeListener('kb:projection-changed', listener);
   },
+  // #512: the kept-alive qcap sheet's reset signal on re-summon (see kb/types.ts for why).
+  onQuickCaptureResummoned: (cb) => {
+    const listener = (): void => cb();
+    ipcRenderer.on('kb:qcap-resummoned', listener);
+    return () => ipcRenderer.removeListener('kb:qcap-resummoned', listener);
+  },
 };
 
 contextBridge.exposeInMainWorld('kbApi', kbApi);

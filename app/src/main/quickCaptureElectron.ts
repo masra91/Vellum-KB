@@ -207,33 +207,31 @@ export function electronQuickCaptureDeps(hooks: ElectronQcapHooks): QuickCapture
       }
     },
     showSheet() {
-      // Create fresh each summon so the renderer re-inits (clipboard re-read, empty field). Headless:
-      // depends on nothing but this window (QCAP-4).
+      // #512 PERF-R7: keep the window ALIVE across summons (hideSheet hides, never destroys) — a
+      // fresh BrowserWindow + full page load on every hotkey press was the dominant cost standing
+      // between a summon and the <~150ms warm-focus target, independent of how small the bundle is.
+      // Only the FIRST-ever summon needs a real load; every summon after that just re-shows the
+      // already-warm window and tells its still-mounted sheet to reset itself (clipboard re-read,
+      // empty field) — see `kb:qcap-resummoned` (kb/types.ts) for the reset signal.
       if (!sheet || sheet.isDestroyed()) {
         sheet = createSheetWindow(hooks.onClose);
+        const w = sheet;
+        w.once('ready-to-show', () => {
+          if (!w.isDestroyed()) {
+            anchorUpperThird(w);
+            w.show();
+            w.focus();
+          }
+        });
+        return;
       }
-      const w = sheet;
-      w.once('ready-to-show', () => {
-        if (!w.isDestroyed()) {
-          anchorUpperThird(w);
-          w.show();
-          w.focus();
-        }
-      });
-      if (!w.isVisible()) {
-        // already ready (re-show path)
-        try {
-          anchorUpperThird(w);
-          w.show();
-          w.focus();
-        } catch {
-          /* ready-to-show will handle it */
-        }
-      }
+      sheet.webContents.send('kb:qcap-resummoned');
+      anchorUpperThird(sheet);
+      sheet.show();
+      sheet.focus();
     },
     hideSheet() {
-      if (sheet && !sheet.isDestroyed()) sheet.destroy();
-      sheet = null;
+      if (sheet && !sheet.isDestroyed()) sheet.hide(); // keep-alive: hidden, not torn down
     },
     restoreFocus() {
       // macOS: hiding the app returns key focus to the previously-active app (QCAP-2). Elsewhere the

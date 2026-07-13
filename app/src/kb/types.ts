@@ -891,6 +891,13 @@ export interface KbApi {
   // this is a SUBSCRIPTION, not a request/response call — it returns an unsubscribe function so a view's
   // `hide()` can stop listening (no leaked IPC listener across a view switch).
   onProjectionChanged(cb: (event: { store: string; builtAt: string }) => void): () => void;
+  // #512 PERF-R7: the qcap sheet window is now kept alive (hidden, not destroyed) across summons so a
+  // re-summon is instant — no BrowserWindow re-creation, no bundle re-parse. Since the page itself isn't
+  // reloaded, main pushes this on every re-summon so the already-mounted sheet resets its own state
+  // (re-fetches quickCaptureContext, clears the field) exactly as a fresh page load used to. A
+  // SUBSCRIPTION like `onProjectionChanged`/`onAskProgress` — returns an unsubscribe fn, though the qcap
+  // route's own single mount never needs to call it (the sheet lives for the window's lifetime).
+  onQuickCaptureResummoned(cb: () => void): () => void;
 }
 
 /** The curated Activity feed + its window-cap signal. Consumers key off `total`/`truncated`, NOT

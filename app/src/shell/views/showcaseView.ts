@@ -14,6 +14,11 @@
 // Reachability: dev-only, mounted by renderer.ts on a `?showcase` / `#showcase` flag — never in the user
 // nav, no IPC. Theme capture is the snapshot's job (Playwright `emulateMedia` forces dark/light), so the
 // page renders once and the e2e screenshots it under each scheme.
+//
+// #512: CSS lives here (not `renderer.ts`) so the showcase route's dynamic-import chunk carries only the
+// design-system foundation + its own gallery layout, not the shell/setup/qcap CSS.
+import '../design-system.css';
+import './showcase.css';
 import { esc, emptyState } from '../html';
 
 /** A captioned cell: the live primitive + a mono caption naming variant/state, so a diff is legible. */

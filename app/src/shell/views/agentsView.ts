@@ -40,22 +40,32 @@ export function mountAgents(container: HTMLElement): ViewHandle {
 }
 
 async function render(container: HTMLElement): Promise<void> {
+  // #512 PERF-R7: listAgents/getModelCatalog are mutually independent (neither's input depends on the
+  // other's output) but used to run sequentially anyway — the issue's own "worst-case 16s Loading…"
+  // came from summing two 8s-bounded reads instead of overlapping them. Both are kicked off (and so
+  // BOTH in flight) here, before either is awaited; each keeps its OWN error handling below, unchanged.
+  const agentsPromise = withTimeout(window.kbApi.listAgents());
+  // SPEC-0048: the model picker's data — best-effort, isolated (incl. against a SYNCHRONOUS throw from
+  // the call itself, e.g. an older client without the IPC) so a probe miss never blocks the agent list;
+  // the control just omits when absent (ENG-15/16). Wrapped in its own async IIFE (not the block below's
+  // try/catch) precisely so this isolation holds even though it now starts concurrently with agentsPromise.
+  const catalogPromise = (async (): Promise<ModelCatalogView | null> => {
+    try {
+      return await withTimeout(window.kbApi.getModelCatalog());
+    } catch {
+      return null;
+    }
+  })();
+
   let agents: AgentView[];
   try {
     // #145: bound the wait so a hung `listAgents` shows a retryable error, never an infinite spinner.
-    agents = await withTimeout(window.kbApi.listAgents());
+    agents = await agentsPromise;
   } catch {
     renderLoadError(container, '', () => void render(container));
     return;
   }
-  // SPEC-0048: the model picker's data — best-effort, isolated so a probe miss (or an older client
-  // without the IPC) never blocks the agent list; the control just omits when absent (ENG-15/16).
-  let catalog: ModelCatalogView | null = null;
-  try {
-    catalog = await withTimeout(window.kbApi.getModelCatalog());
-  } catch {
-    catalog = null;
-  }
+  const catalog = await catalogPromise;
   if (agents.length === 0) {
     container.innerHTML = `<p class="ag-empty viz-body">No librarians to show — open a library.</p>`;
     return;
