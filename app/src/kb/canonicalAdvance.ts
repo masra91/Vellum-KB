@@ -45,7 +45,7 @@ export function boundedGit(dir: string, timeoutMs: number = WORKTREE_GIT_TIMEOUT
  *  unrecognized worktree (incl. a future persistent type) is left ALONE rather than destroyed; the
  *  cost is only that a NEW ephemeral stage must be added here to be reaped (a recoverable leak, not
  *  data loss). (KB-QD #151 gate; allowlist > denylist for a destructive guard.) */
-const EPHEMERAL_STAGES = ['archive', 'claims', 'connect', 'decompose'] as const;
+const EPHEMERAL_STAGES = ['archive', 'claims', 'connect', 'decompose', 'consolidation'] as const;
 const EPHEMERAL_WT_NAME = new RegExp(`^(${EPHEMERAL_STAGES.join('|')})-[0-9A-Za-z]{26}$`);
 
 /** True iff `name` is an ephemeral per-item worktree dir safe to reap — i.e. `<known-stage>-<ULID>`.
