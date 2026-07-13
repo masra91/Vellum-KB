@@ -114,7 +114,25 @@ export async function withEphemeralWorktree<T>(
   await fs.mkdir(path.dirname(wt), { recursive: true });
   await checkoutWorktree(git, wt, workBranch, checkpoint, sparsePaths);
   try {
-    return await fn({ wt, workBranch });
+    const result = await fn({ wt, workBranch });
+    // #508 item 2 hardening (QA follow-up on #551): every current `sparsePaths` caller ends `fn` with
+    // `git add -A` + commit, so a CLEAN tree is the invariant once `fn` returns. If anything is still
+    // untracked/modified, that's either a real bug in `fn` or the sparse-checkout silent-drop landmine
+    // (a write outside the declared `sparsePaths` that `git add` silently skipped instead of erroring —
+    // verified this is real, not hypothetical: see `canonicalAdvance.test.ts`). Fail LOUD here, before
+    // teardown discards the dropped write forever, instead of leaving a future dev to discover it via
+    // missing data. Only checked when `sparsePaths` was actually used — the full-checkout default has
+    // no such landmine to guard against.
+    if (sparsePaths && sparsePaths.length > 0) {
+      const status = await boundedGit(wt).status();
+      if (status.files.length > 0) {
+        throw new Error(
+          `withEphemeralWorktree(${stage}): sparsePaths=[${sparsePaths.join(', ')}] left uncommitted paths after prepare — ` +
+            `likely a write outside the declared sparse scope was silently dropped by git add: ${status.files.map((f) => f.path).join(', ')}`,
+        );
+      }
+    }
+    return result;
   } finally {
     // #135 cascade — cleanup-on-failure MUST NOT leak the worktree dir. `worktree remove --force`
     // can fail (concurrent git state, a half-broken admin entry); when it does, fall back to a raw
