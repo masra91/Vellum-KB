@@ -52,7 +52,7 @@ import { readSourceTitles } from '../kb/sourceTitleRead';
 import { planSetAsideAction, type SetAsideTarget } from '../kb/pipelineControl';
 import { readConversionCounts, type ConversionCounts } from '../kb/conversionCounts';
 import { ensureStagingWorktree } from '../kb/stagingWorktree';
-import { reapEphemeralWorktrees, boundedGit } from '../kb/canonicalAdvance';
+import { reapEphemeralWorktrees, boundedGit, bumpReplayEpoch } from '../kb/canonicalAdvance';
 import { fastHeadSha, fastHeadBranch } from '../kb/gitHeadFast';
 import { CanonicalQueueCache } from '../kb/queueCache';
 import type { CandidateSet } from '../kb/connectAgent';
@@ -2170,11 +2170,21 @@ let replaying = false;
  * purge runs), performs the purge + epoch reset + promotion on `staging`→`main` (REPLAY-4/6/8),
  * then resumes the sweeps so the pipeline re-derives every Source from the start (REPLAY-9).
  * A second concurrent replay is refused (REPLAY-12).
+ *
+ * BUG-8 (#518): stopping the sweeps only cancels their TIMERS — it never awaits an item whose
+ * off-lock `prepare()` was already mid-flight (e.g. a slow decompose/claims copilot call). Such an
+ * item's advance could otherwise land AFTER this purge, applying now-stale, pre-epoch derived work
+ * onto the freshly-reset tree. `bumpReplayEpoch()` is called FIRST, before anything else, so every
+ * in-flight `prepare()` (which captures the epoch at its own start) is fenced: its advance — checked
+ * inside the canonical-writer lock, the same lock `runFullReplay`'s purge holds — is dropped as
+ * superseded rather than applied. The purged/reset source is already back in the queue regardless, so
+ * dropping a stale advance never loses work, only avoids a redundant/stale duplicate.
  */
 export async function fullReplay(): Promise<FullReplayResult> {
   if (!active) return { ok: false, message: 'No active library.' };
   if (replaying) return { ok: false, message: 'A replay is already in progress.' };
   replaying = true;
+  bumpReplayEpoch();
   const { vaultPath, stagingWt, lock } = active;
   // Pause every sweep before the purge; the in-flight commit (if any) drains as we take the lock.
   stopAllStages(active);

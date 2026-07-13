@@ -15,6 +15,32 @@ import { ensureGitIdentity } from './vault';
 import { noopDevLog, type DevLog } from './devlog';
 import { reconcileStaleIndexLock, hasLiveIndexHolder, withCanonicalIndexLock } from './canonicalLockHeal';
 
+// #518 BUG-8: Full Replay purges + resets the canonical tree, but only STOPS the stage sweep timers —
+// it never AWAITS an item whose OFF-lock prepare() (cognition + write + commit-to-workbranch) was
+// already in flight. If that item's advance runs AFTER the purge, it lands now-stale, pre-epoch
+// derived content onto the freshly-reset tree (stale + re-derived duplicates). This in-memory,
+// session-lifetime counter fences that: `bumpReplayEpoch()` is called as the very FIRST thing
+// `fullReplay()` does (pipeline.ts); every advance captures the epoch its `prepare()` started under,
+// then re-checks it INSIDE the canonical-writer lock, right before actually applying the commit — so
+// no replay can race the check itself (both the replay's purge and every advance serialize through the
+// SAME lock). A mismatch means "superseded by a replay" — the advance is dropped (never applied,
+// silently, not as a poison/setaside item — the replay's own reset already re-queues the source for a
+// natural re-derive). Doesn't need to survive a restart: a fresh process has nothing in flight to fence.
+let replayEpoch = 0;
+
+/** The current replay epoch (see above). Exported for `pipeline.ts`'s `fullReplay()` to bump and for
+ *  tests to assert against. */
+export function currentReplayEpoch(): number {
+  return replayEpoch;
+}
+
+/** Advance to a new replay epoch — fences out any advance whose `prepare()` started under an older
+ *  one. Returns the new epoch (tests use this to construct a deliberately-stale capture). */
+export function bumpReplayEpoch(): number {
+  replayEpoch += 1;
+  return replayEpoch;
+}
+
 /** Default same-path collision retries before an item is set aside (ORCH-19). */
 export const DEFAULT_MAX_COLLISION_RETRIES = 3;
 
@@ -293,10 +319,21 @@ export async function withOptimisticAdvance(
 ): Promise<OptimisticAdvanceResult> {
   const maxRetries = opts.maxCollisionRetries ?? DEFAULT_MAX_COLLISION_RETRIES;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // BUG-8 (#518): captured BEFORE prepare() (which may run a slow copilot call off-lock) so a
+    // replay that starts anytime during prepare — or while queued waiting for the lock below — is
+    // caught by the re-check inside the lock.
+    const epochAtPrepareStart = currentReplayEpoch();
     const base = await canonicalHead(opts.root);
     const committed = await prepare(base);
     if (!committed) return 'noop';
-    const outcome = await opts.lock.run(() => advanceOrCollide(opts.root, opts.workBranch, base, undefined, opts.log), opts.label ?? 'advance');
+    const outcome = await opts.lock.run(async (): Promise<AdvanceOutcome | 'stale-epoch'> => {
+      // Re-checked INSIDE the lock: the replay's own purge also runs under this lock, so by the time
+      // we're here, no concurrent replay can be mid-flight — whatever epoch we see now is final for
+      // this advance's decision.
+      if (currentReplayEpoch() !== epochAtPrepareStart) return 'stale-epoch';
+      return advanceOrCollide(opts.root, opts.workBranch, base, undefined, opts.log);
+    }, opts.label ?? 'advance');
+    if (outcome === 'stale-epoch') return 'noop'; // superseded by a replay — dropped, not applied; the replay's reset already re-queues the source
     if (outcome === 'advanced') return 'advanced';
     // 'collision' → re-sync to the moved canonical and retry the whole item.
   }
@@ -352,6 +389,8 @@ export async function withConcurrentAdvance(
 ): Promise<OptimisticAdvanceResult> {
   const maxRetries = opts.maxCollisionRetries ?? DEFAULT_MAX_COLLISION_RETRIES;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // BUG-8 (#518): see withOptimisticAdvance — captured before the (possibly slow, off-lock) prepare.
+    const epochAtPrepareStart = currentReplayEpoch();
     const base = await canonicalHead(opts.root);
     const outcome = await withEphemeralWorktree(
       opts.root,
@@ -360,10 +399,15 @@ export async function withConcurrentAdvance(
       async ({ wt, workBranch }) => {
         const committed = await prepare({ wt, base });
         if (!committed) return 'noop' as const;
-        return opts.lock.run(() => advanceOrCollide(opts.root, workBranch, base, undefined, opts.log), opts.label ?? `${opts.stage}:advance`);
+        return opts.lock.run(async (): Promise<AdvanceOutcome | 'stale-epoch'> => {
+          // Re-checked INSIDE the lock — see withOptimisticAdvance for why this is race-free.
+          if (currentReplayEpoch() !== epochAtPrepareStart) return 'stale-epoch';
+          return advanceOrCollide(opts.root, workBranch, base, undefined, opts.log);
+        }, opts.label ?? `${opts.stage}:advance`);
       },
       opts.sparsePaths,
     );
+    if (outcome === 'stale-epoch') return 'noop'; // superseded by a replay — dropped, not applied
     if (outcome === 'noop') return 'noop';
     if (outcome === 'advanced') return 'advanced';
     // 'collision' → retry the whole item in a fresh worktree against the moved canonical.
