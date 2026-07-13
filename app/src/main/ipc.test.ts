@@ -741,6 +741,20 @@ describe('SPEC-0058 slice-0 — Explore + Health evergreen-graph read path (REAL
     expect(['ok', 'attention']).toContain(proj.overall);
   });
 
+  it('SPEC-0061 T1 (#530): kb:healthReport serves from the SQLite library index, building it on first read', async () => {
+    await seedGraphVault();
+    const dbPath = path.join(vaultDir, '.kb', 'cache', 'library.db');
+    await expect(fs.access(dbPath)).rejects.toThrow(); // no index yet — proves the NEXT call is what builds it
+
+    const proj = await invoke<{ scanned: number }>('kb:healthReport');
+    expect(proj.scanned).toBe(2);
+    await expect(fs.access(dbPath)).resolves.toBeUndefined(); // the index is now on disk — this call went through it
+
+    // A second call reuses the same on-disk index and still returns the same, correct scan.
+    const proj2 = await invoke<{ scanned: number }>('kb:healthReport');
+    expect(proj2.scanned).toBe(2);
+  });
+
   it('all three handlers degrade to safe empty results when no vault is active (never throw)', async () => {
     // no kb:create → readAppConfig has no activeVaultPath
     await fs.writeFile(path.join(state.userData, 'kb-app.config.json'), JSON.stringify({ activeVaultPath: null }) + '\n');
