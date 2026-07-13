@@ -9,7 +9,7 @@ created: 2026-07-12
 updated: 2026-07-12
 related: [SPEC-0060, "design-prototypes/vellum-v3.html", "issue #524"]
 gates:
-  ai-patterns: pending      # GATE 1 — KB-AI-Detector
+  ai-patterns: approved     # GATE 1 — KB-AI-Detector, 2026-07-13 (PR #535)
   boundaries: not-yet-routed # GATE 2 — KB-QD, routed at dispatch
 ---
 
@@ -102,9 +102,10 @@ token).
 
 ## 5. VUX-17 — Agents drill-in disposition
 
-**This is the one open decision in the batch, and it needs KB-Lead sign-off (not mine alone) per
-the issue's own acceptance bar** ("VUX-17 has an explicit disposition — scheduled slice or spec
-de-scope with KB-Lead sign-off").
+**RESOLVED 2026-07-13 — SCHEDULED (not de-scoped).** PM approved this recommendation in
+`#wave2-ux-prep`, standing in for KB-Lead sign-off per the issue's acceptance bar ("VUX-17 has an
+explicit disposition — scheduled slice or spec de-scope with KB-Lead sign-off"). §5 below is the
+approved sequencing; #524 is clear on this front.
 
 **My recommendation: schedule it, don't de-scope.** The mock already fully specifies the drill-in
 — a quiet chevron cue in the card head (`.ag-drill`, `vellum-v3.html:1048-1050`), wired so every
@@ -116,7 +117,7 @@ run history that SPEC-0061 T1's SQLite/FTS index (wave-1 #530) is landing now). 
 *designed and prototyped* requirement because its richest data source is mid-flight would be
 walking back a ratified decision, not right-sizing scope.
 
-**Proposed sequencing (subject to KB-Lead confirming):**
+**Approved sequencing (confirmed 2026-07-13):**
 1. **Ship the drill-in shell now**, matching the mock exactly: the chevron cue, the click target,
    and a detail view showing identity + current config (schedule cadence, autonomy, clearance —
    data that already exists per-agent today, no new store needed).
@@ -125,10 +126,7 @@ walking back a ratified decision, not right-sizing scope.
    available yet" placeholder in the interim, not a broken/empty look.
 
 This satisfies VUX-17's "must" (every agent drills in, with a visible cue) on wave-2's own
-timeline, without hard-blocking the rest of #524 on a separate spine's completion. **Flagging to
-KB-Lead in `#wave2-ux-prep` for the sign-off this issue's AC requires before this line item is
-marked dev-ready** — the rest of this spec (§2-§4) doesn't depend on that answer and can proceed
-regardless.
+timeline, without hard-blocking the rest of #524 on a separate spine's completion.
 
 ## 6. View-swap announcements (aria-live)
 
@@ -146,8 +144,7 @@ convention rather than inventing a second live-region pattern.
       button rendered on a v3 warm surface (Activity trace/retry included). Eyebrow/kicker labels
       keep their uppercase deliberately (§3) — verify the distinction is preserved, not flattened.
 - [ ] `--faint` no longer appears on any sub-1rem text node; the four named sites (§4) use `--stone`.
-- [ ] VUX-17 carries an explicit, KB-Lead-confirmed disposition (§5) before this line item is
-      marked dev-ready — not silently shipped either way.
+- [x] VUX-17 carries an explicit, confirmed disposition (§5 — SCHEDULED, PM sign-off 2026-07-13).
 - [ ] View changes are announced via one shared `aria-live="polite"` region (§6), not a screen-reader
       trap or silence.
 

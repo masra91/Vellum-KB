@@ -9,7 +9,7 @@ created: 2026-07-12
 updated: 2026-07-12
 related: [SPEC-0060, SPEC-0038, "specs/design/terminology.md", "issue #523"]
 gates:
-  ai-patterns: pending      # GATE 1 — KB-AI-Detector
+  ai-patterns: approved     # GATE 1 — KB-AI-Detector, 2026-07-13 (PR #535)
   boundaries: not-yet-routed # GATE 2 — KB-QD, routed at dispatch
 ---
 
@@ -175,4 +175,7 @@ it) + one DL-1 gate pass comparing qcap to in-app Capture side by side.
   explicitly so it isn't "fixed" away, and gave explicit design sign-off that the dead Status
   cluster has no future dependency and is safe to delete in full (keeping `lineStations.ts`).
   Flagged the uppercase-`dt` fix should land alongside #524's uppercase de-drift if sequenced
-  together. Awaiting GATE 1 (KB-AI-Detector).
+  together.
+- 2026-07-13 — **GATE 1 (KB-AI-Detector): APPROVED.** Cited as actively enforcing the anti-generic
+  bar (removing the `.primary` filled-indigo pill), not drifting toward it. Dev-ready pending
+  GATE 2 (KB-QD) routing at dispatch.

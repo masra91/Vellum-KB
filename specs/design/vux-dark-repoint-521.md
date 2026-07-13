@@ -9,7 +9,7 @@ created: 2026-07-12
 updated: 2026-07-12
 related: [SPEC-0060, SPEC-0057, "issue #521"]
 gates:
-  ai-patterns: pending      # GATE 1 — KB-AI-Detector
+  ai-patterns: approved     # GATE 1 — KB-AI-Detector, 2026-07-13 (PR #535)
   boundaries: not-yet-routed # GATE 2 — KB-QD, routed at dispatch
 ---
 
@@ -133,4 +133,7 @@ this is confirming coverage, not building new harness).
   (`design-system.css:94-117`) via alias, plus new literal derivations for the four v3-only tokens
   (`--parchment`, `--ink-2`, `--gold-deep`, `--viridian-2`) with rationale per row. Ten hex-literal
   survival-patch sites enumerated with concrete token/`color-mix` fixes. Flags the `--faint`
-  sequencing dependency on #524. Awaiting GATE 1 (KB-AI-Detector).
+  sequencing dependency on #524.
+- 2026-07-13 — **GATE 1 (KB-AI-Detector): APPROVED.** No new hues introduced; all 18 tokens trace
+  to the existing `--viz-*` dark palette or a rationale-backed derivation. Dev-ready pending
+  GATE 2 (KB-QD) routing at dispatch.

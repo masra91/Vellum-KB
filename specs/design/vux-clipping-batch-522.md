@@ -9,7 +9,7 @@ created: 2026-07-12
 updated: 2026-07-12
 related: [SPEC-0060, "issue #522"]
 gates:
-  ai-patterns: pending      # GATE 1 — KB-AI-Detector
+  ai-patterns: approved     # GATE 1 — KB-AI-Detector, 2026-07-13 (PR #535)
   boundaries: not-yet-routed # GATE 2 — KB-QD, routed at dispatch
 ---
 
@@ -35,7 +35,7 @@ cost the user, not by convenience:
 
 | Treatment | When | Behavior |
 |---|---|---|
-| **Ellipsis + reveal** | A single-line label where the full value is useful but not required to keep working (titles, filenames, citation names) | `text-overflow: ellipsis; overflow: hidden; white-space: nowrap;` on a flex child that also has `min-width: 0` (the flex default of `min-width: auto` is what defeats ellipsis in a flex row — this is the root cause of C2/C3/C4/C5/C6/C7) — **plus a native `title` attribute carrying the untruncated value.** No custom tooltip component; the browser-native title is sufic and keeps this a CSS-only fix at every site. |
+| **Ellipsis + reveal** | A single-line label where the full value is useful but not required to keep working (titles, filenames, citation names) | `text-overflow: ellipsis; overflow: hidden; white-space: nowrap;` on a flex child that also has `min-width: 0` (the flex default of `min-width: auto` is what defeats ellipsis in a flex row — this is the root cause of C2/C3/C4/C5/C6/C7) — **plus a native `title` attribute carrying the untruncated value.** No custom tooltip component; the browser-native title is sufficient and keeps this a CSS-only fix at every site. |
 | **Wrap** | Free text meant to be *read*, not scanned (agent standing-instructions, review notes) | `overflow-wrap: anywhere;` with no `nowrap` override — this is C1: the base `.path` class already wraps correctly at `index.css:73-78`; the agent-instructions site is force-overriding it to one clipped line for no reason anyone can name. Remove the override, don't add a new pattern. |
 | **Flip / reflow** | A label anchored to a fixed point that can run past the *viewport*, not just its own container (graph node labels at the edge) | Flip the label to the opposite side of its anchor when it would clip the viewport edge — this is C9 only; it's a layout decision, not a text-overflow one. |
 
@@ -92,4 +92,5 @@ views.
   fixes; named the `.v3-clip` utility; ruled C1 is a wrap-override removal (not a new pattern), C6's
   reveal must show the display name (terminology discipline), and C10 is a container-shrink bug the
   window-minimum fix must not paper over. Rail auto-collapse confirmed out of scope (follow-up).
-  Awaiting GATE 1 (KB-AI-Detector).
+- 2026-07-13 — **GATE 1 (KB-AI-Detector): APPROVED** (one non-blocking typo fixed, §2). Dev-ready
+  pending GATE 2 (KB-QD) routing at dispatch.
