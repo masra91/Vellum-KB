@@ -21,6 +21,7 @@ import {
 } from './views';
 import { esc, baseName } from './html';
 import { navIcon } from './icons';
+import { latticeMotif } from './latticeMotif';
 import { NAVIGATE_EVENT, TOPBAR_CONTEXT_EVENT, type NavigateDetail, type TopbarContextDetail } from './nav';
 import { wireTopbarSearch } from './topbarSearch';
 import { reviewBadgeText, reviewBadgeAria } from './reviewBadge';
@@ -44,10 +45,8 @@ import type { TodayProjectionView } from '../kb/types';
 // churns) briefly on every view change. Gold-stroked via the v3 --gold token. Inlined; decorative.
 const BRAND_DIAMOND =
   `<span class="dmk sidebar-brand-glyph brand-mark is-working" aria-hidden="true">` +
-  `<svg width="24" height="24" viewBox="0 0 24 24"><g fill="none" stroke="var(--gold)" stroke-linejoin="round">` +
-  `<polygon class="d-out" points="12,2 22,12 12,22 2,12" stroke-width="1.4"/>` +
-  `<polygon class="d-mid" points="12,7 17,12 12,17 7,12" stroke-width="1.1"/></g>` +
-  `<circle class="d-core" cx="12" cy="12" r="1.9" fill="var(--gold)"/></svg></span>`;
+  latticeMotif({ size: 24, depth: 2, stroke: 'var(--gold)', strokeWidths: [1.4, 1.1], levelClassNames: ['d-out', 'd-mid'], core: 'dot', coreClassName: 'd-core' }) +
+  `</span>`;
 
 // The v3 top bar (SPEC-0060 §4, VUX-3): a warm-themed bar with a REAL global ⌘K search (#519 §2 — a
 // live `<input>` + a `role="listbox"` results overlay, wired by topbarSearch.ts), the per-view
@@ -70,10 +69,13 @@ const TOP_BAR =
   `<button type="button" class="quickadd" data-goto="${VIEW_CAPTURE}">${navIcon('capture')} Quick add</button>` +
   `</div>`;
 // A large, very-faint fractal-lattice watermark low in the sidebar (UX v2 shell language).
+// #402 §3: was `var(--viz-brass)` — the "needs you / caution" semantic state hue, wrong for a silent
+// decorative watermark (terminology.md §3: never for reassurance/informational chrome). The motif is
+// gold-only per BRAND-GUIDELINES §3; this now matches BRAND_DIAMOND's stroke + the source SVG's gradient.
 const SIDEBAR_WMARK =
-  `<div class="sidebar-wmark" aria-hidden="true"><svg width="220" height="220" viewBox="0 0 24 24">` +
-  `<g fill="none" stroke="var(--viz-brass)" stroke-linejoin="round" stroke-width="0.5"><polygon points="12,2 22,12 12,22 2,12"/>` +
-  `<polygon points="12,7 17,12 12,17 7,12"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></g></svg></div>`;
+  `<div class="sidebar-wmark" aria-hidden="true">` +
+  latticeMotif({ size: 220, depth: 2, stroke: 'var(--gold)', strokeWidths: [0.5, 0.5], crosshair: true, crosshairStrokeWidth: 0.5 }) +
+  `</div>`;
 
 // #512 PERF-R8: SIDEBAR_WMARK's ambient `viz-drift` animation used to run unconditionally the ENTIRE
 // time the app is open (it's persistent shell chrome, not tied to any view) — pure decoration keeping

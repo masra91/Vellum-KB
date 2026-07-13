@@ -9,6 +9,7 @@
 // Version: RELEASE-6 (SPEC-0055) — DEV-5 owns the `getAppVersion` IPC; here we just RENDER it, defensively
 // (a missing/failed call shows "Version unavailable", never blank/crash — #160). So About closes RELEASE-6.
 import { esc } from './html';
+import { latticeMotif } from './latticeMotif';
 
 const WORDMARK = 'Vellum';
 // Brand §7 voice = outcome-first (avoid AI-forward hype + marketing tics). DL-1 (hero-identity owner)
@@ -18,7 +19,17 @@ const CREDITS = 'Built on an Obsidian-compatible markdown vault · GitHub Copilo
 
 // The crystalline lattice mark (brand/assets/icon/vellum-glyph-mono.svg) — strokes use currentColor so it
 // recolors to the hero's cream. Inlined (no asar-asset path gotcha); decorative → aria-hidden at the call site.
-const MARK_SVG = `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><g fill="none" stroke="currentColor" stroke-linejoin="round" stroke-linecap="round"><polygon points="12,2 22,12 12,22 2,12" stroke-width="1.5"/><polygon points="12,7 17,12 12,17 7,12" stroke-width="1.2"/><line x1="2" y1="12" x2="22" y2="12" stroke-width="0.9" opacity="0.85"/><line x1="12" y1="2" x2="12" y2="22" stroke-width="0.9" opacity="0.85"/></g><circle cx="12" cy="12" r="1.9" fill="currentColor"/></svg>`;
+// #402 §2: generated via the shared latticeMotif() rather than a 4th hand-rolled inline SVG literal.
+const MARK_SVG = latticeMotif({
+  depth: 2,
+  stroke: 'currentColor',
+  strokeWidths: [1.5, 1.2],
+  roundCaps: true,
+  core: 'dot',
+  crosshair: true,
+  crosshairStrokeWidth: 0.9,
+  crosshairOpacity: 0.85,
+});
 
 /** Read the runtime version via DEV-5's RELEASE-6 IPC (now typed on KbApi). Honest fallback (#160) if it rejects. */
 async function loadVersion(): Promise<string> {
