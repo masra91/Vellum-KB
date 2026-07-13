@@ -35,6 +35,11 @@ const ICON_PATHS: Record<string, string> = {
   split: '<circle cx="7" cy="6" r="1.8"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="9" r="1.8"/><path d="M7 7.8v8.4M7 12h6a4 4 0 0 0 4-4v-.2"/>', // decompose → branch
   'alert-triangle': '<path d="M12 4 2.5 20h19z"/><path d="M12 10v4M12 17h.01"/>', // failed → warning triangle (pairs with oxide)
   'circle-check': '<circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>', // settled / ok health row (pairs with patina)
+
+  // VUX-CONFORM #524 §2 — Activity controls (.act-search / .act-filter / .act-empty, vellum-v3.html:914-928).
+  'chevron-down': '<path d="M6 9l6 6 6-6"/>', // select caret
+  close: '<path d="M6 6l12 12M18 6L6 18"/>', // clear-search
+  filter: '<path d="M4 5h16M7 12h10M10 19h4"/>', // filter-by-stage/agent (funnel-as-lines)
 };
 
 /** Render an inline line-icon SVG (1em, currentColor) for ANY ICON_PATHS key — nav OR activity event-kind.

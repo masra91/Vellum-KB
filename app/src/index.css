@@ -1301,12 +1301,41 @@ option { background: var(--card); color: var(--fg); }
 .activity-title { font-family: var(--voice); font-weight: 500; font-size: 1.6rem; color: var(--ink); letter-spacing: 0.01em; margin: 0; }
 .activity-feed, .lineage-timeline, .lineage-decisions ul { list-style: none; padding: 0; margin: 0.5rem 0 0; display: flex; flex-direction: column; gap: 0.4rem; }
 .activity-note { color: var(--stone); font-family: var(--ui); font-size: 0.86rem; line-height: 1.5; }
-/* Filter row: the stage select + search + trace fields sit on one baseline-aligned row. */
-.activity-controls { display: flex; gap: 0.8rem; align-items: flex-end; flex-wrap: wrap; margin: 0.9rem 0 0.6rem; }
-.activity-field { flex: 0 1 auto; }
-.activity-field .viz-field__input { min-width: 12rem; }
-.activity-trace-input { display: flex; gap: 0.4rem; align-items: stretch; }
-.activity-trace-go { flex: none; white-space: nowrap; }
+/* Activity controls (VUX-CONFORM #524 §2) — cited directly against vellum-v3.html:848-928. Primary
+   search+filter band on one row; trace-by-id is real shipped functionality with no mock equivalent,
+   so it gets its own secondary row rather than crowding the band the mock actually specifies. */
+.activity-controls { display: flex; flex-direction: column; gap: 0.6rem; margin: 0.9rem 0 0.6rem; }
+.act-band { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+.act-search { flex: 1 1 auto; min-width: 15rem; display: flex; align-items: center; gap: 0.6rem; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0 0.8rem; height: 2.5rem; transition: border-color var(--t), box-shadow var(--t); }
+.act-search:focus-within { border-color: var(--slate); box-shadow: 0 0 0 3px rgba(58, 110, 136, 0.12); }
+.act-search svg { color: var(--faint); width: 1.05rem; height: 1.05rem; flex: none; }
+.act-search input { flex: 1 1 auto; min-width: 0; border: 0; background: transparent; outline: none; font: inherit; font-size: 0.85rem; color: var(--ink); }
+.act-search input::placeholder { color: var(--faint); }
+.act-search__clear { display: none; flex: none; border: 0; background: transparent; cursor: pointer; color: var(--faint); padding: 0.2rem; border-radius: 6px; }
+.act-search__clear svg { width: 0.95rem; height: 0.95rem; display: block; }
+.act-search__clear:hover, .act-search__clear:focus-visible { color: var(--ink-2); background: rgba(0, 0, 0, 0.04); }
+.act-search.has-val .act-search__clear { display: inline-flex; }
+.act-filter { position: relative; flex: none; }
+.act-filter select { appearance: none; cursor: pointer; height: 2.5rem; padding: 0 2.2rem 0 2.3rem; border-radius: var(--r-chip); background: var(--linen); border: 1px solid var(--hair); font: inherit; font-size: 0.82rem; color: var(--ink-2); font-weight: 500; transition: border-color var(--t); }
+.act-filter select:hover { border-color: var(--stone); }
+.act-filter__lead, .act-filter__chev { position: absolute; top: 50%; transform: translateY(-50%); pointer-events: none; display: flex; }
+.act-filter__lead { left: 0.8rem; color: var(--stone); }
+.act-filter__lead svg { width: 1rem; height: 1rem; }
+.act-filter__chev { right: 0.8rem; color: var(--faint); }
+.act-filter__chev svg { width: 0.95rem; height: 0.95rem; }
+.act-trace { display: flex; align-items: center; gap: 0.5rem; }
+.act-trace__label { font-family: var(--ui); font-size: 0.75rem; color: var(--stone); flex: none; }
+.act-trace__input { flex: 1 1 auto; max-width: 22rem; border: 1px solid var(--hair); border-radius: var(--r-chip); background: var(--linen); padding: 0.4rem 0.7rem; font: inherit; font-size: 0.82rem; color: var(--ink); }
+.act-trace__input:focus-visible { outline: none; box-shadow: var(--ring); border-color: var(--slate); }
+.act-trace .activity-trace-go { flex: none; white-space: nowrap; }
+/* Search-to-zero-results empty state — distinct from the true "no activity yet" state (activity-empty
+   below): this one names the search term so the Principal knows WHY nothing matched. */
+.act-empty { padding: 2.9rem 1.5rem; text-align: center; }
+.act-empty svg { width: 1.9rem; height: 1.9rem; color: var(--gold); opacity: 0.7; }
+.act-empty b { display: block; font-family: var(--voice); font-weight: 500; font-size: 1.06rem; color: var(--deep); margin: 0.75rem 0 0.25rem; }
+.act-empty span { font-size: 0.82rem; color: var(--stone); }
+.act-empty .term { font-family: var(--mono); color: var(--ink-2); }
+.act-empty div { margin-top: 1rem; }
 /* Flat-ruled entry — a hairline top rule separates rows (no card chrome on the feed). */
 .activity-entry { border: 0; border-top: 1px solid var(--hair); border-radius: 0; background: transparent; overflow: hidden; }
 .activity-entry:first-child { border-top: 0; }

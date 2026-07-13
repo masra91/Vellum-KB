@@ -220,6 +220,30 @@ describe('Filter / search (AUDIT-7)', () => {
     await flush();
     expect(activityFeed).toHaveBeenLastCalledWith({ actors: ['claims'] });
   });
+
+  // VUX-CONFORM #524 §2/§8: a search that matches nothing is NOT the same empty state as "no
+  // activity yet" — it names the search term and offers a working reset.
+  it('shows the search-to-zero-results empty state naming the term, with a working Clear filters reset', async () => {
+    activityFeed = vi.fn(async () => feed(ENTRIES, 3)).mockResolvedValueOnce(feed([], 0)).mockResolvedValue(feed([], 0));
+    setApi();
+    const c = await mount();
+    const search = c.querySelector<HTMLInputElement>('#activitySearch')!;
+    search.value = 'zzz-no-match';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(c.querySelector('.act-search')?.classList.contains('has-val')).toBe(true); // clear button appears immediately
+    await new Promise((r) => setTimeout(r, SEARCH_DEBOUNCE_MS + 50));
+    const empty = c.querySelector('.act-empty');
+    expect(empty).not.toBeNull();
+    expect(empty?.querySelector('.term')?.textContent).toBe('zzz-no-match');
+    expect(c.querySelector('.activity-empty')).toBeNull(); // NOT the "no activity yet" state
+
+    activityFeed.mockResolvedValueOnce(feed(ENTRIES, 3));
+    c.querySelector<HTMLButtonElement>('[data-act="clear-filters"]')!.click();
+    await flush();
+    expect(c.querySelector('.act-empty')).toBeNull();
+    expect(c.querySelectorAll('.activity-entry')).toHaveLength(2);
+    expect(c.querySelector<HTMLInputElement>('#activitySearch')?.value).toBe('');
+  });
 });
 
 describe('Lineage (AUDIT-6)', () => {
@@ -285,14 +309,17 @@ describe('Trace-by-id lookup (AUDIT-6/7 — per-entity lineage + per-source trac
     expect(activityLineage).not.toHaveBeenCalled();
   });
 
-  it('renders the lookup as a blessed .viz-field with an accessible name + read-only chrome', async () => {
+  // VUX-CONFORM #524 §2: trace-by-id is real shipped functionality with no mock equivalent — it
+  // moved into its own .act-trace secondary control (out of the primary search/filter band) and
+  // onto the v3-conformant .v3-btn ghost pill (§3), superseding the earlier WS3 .viz-field/.viz-btn.
+  it('renders the lookup in its own .act-trace control with an accessible name + read-only chrome', async () => {
     const c = await mount();
     const input = c.querySelector<HTMLInputElement>('#activityTraceId')!;
-    expect(input.classList.contains('viz-field__input')).toBe(true);
-    expect(input.closest('.viz-field')).not.toBeNull();
+    expect(input.closest('.act-trace')).not.toBeNull();
     expect(input.getAttribute('aria-label')).toBe('Trace lineage by id');
     const go = c.querySelector<HTMLButtonElement>('[data-act="trace-lookup"]')!;
-    expect(go.classList.contains('viz-btn')).toBe(true);
+    expect(go.classList.contains('v3-btn')).toBe(true);
+    expect(go.classList.contains('v3-btn--ghost')).toBe(true);
     expect(go.getAttribute('aria-label')).toBe('Trace lineage of the entered id');
   });
 });
@@ -327,16 +354,16 @@ describe('Read-only + XSS-safety (AUDIT-8)', () => {
 // guards on the CLASS — a regression to .link/.muted, a dropped aria-label, or a broken lineage drill-down
 // (DEV-2's SENSE-1c sensitivity chip hangs on that structure) all trip here.
 describe('WS3 design-system migration (DESIGN-LEGACY-VIEWS §2 — onto The Line)', () => {
-  it('renders the filter controls as blessed .viz-field inputs, accessible names preserved (§7)', async () => {
+  // VUX-CONFORM #524 §2: the bare .viz-field controls are replaced by the mock-cited .act-search /
+  // .act-filter band (vellum-v3.html:848-928) — superseding the earlier WS3 .viz-field migration.
+  it('renders the filter controls as the v3 .act-search / .act-filter band, accessible names preserved (§7)', async () => {
     const c = await mount();
     const actor = c.querySelector<HTMLSelectElement>('#activityActor')!;
     const search = c.querySelector<HTMLInputElement>('#activitySearch')!;
-    expect(actor.classList.contains('viz-field__input')).toBe(true);
-    expect(search.classList.contains('viz-field__input')).toBe(true);
-    expect(actor.closest('.viz-field')).not.toBeNull(); // each control sits in a .viz-field wrapper
-    expect(search.closest('.viz-field')).not.toBeNull();
+    expect(search.closest('.act-search')).not.toBeNull();
+    expect(actor.closest('.act-filter')).not.toBeNull();
     expect(actor.getAttribute('aria-label')).toBe('Filter by stage or agent'); // v3 de-jargon (was "Filter by actor")
-    expect(search.getAttribute('aria-label')).toBe('Search activity');
+    expect(search.getAttribute('aria-label')).toBe('Search activity summaries');
   });
 
   it('renders the trace-origin action as a .viz-btn--ghost with a summary-naming aria-label (a11y §2)', async () => {
