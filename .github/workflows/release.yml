@@ -1,0 +1,123 @@
+# Vellum Release — slice 1 (SPEC-0055 §2, GH #529). Tag-triggered: pushing a `v*` tag verifies the
+# tagged commit's required CI is green, builds mac + Windows artifacts (`npm run make`), and drafts a
+# GitHub release with them attached. Deliberately narrow — this slice makes VERSIONED ARTIFACTS EXIST;
+# it does NOT implement the full SPEC-0055 authoring flow (GPG-signed tags, commit classification,
+# themed release notes, CHANGELOG.md) or SPEC-0056 auto-update. Those stay explicitly out of scope
+# (see the spec's §5) until a later slice.
+#
+# Process this workflow assumes (the issue's "suggested approach"):
+#   1. Bump package.json's version in a normal PR to main via `npm version` (the source of truth —
+#      this workflow never rewrites it).
+#   2. Once that PR is merged and its CI is green, tag that commit: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+#      A `-rc.N` suffix (e.g. `v0.2.0-rc.1`) is a dry run — same pipeline, marked a GitHub pre-release.
+#   3. This workflow verifies + builds + drafts the release. A human reviews the draft and publishes it.
+#
+# Signing: macOS builds are UNSIGNED by default here, matching the existing `npm run package` default
+# (forge.config.ts's `KB_OSX_SIGN` opt-in, SPEC-0034 MACOS-3). Verifying the signed path with
+# `KB_OSX_SIGN=1` is a manual, LOCAL checklist item for whoever holds the Apple Developer Developer-ID
+# certificate (the issue's AC #3 — "checklist item, not a gate") — this workflow does not attempt to
+# import/manage signing credentials in CI (no such secrets exist in this repo yet).
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  # RELEASE-3 + RELEASE-6: never build/publish from a commit whose version doesn't match the tag, or
+  # whose required CI wasn't actually green. Both checks are pure logic in scripts/release/*.mjs
+  # (unit-tested, scripts/release/*.test.ts) — this job is a thin, auditable shell around them.
+  verify:
+    name: verify tag ↔ version + green required CI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout
+      checks: read # the check-runs API this job queries
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Tag matches the committed package.json version (RELEASE-6)
+        run: node scripts/release/tagVersion.mjs "${{ github.ref_name }}"
+      - name: Fetch this SHA's check-runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs" --paginate --slurp \
+            | jq '{check_runs: [.[].check_runs[]]}' > check-runs.json
+      - name: All required checks are green on this SHA (RELEASE-3)
+        run: node scripts/release/verifyRequiredChecks.mjs check-runs.json
+
+  # RELEASE-1/2/5: mac + Windows artifacts, built from the exact tagged SHA (checkout defaults to
+  # github.sha, which for a tag push IS the tagged commit — no ref ambiguity).
+  build:
+    name: make (${{ matrix.os }})
+    needs: verify
+    permissions:
+      contents: read # checkout
+      actions: write # upload-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - name: Build distributable(s) — electron-forge make
+        run: npm run make
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}
+          path: app/out/make/**
+          if-no-files-found: error
+
+  # Drafts the release — never auto-publishes (AC: "yields a DRAFT release"). A `-` in the tag (the
+  # dry-run `-rc.N` convention, or a future `-beta.N`) marks it a GitHub pre-release.
+  publish:
+    name: draft GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the draft release + upload assets
+      actions: read # download-artifact
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: artifacts
+          merge-multiple: true
+      - name: Create the draft release with mac + Windows artifacts attached
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          PRERELEASE_FLAG=()
+          if [[ "$TAG" == *-* ]]; then PRERELEASE_FLAG=(--prerelease); fi
+          mapfile -t FILES < <(find artifacts -type f)
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "::error::No build artifacts found to attach — refusing to draft an empty release."
+            exit 1
+          fi
+          gh release create "$TAG" \
+            --draft "${PRERELEASE_FLAG[@]}" \
+            --title "$TAG" \
+            --generate-notes \
+            --repo "${{ github.repository }}" \
+            "${FILES[@]}"
