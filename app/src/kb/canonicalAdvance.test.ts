@@ -418,6 +418,73 @@ describe.skipIf(!gitAvailable)('withEphemeralWorktree sparsePaths — cone-mode 
       await rmTempDir(dir);
     }
   });
+
+  // QA follow-up on #551: the silent-drop landmine (a write outside `sparsePaths` is dropped by `git
+  // add`, not errored) had no test exercising the drop itself — only the correctness of a properly-
+  // scoped call. Two shapes: (a) EVERY changed path is outside the sparse cone — `git add -A` itself
+  // rejects (git's own behavior, already loud); (b) a MIXED write (some in-scope, some not) — `git add
+  // -A` succeeds for the in-scope part and silently skips the rest, so a real stage's `prepare` (which
+  // always ends `add -A` + commit) would return SUCCESS with the out-of-scope write quietly lost —
+  // this is the actual landmine, and only the runtime guard in `withEphemeralWorktree` catches it.
+  it('a write OUTSIDE the declared sparsePaths fails loudly — fully-outside case (git itself rejects)', async () => {
+    const dir = await makeTempDir();
+    try {
+      const root = await makeCanonicalRepo(dir);
+      const base = await canonicalHead(root);
+      await expect(
+        withEphemeralWorktree(
+          root,
+          'decompose',
+          base,
+          async ({ wt }) => {
+            await fs.mkdir(path.join(wt, 'entities/oops'), { recursive: true });
+            await fs.writeFile(path.join(wt, 'entities/oops/e.md'), 'dropped');
+            await simpleGit(wt).raw('add', '-A'); // nothing in-scope changed → git add -A itself rejects
+            return 'should not reach here';
+          },
+          ['sources/A'],
+        ),
+      ).rejects.toThrow(); // loud either way — git's own rejection or the guard, never a silent success
+    } finally {
+      await rmTempDir(dir);
+    }
+  });
+
+  // `git add -A` turns out to reject the WHOLE add (loud, via simple-git) the instant it sees ANY
+  // out-of-scope path, even mixed with valid ones — so real stages (which all use `add -A`) are
+  // already protected at the git layer. The narrower gap the runtime guard exists for: a SCOPED `git
+  // add <known-path>` that never even MENTIONS the out-of-scope path gets no warning from git at all
+  // and commits cleanly — the out-of-scope write is left as untracked residue with the caller none the
+  // wiser. That's the case only `withEphemeralWorktree`'s post-`fn` status check can catch.
+  it('a write outside sparsePaths that a SCOPED `git add <path>` never mentions still fails loudly via the runtime guard', async () => {
+    const dir = await makeTempDir();
+    try {
+      const root = await makeCanonicalRepo(dir);
+      const base = await canonicalHead(root);
+      await expect(
+        withEphemeralWorktree(
+          root,
+          'decompose',
+          base,
+          async ({ wt }) => {
+            await fs.mkdir(path.join(wt, 'sources/A'), { recursive: true });
+            await fs.writeFile(path.join(wt, 'sources/A/candidate.json'), '{}');
+            // The BUG: a write outside the declared scope that the add call below never references.
+            await fs.mkdir(path.join(wt, 'entities/oops'), { recursive: true });
+            await fs.writeFile(path.join(wt, 'entities/oops/e.md'), 'dropped');
+            const g = simpleGit(wt);
+            await ensureGitIdentity(g);
+            await g.raw('add', 'sources/A'); // scoped — never mentions entities/oops, so git raises nothing
+            await g.commit('scoped commit'); // succeeds CLEANLY — entities/oops/e.md is untracked residue
+            return 'looks like success to the caller';
+          },
+          ['sources/A'],
+        ),
+      ).rejects.toThrow(/sparsePaths.*left uncommitted paths|silently dropped/); // the runtime guard, not git, catches this one
+    } finally {
+      await rmTempDir(dir);
+    }
+  });
 });
 
 describe.skipIf(!gitAvailable)('withConcurrentAdvance — ephemeral-worktree wrapper for cap>1 (ORCH-20)', () => {
