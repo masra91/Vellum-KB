@@ -56,6 +56,29 @@ const config: ForgeConfig = {
           },
         }
       : {}),
+    // SPEC-0061 T1 (#530): `@electron-forge/plugin-vite` auto-sets `packagerConfig.ignore` to exclude
+    // EVERYTHING except the `/.vite` bundle output (verified empirically: packaging without this
+    // override copies no `node_modules` at all, so an externalized native `require()` — e.g. fsevents,
+    // canvas/path2d, and now better-sqlite3 — resolves to nothing at runtime; `AutoUnpackNativesPlugin`
+    // below has nothing to unpack if the native was never copied into the package in the first place).
+    // Providing our OWN `ignore` here (which plugin-vite detects and leaves alone, per its own guard)
+    // reproduces its default AND carves out the one runtime dependency closure the library index
+    // needs: `better-sqlite3` itself, `bindings` (resolves the platform `.node` path), and `bindings`'
+    // own dependency `file-uri-to-path`. Extend this list if a future externalized native needs the
+    // same treatment (fsevents/canvas/path2d are optionalDependencies that degrade gracefully when
+    // absent, so they were never actually exercised by this gap — better-sqlite3 is NOT optional, so
+    // packaging it without a copy path would silently ship a library index that can never open).
+    ignore: (file: string) => {
+      if (!file) return false;
+      if (file.startsWith('/.vite')) return false;
+      // The copy walker never descends past a path this function marks "ignore" — `/node_modules`
+      // itself (and every ancestor of a kept dep below) must return `false` (don't prune here) even
+      // though its OTHER children are excluded individually.
+      if (file === '/node_modules') return false;
+      const RUNTIME_NATIVE_DEPS = ['better-sqlite3', 'bindings', 'file-uri-to-path'];
+      if (RUNTIME_NATIVE_DEPS.some((dep) => file === `/node_modules/${dep}` || file.startsWith(`/node_modules/${dep}/`))) return false;
+      return true;
+    },
   },
   rebuildConfig: {},
   makers: [

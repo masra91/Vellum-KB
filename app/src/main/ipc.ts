@@ -62,6 +62,8 @@ import { resolveCopilotModel } from '../kb/copilotModel';
 import { copilotScaleRuntime } from '../kb/copilotConcurrency';
 import { makeReadOnlyTools } from '../kb/recallTools';
 import { makeProjectionTools } from '../kb/graphProjection';
+import type { RecallTools } from '../kb/recall';
+import { libraryIndexToolsFor } from './libraryIndexRuntime';
 import { buildNeighborhood, listExploreEntities, type ExploreEntityRef, type ExploreNeighborhood, type ExploreProjection } from '../kb/explorePanel';
 import { buildHealthReport } from '../kb/healthPanel';
 import { readHealthDismissals } from '../kb/directives';
@@ -634,21 +636,26 @@ export function registerIpc(): void {
   // SPEC-0035 HEALTH: deterministic, read-only structural-lint scan (orphans / dangling links / thin
   // stubs) over the EVERGREEN graph at the active vault root — no model calls, no fixes (v1 passive).
   ipcMain.handle('kb:healthReport', async (): Promise<HealthProjection> => {
-    // SPEC-0058 STATE-3/13: return the Health PROJECTION (DL-2's render contract) — the view draws everything
-    // from this one read, severity baked in. Surface-local for now: built off the read-only scan
-    // (`makeReadOnlyTools`). The STATE-3 read-layer swap is a ONE-LINE change once the maintained graph
-    // projection store (#457's `computeGraphProjection`/`makeProjectionTools` core) is instantiated at this
-    // layer — replace `makeReadOnlyTools(...)` below with `makeProjectionTools(graphStore.current().data)`:
-    // `buildHealthReport` already takes `RecallTools`, and `makeProjectionTools` returns exactly that, so the
-    // projection-backed report is byte-identical minus the per-mount walk. Held until that store is wired (the
-    // shared read-layer, DEV-5/DEV-3's lane) so this surface PR doesn't collide with it.
+    // SPEC-0061 T1 (#530 slice 1): served from the SQLite/FTS5 library index — zero fs reads once the
+    // index is built (`libraryIndexTools.ts`, equivalence-tested against the live `makeReadOnlyTools`
+    // scan this replaces). `libraryIndexToolsFor` brings the on-disk index up to date with the current
+    // canonical HEAD first (a no-op read when already fresh — the common case). Falls back to the live
+    // scan if the index can't be opened/refreshed for any reason (disk fault, native-module issue) —
+    // Health must never throw on the read path (the `unavailableHealthProjection` envelope exists for a
+    // genuine scan error; degrading to the live walker here is strictly more available than that).
     const cfg = await readAppConfig();
     const now = new Date().toISOString();
     if (!cfg.activeVaultPath) return toHealthProjection({ scanned: 0, orphans: [], thin: [], dangling: [], counts: { orphans: 0, thin: 0, dangling: 0 } }, now);
     // VUX-16: filter findings the Principal has dismissed (evergreen on `main`, read at the same root the
     // scan reads) BEFORE the report caps + counts, so a dismissed finding is truly gone, not UI-hidden.
     const root = path.resolve(cfg.activeVaultPath);
-    return toHealthProjection(await buildHealthReport(makeReadOnlyTools(root), await readHealthDismissals(root)), now);
+    let tools: RecallTools;
+    try {
+      tools = await libraryIndexToolsFor(root);
+    } catch {
+      tools = makeReadOnlyTools(root);
+    }
+    return toHealthProjection(await buildHealthReport(tools, await readHealthDismissals(root)), now);
   });
 
   // SPEC-0060 VUX-16 slice-1: apply a non-destructive Health remediation (relink / find-homes). Under the

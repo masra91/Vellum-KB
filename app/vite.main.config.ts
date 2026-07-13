@@ -23,7 +23,13 @@ export default defineConfig({
       // only call `getTextContent`). They're native/optional, so they aren't installed on CI/Linux and
       // Rollup died with `failed to resolve import "canvas" from pdfjs-dist/.../pdf.mjs`. Externalize them
       // so Rollup leaves the (never-executed) rendering import alone; text extraction needs neither.
-      external: ['fsevents', 'canvas', 'path2d'],
+      //
+      // `better-sqlite3` (SPEC-0061 T1, #530) is the library-index native module. Same class of failure
+      // as `fsevents`: Rollup cannot bundle a `.node` binary into app.asar. Externalizing it means the
+      // `require('better-sqlite3')` in `libraryIndexSqlite.ts` resolves at runtime from node_modules,
+      // with the actual `.node` binding unpacked outside the asar by plugin-auto-unpack-natives
+      // (`app.asar.unpacked/**/better_sqlite3.node` — asserted by the CI package build-check).
+      external: ['fsevents', 'canvas', 'path2d', 'better-sqlite3'],
     },
   },
 });
