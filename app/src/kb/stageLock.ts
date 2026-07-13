@@ -154,10 +154,12 @@ export class Mutex {
       this.pending -= 1;
       release();
     };
-    settled.finally(releaseChain);
-    // Swallow a background rejection from the orphaned `fn()` after a timeout has already settled the
-    // caller — otherwise it surfaces as an unhandled rejection with nothing left to catch it.
-    settled.catch(() => {});
+    // `settled` itself is returned/awaited below (by the caller, or by the timeout race) — but
+    // `.finally()`/`.catch()` each create their OWN derived promise that also rejects when `settled`
+    // does. Neither derived promise is awaited by anything, so an unhandled rejection warning fires
+    // unless each branch swallows its own — even though the ORIGINAL `settled` rejection is always
+    // properly handled by its real consumer.
+    settled.finally(releaseChain).catch(() => {});
     if (timeoutMs === undefined) return settled;
     return new Promise<T>((resolve, reject) => {
       let timedOut = false;
