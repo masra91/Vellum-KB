@@ -463,6 +463,10 @@ body.shell-active #app {
 /* Faint fractal-lattice watermark, low in the rail (gold, very low opacity; ambient drift). */
 .sidebar-wmark { position: absolute; left: -2.5rem; bottom: 4.5rem; opacity: 0.1; pointer-events: none; color: var(--viz-brass); animation: viz-drift var(--viz-dur-field) ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .sidebar-wmark { animation: none; } }
+/* #512 PERF-R8: this is persistent shell chrome (present the whole session, not view-scoped) — a
+   perpetual compositor-active animation with zero purpose while the window is blurred/hidden.
+   `.shell-idle` is toggled by shell.ts on blur/focus/visibilitychange. */
+body.shell-idle .sidebar-wmark { animation-play-state: paused; }
 
 /* Scroll host (the view region). v3 VUX-2: the global 34rem width clamp is REMOVED — spatial views adapt
    to the window and reading views keep their own comfortable column (each view owns its width now; the v2
@@ -478,6 +482,11 @@ body.shell-active #app {
 
 .content .view {
   width: 100%;
+  /* #512 PERF-R8: a view's own scoped repaint (#511 — Activity/Ask/Explore/Health each patch just their
+     own changed subtree now) shouldn't force layout/paint recalculation to walk outside this box. Layout
+     containment is safe here — this box already establishes its own size (flex child, width:100%) rather
+     than depending on descendant content to size itself. */
+  contain: content;
 }
 /* Per-view churn-in: a brief settle when a view becomes active (paired with the brand-diamond churn). */
 .content .view:not(.hidden) { animation: shellFadein var(--dur-settle) var(--e-out); }

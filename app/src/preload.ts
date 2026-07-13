@@ -1,5 +1,5 @@
 // Preload: expose a typed, minimal KbApi to the renderer via contextBridge.
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { KbApi } from './kb/types';
 
 const kbApi: KbApi = {
@@ -97,6 +97,9 @@ const kbApi: KbApi = {
     ipcRenderer.on('kb:qcap-resummoned', listener);
     return () => ipcRenderer.removeListener('kb:qcap-resummoned', listener);
   },
+  // #512 PERF-R8: webUtils runs directly in the preload context — no IPC round trip needed, unlike
+  // every other member here. See kb/types.ts for why this replaces reading a dropped file's bytes.
+  getPathForFile: (file) => webUtils.getPathForFile(file),
 };
 
 contextBridge.exposeInMainWorld('kbApi', kbApi);

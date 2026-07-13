@@ -78,6 +78,7 @@ vi.mock('./pipeline', () => ({
   activePipeline: () => state.orch,
   activeStagingRoot: (): string | null => state.stagingRoot,
   reviewProjectionForActive: (): null => null, // SHELL-12: kb:listReviews now reads the maintained projection
+  isActiveQuiescing: () => false, // #512: kb:capture gates on this; not exercised before this file tested kb:capture directly
   graphProjectionForActive: () => state.graphProjection, // SPEC-0058 STATE-2: the maintained graph projection (or null = warming)
   todayProjectionForActive: () => state.todayProjection, // SPEC-0058 Today: the maintained home projection (or null = warming)
   answerActiveReview: async () => ({ ok: false, message: 'no active kb' }),
@@ -822,6 +823,54 @@ describe('SPEC-0038 QCAP — quick capture IPC', () => {
 
   it('QCAP-2: kb:quickCaptureClose resolves (no-op when no agent is wired)', async () => {
     await expect(invoke<void>('kb:quickCaptureClose')).resolves.toBeUndefined();
+  });
+});
+
+// #512 PERF-R8: kb:capture's `filePath` input — a dropped file the renderer staged by real on-disk
+// path instead of reading it into its own heap. Main reads the bytes itself, right here, exactly once,
+// then hands them into the SAME 'file' payload shape `CaptureFileInput` always used — the write path
+// downstream is completely unchanged; only where the read happens moved.
+describe('#512 kb:capture — filePath input (PERF-R8: stage-by-reference, not bytes)', () => {
+  let fileDir: string;
+  afterEach(async () => {
+    if (fileDir) await rmTempDir(fileDir);
+  });
+
+  it('reads the file from the given path and captures it as a normal file payload', async () => {
+    fileDir = await makeTempDir('kb-capture-filepath-');
+    const filePath = path.join(fileDir, 'report.pdf');
+    await fs.writeFile(filePath, 'the real file contents');
+
+    const capture = vi.fn(async () => ({ ids: ['F1'], captureBatch: 'b1', committed: true }));
+    state.orch = { capture };
+    const res = await invoke<CaptureResult>('kb:capture', {
+      inputs: [{ kind: 'filePath', name: 'report.pdf', path: filePath }],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(capture).toHaveBeenCalledTimes(1);
+    const [surface, payloads] = capture.mock.calls[0] as unknown as [string, Array<{ kind: string; name: string; data: Uint8Array }>];
+    expect(surface).toBe('in-app-panel');
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].kind).toBe('file'); // resolved to the SAME shape a `file` input would carry
+    expect(payloads[0].name).toBe('report.pdf');
+    expect(Buffer.from(payloads[0].data).toString()).toBe('the real file contents');
+  });
+
+  it('a path that no longer exists is skipped (per-item isolation), not a batch-wide failure', async () => {
+    const capture = vi.fn(async () => ({ ids: ['T1'], captureBatch: 'b1', committed: true }));
+    state.orch = { capture };
+    const res = await invoke<CaptureResult>('kb:capture', {
+      inputs: [
+        { kind: 'text', text: 'still captured' },
+        { kind: 'filePath', name: 'gone.pdf', path: '/nonexistent/gone.pdf' },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(capture).toHaveBeenCalledTimes(1);
+    const [, payloads] = capture.mock.calls[0] as unknown as [string, Array<{ kind: string }>];
+    expect(payloads).toEqual([{ kind: 'text', text: 'still captured' }]); // the missing file silently dropped, text unaffected
   });
 });
 

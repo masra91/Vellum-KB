@@ -18,9 +18,16 @@ import type { ViewHandle } from '../viewLifecycle';
 const LARGE_TEXT_BYTES = 1 * 1024 * 1024; // ~1 MB pasted text
 const LARGE_FILE_BYTES = 25 * 1024 * 1024; // ~25 MB file
 
+// #512 PERF-R8: a staged file is either a real on-disk PATH (the common case — `getPathForFile`
+// resolved a genuine drop; the bytes never touch the renderer at all) or, when no path is available
+// (a pasted-image File — RICHIN-12 — the clipboard synthesizes a File with no backing path), the
+// bytes read up front as before. `size` is always known synchronously from `File.size` either way, so
+// the staged-list UI (and the large-file flag) never needs to read a path-staged file's content.
+type StagedFile = { name: string; size: number } & ({ kind: 'path'; path: string } | { kind: 'bytes'; data: Uint8Array });
+
 // View-local state. The shell mounts each view once and toggles visibility, so this
 // state (and the in-progress textarea) survives switching away and back (SHELL-8).
-let stagedFiles: { name: string; data: Uint8Array }[] = [];
+let stagedFiles: StagedFile[] = [];
 // The original clipboard HTML from the most recent rich paste, kept until capture so the
 // verbatim sidecar can be preserved (RICHIN-2). Only attached when the textarea still holds
 // exactly that pasted Markdown (a clean single rich paste).
@@ -57,10 +64,10 @@ function renderStagedFiles(container: HTMLElement): void {
   el.innerHTML = stagedFiles
     .map((f, i) => {
       // RICHIN-11 caution: monochrome brass ◆ mark (aria-hidden) + ink label (#184) — never the multicolor emoji.
-      const big = f.data.byteLength > LARGE_FILE_BYTES ? ' <span class="capture-flag"><span class="capture-flag-mark" aria-hidden="true">◆</span> large</span>' : '';
+      const big = f.size > LARGE_FILE_BYTES ? ' <span class="capture-flag"><span class="capture-flag-mark" aria-hidden="true">◆</span> large</span>' : '';
       return `<li class="capture-staged-row">
           <span class="capture-staged-name viz-numeric" title="${esc(f.name)}">${esc(f.name)}</span>
-          <span class="capture-size viz-numeric">${humanSize(f.data.byteLength)}</span>${big}
+          <span class="capture-size viz-numeric">${humanSize(f.size)}</span>${big}
           <button class="viz-btn viz-btn--ghost viz-btn--sm viz-focusable capture-staged-rm" data-rm="${i}" aria-label="Remove ${esc(f.name)}">remove</button>
         </li>`;
     })
@@ -73,13 +80,29 @@ function renderStagedFiles(container: HTMLElement): void {
   );
 }
 
+/** #512 PERF-R8: stage by real on-disk PATH when the drop gives one (`getPathForFile` — the common
+ *  case, a genuine file drop) so the bytes never touch the renderer's heap at all; only reads bytes
+ *  up front when no path is available (a pasted-image File — RICHIN-12 — has none). `size` is always
+ *  known synchronously from `File.size` either way. `nameOverride` covers the pasted-image case, where
+ *  the clipboard often gives an empty `file.name`. */
+async function stageFile(file: File, nameOverride?: string): Promise<StagedFile> {
+  const name = nameOverride ?? file.name;
+  const path = window.kbApi.getPathForFile(file);
+  if (path) return { kind: 'path', name, size: file.size, path };
+  // The bytes-fallback path already has the real, measured length in hand — use THAT rather than
+  // trusting `file.size` a second time (it should agree, but there's no reason not to use the ground
+  // truth we just read).
+  const data = new Uint8Array(await file.arrayBuffer());
+  return { kind: 'bytes', name, size: data.byteLength, data };
+}
+
 /** Add dropped files as staged units — one per file (RICHIN-4). Per-file isolation: a file that
  *  fails to read NEVER blocks or discards the others (RICHIN-4 / ORCH-12 spirit). */
 async function addDroppedFiles(container: HTMLElement, files: FileList): Promise<void> {
   const failed: string[] = [];
   for (const file of Array.from(files)) {
     try {
-      stagedFiles.push({ name: file.name, data: new Uint8Array(await file.arrayBuffer()) });
+      stagedFiles.push(await stageFile(file));
     } catch {
       failed.push(file.name || 'a file');
     }
@@ -97,7 +120,7 @@ async function addStagedFile(container: HTMLElement, file: File): Promise<void> 
     name = `pasted-image.${ext || 'png'}`;
   }
   try {
-    stagedFiles.push({ name, data: new Uint8Array(await file.arrayBuffer()) });
+    stagedFiles.push(await stageFile(file, name));
     renderStagedFiles(container);
   } catch {
     setNote(container, `Couldn't read the pasted image.`, 'caution');
@@ -156,10 +179,10 @@ function onPaste(container: HTMLElement, ta: HTMLTextAreaElement, e: ClipboardEv
 
 /** Soft, non-blocking caution when a capture exceeds a size threshold (RICHIN-11). Plain text — the
  *  caller folds it into the captured-confirmation note (preserved in full, never an error). */
-function sizeWarning(text: string, files: { data: Uint8Array }[]): string {
+function sizeWarning(text: string, files: { size: number }[]): string {
   const big: string[] = [];
   if (new TextEncoder().encode(text).byteLength > LARGE_TEXT_BYTES) big.push('large text');
-  if (files.some((f) => f.data.byteLength > LARGE_FILE_BYTES)) big.push('a large file');
+  if (files.some((f) => f.size > LARGE_FILE_BYTES)) big.push('a large file');
   return big.length ? `${big.join(' + ')} preserved in full` : '';
 }
 
@@ -199,7 +222,12 @@ async function onCapture(container: HTMLElement): Promise<void> {
     const html = pendingPaste && pendingPaste.markdown.trim() === text.trim() ? pendingPaste.html : undefined;
     inputs.push({ kind: 'text', text, ...(html ? { html } : {}) });
   }
-  for (const f of stagedFiles) inputs.push({ kind: 'file', name: f.name, data: f.data });
+  for (const f of stagedFiles) {
+    // #512 PERF-R8: a path-staged file submits by path — main reads the bytes itself, so a large
+    // dropped file's content never crosses the IPC boundary as a serialized buffer either.
+    if (f.kind === 'path') inputs.push({ kind: 'filePath', name: f.name, path: f.path });
+    else inputs.push({ kind: 'file', name: f.name, data: f.data });
+  }
 
   if (inputs.length === 0) {
     setNote(container, 'Type something, paste, or drop a file first.', 'caution');

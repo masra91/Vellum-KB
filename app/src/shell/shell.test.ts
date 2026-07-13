@@ -439,3 +439,65 @@ describe('#510 contract: every registered view stops its live behavior within on
     }
   });
 });
+
+// #512 PERF-R6: mountShell's optional 4th arg threads a prefetched Today read (started concurrently
+// with getState() by the caller, before the shell even mounts) down to Today's own first show().
+describe('shell Today prefetch threading (#512 PERF-R6)', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="app"></div>';
+    root = document.getElementById('app')!;
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  it('Today\'s first paint uses the prefetch — the real getTodayProjection IPC is never called', async () => {
+    const getTodayProjection = vi.fn(async () => ({ status: 'warming' as const, data: null, builtAt: null, stale: false }));
+    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = {
+      listReviews: vi.fn(async () => []),
+      getTodayProjection,
+      pipelineStatus: vi.fn(async () => ({ queueDepth: 0, processing: null, lastArchived: null, updatedAt: null })),
+      capture: vi.fn(),
+    };
+    const prefetch = Promise.resolve({ status: 'ready' as const, data: null, builtAt: 't', stale: false });
+    mountShell(root, '/vault', 'KB', prefetch);
+    await tick();
+    expect(getTodayProjection).not.toHaveBeenCalled();
+  });
+});
+
+// #512 PERF-R8: the sidebar watermark's ambient animation runs the whole session (persistent shell
+// chrome, not view-scoped) — `body.shell-idle` pauses it while the window is blurred/hidden so a
+// background/unfocused window doesn't keep the compositor busy on pure decoration.
+describe('shell idle-class toggle for ambient animations (#512 PERF-R8)', () => {
+  afterEach(() => {
+    document.body.classList.remove('shell-idle');
+  });
+
+  it('window blur/focus toggles body.shell-idle', () => {
+    // happy-dom's document.hasFocus() doesn't track synthetic blur/focus events dispatched on window —
+    // stub it directly so the handler's actual branch (document.hidden || !document.hasFocus()) is exercised.
+    const original = document.hasFocus.bind(document);
+    try {
+      document.hasFocus = () => false;
+      window.dispatchEvent(new Event('blur'));
+      expect(document.body.classList.contains('shell-idle')).toBe(true);
+      document.hasFocus = () => true;
+      window.dispatchEvent(new Event('focus'));
+      expect(document.body.classList.contains('shell-idle')).toBe(false);
+    } finally {
+      document.hasFocus = original;
+    }
+  });
+
+  it('document visibilitychange also toggles the class', () => {
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(document.body.classList.contains('shell-idle')).toBe(true);
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(document.body.classList.contains('shell-idle')).toBe(false);
+  });
+});

@@ -122,9 +122,17 @@ async function onCreate(): Promise<void> {
  *  navigation shell (KB loaded, SHELL-4), matching the pre-split `init()` behavior exactly. */
 export async function mountApp(container: HTMLElement): Promise<void> {
   root = container;
+  // #512 PERF-R6: Today's own first read (kb:getTodayProjection) doesn't need anything getState()
+  // returns — it reads main's own already-resolved active-vault state — so kick it off CONCURRENTLY
+  // with getState() instead of waiting for the whole shell to mount first (Today is the default view,
+  // so this was a genuine extra round-trip in the critical path to first content). `.catch` suppresses
+  // an unhandled-rejection warning for the (no-vault) branch below, where this fetch is simply
+  // abandoned — `mountToday`'s own `load()` does its own error handling when it's actually consumed.
+  const todayPrefetch = window.kbApi.getTodayProjection();
+  todayPrefetch.catch(() => {});
   const state = await window.kbApi.getState();
   if (state.activeVaultPath && state.vaultConfig) {
-    mountShell(root, state.activeVaultPath, state.vaultConfig.name);
+    mountShell(root, state.activeVaultPath, state.vaultConfig.name, todayPrefetch);
   } else {
     renderSetup();
   }

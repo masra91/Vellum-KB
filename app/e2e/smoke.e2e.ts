@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { builtMainEntry, packagedExecutable } from './packagedApp';
+import { builtMainEntry, packagedExecutable, rendererAssetsDir } from './packagedApp';
 
 function freshUserDataDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'kb-e2e-'));
@@ -122,4 +122,32 @@ test('TEST-4: packaged app boots without crashing (asar/dep-bundling smoke)', as
   rmDirBestEffort(userDataDir);
 
   expect(earlyExit, `packaged app exited during boot (code ${earlyExit?.code}). stderr:\n${stderr}`).toBeNull();
+});
+
+// #512 PERF-R6: renderer.ts used to statically import the ENTIRE app (every rail view + `marked` +
+// `DOMPurify` transitively via shell.ts) at its top level, so the qcap capture-sheet window — which
+// only ever needs qcapSheet.ts's own tiny UI — paid to parse/execute all of it too. Each route now
+// loads via a dynamic `import()`, a real Vite async-chunk boundary; this asserts the qcap chunk's
+// ACTUAL built output carries none of the shell's code, not just that the source imports look right.
+test('PERF-R6: the qcap route\'s built chunk carries no marked/DOMPurify/shell-view code', () => {
+  const assetsDir = fs.existsSync(path.join(__dirname, '..', '.vite')) ? rendererAssetsDir() : null;
+  expect(assetsDir, 'built renderer assets not found — run `npm run package` first').toBeTruthy();
+
+  const files = fs.readdirSync(assetsDir as string);
+  const qcapChunk = files.find((f) => f.startsWith('qcapSheet-') && f.endsWith('.js'));
+  expect(qcapChunk, 'expected a separate qcapSheet-*.js chunk (code-splitting regressed?)').toBeTruthy();
+  const appRouteChunk = files.find((f) => f.startsWith('appRoute-') && f.endsWith('.js'));
+  expect(appRouteChunk, 'expected a separate appRoute-*.js chunk (code-splitting regressed?)').toBeTruthy();
+
+  const qcapSrc = fs.readFileSync(path.join(assetsDir as string, qcapChunk as string), 'utf8');
+  // Telltale strings from the shell's view code / markdown pipeline — none of this belongs in a chunk
+  // whose only job is the capture textarea.
+  expect(qcapSrc).not.toContain('DOMPurify');
+  expect(qcapSrc).not.toContain('activity-entry'); // Activity view markup
+  expect(qcapSrc).not.toContain('ask-turn'); // Ask view markup
+
+  // Sanity check the OTHER direction too: the shell/setup chunk DOES carry the markdown pipeline (this
+  // is genuinely a route-scoping assertion, not "nothing anywhere imports DOMPurify").
+  const appRouteSrc = fs.readFileSync(path.join(assetsDir as string, appRouteChunk as string), 'utf8');
+  expect(appRouteSrc).toContain('DOMPurify');
 });

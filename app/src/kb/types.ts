@@ -119,6 +119,20 @@ export interface CaptureFileInput {
   data: Uint8Array; // raw bytes (read in the renderer from the dropped File)
 }
 /**
+ * #512 PERF-R8: a dropped file staged by PATH, not bytes — the renderer resolves the drop's real
+ * on-disk path (`webUtils.getPathForFile`, the documented replacement for the removed `File.path`)
+ * instead of calling `file.arrayBuffer()`, so staging (and holding) a large dropped file costs the
+ * renderer ~0 heap. Main reads the bytes itself on submit (`kb:capture`), same as it always read a
+ * `CaptureFileInput`'s bytes — the difference is WHEN and WHERE the read happens, not the eventual
+ * write. Preferred over `CaptureFileInput` whenever a real path is available (i.e., a genuine file
+ * drop); `CaptureFileInput` stays for a pasted-image File, which the browser gives no path for.
+ */
+export interface CaptureFilePathInput {
+  kind: 'filePath';
+  name: string; // original filename
+  path: string; // the dropped file's real on-disk path
+}
+/**
  * SPEC-0038 QCAP-13: a screenshot / clipboard-image the main process captured to a temp PNG and
  * handed back as an opaque `handle`. The bytes NEVER pass through the renderer/DOM — on submit the
  * main process reads the temp file (validating the handle is one IT issued) → a file source on the
@@ -129,7 +143,7 @@ export interface CaptureScreenshotInput {
   handle: string;
   name: string;
 }
-export type CaptureInput = CaptureTextInput | CaptureFileInput | CaptureScreenshotInput;
+export type CaptureInput = CaptureTextInput | CaptureFileInput | CaptureFilePathInput | CaptureScreenshotInput;
 
 export interface CaptureRequest {
   inputs: CaptureInput[];
@@ -898,6 +912,12 @@ export interface KbApi {
   // SUBSCRIPTION like `onProjectionChanged`/`onAskProgress` — returns an unsubscribe fn, though the qcap
   // route's own single mount never needs to call it (the sheet lives for the window's lifetime).
   onQuickCaptureResummoned(cb: () => void): () => void;
+  /** #512 PERF-R8: resolve a dropped File's real on-disk path (Electron's `webUtils.getPathForFile`,
+   *  the documented replacement for the removed `File.path`) — lets Capture stage a `CaptureFilePathInput`
+   *  by reference instead of reading the whole file into the renderer's heap. Synchronous (no IPC round
+   *  trip — `webUtils` runs directly in the preload context) and never throws: an unresolvable File (not
+   *  from a real drop, e.g. a pasted-image File) returns `''`, and the caller falls back to reading bytes. */
+  getPathForFile(file: File): string;
 }
 
 /** The curated Activity feed + its window-cap signal. Consumers key off `total`/`truncated`, NOT

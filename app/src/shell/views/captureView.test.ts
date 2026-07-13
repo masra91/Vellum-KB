@@ -16,6 +16,10 @@ function setApi(captureResult: CaptureResult): void {
     pipelineStatus: vi.fn().mockResolvedValue({ queueDepth: 0, processing: null, lastArchived: null, updatedAt: null }),
     probeVaultAccess: vi.fn().mockResolvedValue({ ok: true, denied: false, message: 'ok' }),
     openSystemSettingsPrivacy: vi.fn().mockResolvedValue({ ok: true }),
+    // #512: happy-dom's File objects aren't real drops, so there's no real path to resolve — '' makes
+    // every staged file fall back to the (pre-#512) bytes-read path, matching these tests' existing
+    // assertions exactly. The dedicated path-staging behavior gets its OWN describe block below.
+    getPathForFile: vi.fn(() => ''),
   };
 }
 
@@ -461,5 +465,61 @@ describe('VUX-1 v3 token migration (SPEC-0060 — off --viz-*)', () => {
     expect(block).toMatch(/var\(--linen\b/);
     expect(block).toMatch(/var\(--slate\b/); // interactive (focus ring / dropzone wash)
     expect(block).toMatch(/var\(--sprout\b/); // captured-✓ / queued
+  });
+});
+
+// #512 PERF-R8: staging used to read every dropped file's FULL bytes into the renderer's own heap
+// (`file.arrayBuffer()`) even for a file the Principal never submits — unbounded, only a 25MB
+// soft-warn. A genuine drop now resolves to a real on-disk PATH (`getPathForFile`) and stages BY
+// REFERENCE — the bytes never touch the renderer at all; only a pasted image (no real path) still
+// reads bytes up front.
+describe('captureView — #512 path-based staging (PERF-R8)', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.appendChild(root);
+  });
+  afterEach(() => {
+    root.remove();
+    vi.restoreAllMocks();
+  });
+
+  it('a genuine file drop stages by PATH — arrayBuffer() is never called on it', async () => {
+    setApi(OK);
+    const getPathForFile = vi.fn(() => '/Users/mason/Downloads/report.pdf');
+    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = { ...(window as unknown as { kbApi: Partial<KbApi> }).kbApi, getPathForFile };
+    mountCapture(root, '/v', 'KB').show?.();
+
+    const arrayBuffer = vi.fn(() => Promise.resolve(new ArrayBuffer(100 * 1024 * 1024))); // 100MB — never actually read
+    const file = { name: 'report.pdf', size: 100 * 1024 * 1024, arrayBuffer };
+    drop(root.querySelector('#dropzone') as HTMLElement, [file]);
+    await flush();
+
+    expect(arrayBuffer).not.toHaveBeenCalled(); // the 100MB never got read into the renderer
+    expect(getPathForFile).toHaveBeenCalledWith(file);
+    expect(root.querySelector('#staged')!.textContent).toContain('report.pdf');
+    expect(root.querySelector('#staged')!.textContent).toContain('100.0 MB'); // size from File.size, not a read
+
+    root.querySelector<HTMLButtonElement>('#capture')!.click();
+    await flush();
+    // The submitted input carries the PATH, never bytes.
+    expect(lastInputs()).toEqual([{ kind: 'filePath', name: 'report.pdf', path: '/Users/mason/Downloads/report.pdf' }]);
+  });
+
+  it('a pasted image (no real path) still falls back to reading bytes', async () => {
+    setApi(OK);
+    const getPathForFile = vi.fn(() => ''); // clipboard-synthesized File — no backing path
+    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = { ...(window as unknown as { kbApi: Partial<KbApi> }).kbApi, getPathForFile };
+    mountCapture(root, '/v', 'KB').show?.();
+
+    const ta = root.querySelector<HTMLTextAreaElement>('#captureText')!;
+    paste(ta, { image: new File([new Uint8Array([1, 2, 3])], '', { type: 'image/png' }) });
+    await flush();
+
+    root.querySelector<HTMLButtonElement>('#capture')!.click();
+    await flush();
+    const input = lastInputs()[0] as { kind: 'file'; name: string; data: Uint8Array };
+    expect(input.kind).toBe('file'); // bytes, not a path — this File had none to give
+    expect(input.data).toBeInstanceOf(Uint8Array);
   });
 });
