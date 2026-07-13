@@ -34,7 +34,7 @@ export function assertPublicResolved(addresses: readonly ResolvedAddress[]): voi
 
 /** Node `dns.lookup`-shaped callback signature, as `http.Agent({ lookup })` expects. */
 type LookupCallback = (err: NodeJS.ErrnoException | null, address: string | ResolvedAddress[], family?: number) => void;
-type LookupOptions = { all?: boolean } & Record<string, unknown>;
+type LookupOptions = { all?: boolean };
 
 /**
  * Build an SSRF-safe `lookup` for an http(s) Agent (RESEARCH-8): resolve the hostname, REFUSE the

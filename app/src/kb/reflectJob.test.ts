@@ -272,7 +272,7 @@ describe.skipIf(!gitAvailable)('makeReflectJobBehavior — crash-robustness (REF
       const throwing: ReflectDecider = async () => { throw new Error('reflect: copilot session crashed'); };
       const res = await makeReflectJobBehavior(throwing)(ctxWith(root));
       expect(res.findings).toEqual([]);
-      expect(res.cursor.offset).toBe(REFLECT_WORKING_SET_SIZE); // advanced
+      expect(res.cursor?.offset).toBe(REFLECT_WORKING_SET_SIZE); // advanced
       expect(res.inspected).toMatch(/skipped a slice|session crashed/i);
     } finally {
       await rmTempDir(dir);
