@@ -205,9 +205,18 @@ continuously counter-rotate at different constant speeds**, like meshed gears tu
   is what makes it read as *mechanical* rather than organic; easing back toward 0 velocity at the loop
   seam is exactly the "breathing" quality being rejected). A `linear infinite` rotation has no seam to
   begin with — this is also the simplest possible seamless loop, a bonus.
-- Compatible with the existing `.shell-idle`/`animation-play-state` perf pause (`index.css:469`,
-  #512 PERF-R8) with no changes needed — that mechanism pauses whatever animation is running on the
-  selector, generically.
+- **Correction (KB-QD-2 gate-2 catch):** the existing `.shell-idle` perf pause (`index.css:469`, #512
+  PERF-R8) is **not** a generic mechanism — it's a single rule hardcoded to one selector,
+  `body.shell-idle .sidebar-wmark { animation-play-state: paused; }`, and it works today only because
+  `viz-drift` is declared directly ON `.sidebar-wmark` itself. MESH's rotation instead lives on the
+  `.d-out`/`.d-mid` **child** `<polygon>` elements the generator produces — `animation-play-state` doesn't
+  cascade from a parent to a descendant's own independently-declared animation, so the existing rule would
+  have **zero effect** on MESH, silently reintroducing the exact always-on-compositor cost #512 fixed.
+  `BRAND_DIAMOND`'s `.dmk` has **no** shell-idle coverage at all today, so MESH there is a brand-new
+  always-on rotation with no perf-pause from day one. **Required, not optional:** add
+  `body.shell-idle .dmk .d-out, body.shell-idle .dmk .d-mid { animation-play-state: paused; }` (covers
+  both `BRAND_DIAMOND` and `SIDEBAR_WMARK`, since both are `.dmk` instances) alongside the MESH migration
+  — this is part of landing §6.1 correctly, not a separate follow-up.
 
 ### 6.2 — RECURSE (replaces CHURN — episodic, `.dmk.is-thinking`)
 
@@ -281,6 +290,10 @@ words to check against: *mechanical, clockwork, gear-mesh, fractal-loop, recursi
   a visual DL-1 comparing MESH/RECURSE side-by-side with the old `dLoom`/`dChurn` to confirm the "no
   breathing" bar is actually met (no opacity pulse anywhere in the new keyframes — a grep guard on the
   `.dmk`-scoped CSS for a bare `opacity:` animation property would catch a regression back toward pulsing);
+  **a shell-idle perf test (KB-QD-2 gate-2 catch) asserting `body.shell-idle .dmk .d-out`/`.d-mid` actually
+  reach `animation-play-state: paused` — not just that the new selector exists in the CSS source, but that
+  it resolves/applies to the generator's real child elements**, since the whole point of the catch was
+  that the old selector silently didn't reach them;
   reduced-motion parity test for the new keyframe names, mirroring the existing one for the old names.
 
 ## 8. Changelog
