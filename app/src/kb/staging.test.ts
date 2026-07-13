@@ -158,6 +158,38 @@ describe.skipIf(!gitAvailable)('promote — the evergreen gate (STAGING-3/4/6)',
     });
   });
 
+  // #508 item 1: promote used to `git rm -r` + full-recheckout EVERY evergreen path on EVERY promote,
+  // even for a single-file change — a rescan storm on the live root Obsidian watches. Prove it now
+  // touches only what actually changed: seed a bunch of unrelated sources, promote once (baseline),
+  // then add ONE more source and promote again — the 20 unrelated files must be byte-for-byte untouched
+  // (mtime-unchanged), not rewritten.
+  it('a single-file staging change only touches that file on main, not the whole evergreen tree', async () => {
+    await withTempVault(async (root) => {
+      await createKb({ path: root, initGitIfNeeded: true });
+      await ensureStagingBranch(root);
+      const seedFiles: Record<string, string> = {};
+      const UNRELATED_COUNT = 20;
+      for (let i = 0; i < UNRELATED_COUNT; i++) seedFiles[`sources/2026/05/31/S${i}/source.md`] = `content ${i}`;
+      await commitOnStaging(root, seedFiles);
+      expect(await promote(root)).toBe(true);
+
+      const mtimesBefore = new Map<string, number>();
+      for (let i = 0; i < UNRELATED_COUNT; i++) {
+        const p = path.join(root, `sources/2026/05/31/S${i}/source.md`);
+        mtimesBefore.set(p, (await fs.stat(p)).mtimeMs);
+      }
+      await new Promise((r) => setTimeout(r, 20)); // so a re-write (if it happened) shows a later mtime
+
+      await commitOnStaging(root, { 'sources/2026/06/01/SNEW/source.md': 'new content' });
+      expect(await promote(root)).toBe(true);
+
+      expect(await pathExists(path.join(root, 'sources/2026/06/01/SNEW/source.md'))).toBe(true); // the new file landed
+      for (const [p, before] of mtimesBefore) {
+        expect((await fs.stat(p)).mtimeMs).toBe(before); // untouched — no full-tree recheckout
+      }
+    });
+  });
+
   it('mirrors deletions: a node CONNECT merged away on staging is removed from main (STAGING-10)', async () => {
     await withTempVault(async (root) => {
       await createKb({ path: root, initGitIfNeeded: true });

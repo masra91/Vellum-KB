@@ -49,16 +49,43 @@ export async function advanceStaging(root: string, ref: string): Promise<void> {
   await simpleGit(path.resolve(root)).raw('branch', '-f', STAGING_BRANCH, ref);
 }
 
+/** One `git diff --name-status` line: a change needed to turn the FIRST commit's tree into the
+ *  SECOND's, at `file`. `status` is git's raw single-letter code (A/M/D — renames are suppressed by
+ *  `--no-renames` at the call site, so only these three ever appear). */
+interface NameStatusChange {
+  status: string;
+  file: string;
+}
+
+/** Parse `git diff --name-status`'s tab-separated `<status>\t<path>` lines. Blank lines skipped. */
+function parseNameStatus(raw: string): NameStatusChange[] {
+  const out: NameStatusChange[] = [];
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    const tab = t.indexOf('\t');
+    if (tab === -1) continue; // malformed — never a real diff line
+    out.push({ status: t.slice(0, tab), file: t.slice(tab + 1) });
+  }
+  return out;
+}
+
 /**
  * The promotion gate (STAGING-3/4), **deletion-aware** (STAGING-10): advance `main` to be an
- * EXACT MIRROR of `staging`'s evergreen subset — adds, edits, AND removals. For each evergreen
- * path, **clear `main`'s copy then restore `staging`'s** (index + worktree). Clearing first is
- * what makes `main` mirror DELETIONS: a node CONNECT merged away on `staging` (a deleted loser +
- * its repointed claims, SPEC-0020 §3 / CONNECT-10,11) leaves `main` too, so a deduped duplicate
- * never lingers — plain `checkout staging -- P` only adds/updates, never removes. `sources/` is
+ * EXACT MIRROR of `staging`'s evergreen subset — adds, edits, AND removals. `sources/` is
  * append-only, so mirroring never removes ground truth. Working paths are never named, so `main`
  * cannot contain them (STAGING-6). Idempotent: a no-op (returns false) when nothing evergreen
  * changed.
+ *
+ * #508 item 1: applies ONLY the actual delta between `main`'s current tree and `staging`'s evergreen
+ * subset (`git diff --name-status`), not a blind clear-then-restore of every evergreen path on every
+ * promote — that touched (`git rm -r` + full re-checkout of) potentially thousands of files even for
+ * a single-file change, on the LIVE root Obsidian watches (rescan storms, SSD churn). Same end state:
+ * `git diff --name-status` between two trees is BY CONSTRUCTION the exact add/modify/delete set that
+ * turns one into the other, so applying "checkout staging for every A/M path, rm for every D path"
+ * mirrors `staging` exactly, just without touching anything that didn't change. The one-time bootstrap
+ * case (main has no commits yet — the very first promote of a brand-new vault) falls back to the
+ * original full clear-then-restore, since there's no prior tree to diff against.
  *
  * MUST be called serialized via the shared canonical-writer lock so it never races a stage's
  * ref advance.
@@ -87,19 +114,36 @@ export async function promote(root: string, paths: readonly string[] = EVERGREEN
     // section releases → the watchdog surfaces it, rather than a permanent deadlock.
     const git = boundedGit(root, timeoutMs);
     await ensureGitIdentity(git);
-    for (const p of paths) {
-      // Drop main's current tracked copy of P (worktree + index) so removals mirror. `--ignore-unmatch`
-      // makes a never-yet-promoted (absent) path exit 0 — the expected no-op case — so we do NOT
-      // swallow errors here: an UNEXPECTED `git rm` failure must surface, because silently eating it
-      // could skip a deletion and leave a stale duplicate on `main` (the sole evergreen writer must
-      // not fail quietly). Consistent with the uncaught checkout/status/commit calls below.
-      await git.raw('rm', '-r', '-f', '--ignore-unmatch', '--quiet', '--', p);
-      try {
-        await git.raw('checkout', STAGING_BRANCH, '--', p); // restore staging's P (index + worktree)
-      } catch {
-        /* P absent on staging — nothing to publish; it correctly stays removed from main */
-      }
+
+    let mainHead: string | null;
+    try {
+      mainHead = (await git.revparse(['HEAD'])).trim();
+    } catch {
+      mainHead = null; // unborn branch — a brand-new vault's very first promote, nothing to diff against
     }
+
+    if (mainHead === null) {
+      // Bootstrap-only: no prior tree on main, so there's no delta to compute — restore everything.
+      for (const p of paths) {
+        await git.raw('rm', '-r', '-f', '--ignore-unmatch', '--quiet', '--', p);
+        try {
+          await git.raw('checkout', STAGING_BRANCH, '--', p);
+        } catch {
+          /* p absent on staging too — nothing to publish */
+        }
+      }
+    } else {
+      const diffOut = await git.raw('diff', '--name-status', '--no-renames', mainHead, STAGING_BRANCH, '--', ...paths);
+      const changes = parseNameStatus(diffOut);
+      if (changes.length === 0) return false; // idempotent: nothing evergreen changed — zero file ops
+      const toRemove = changes.filter((c) => c.status === 'D').map((c) => c.file);
+      const toRestore = changes.filter((c) => c.status !== 'D').map((c) => c.file);
+      // `--ignore-unmatch` even though these paths came straight off the diff: a prior partial/aborted
+      // promote could have already removed one, and this must stay idempotent-safe, not fatal.
+      if (toRemove.length > 0) await git.raw('rm', '-f', '--ignore-unmatch', '--quiet', '--', ...toRemove);
+      if (toRestore.length > 0) await git.raw('checkout', STAGING_BRANCH, '--', ...toRestore);
+    }
+
     const status = await git.status();
     if (status.files.length === 0) return false; // idempotent: nothing evergreen changed
     await git.commit('promote: evergreen → main'); // commits the staged add/update/delete set

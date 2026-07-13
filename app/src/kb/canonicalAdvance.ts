@@ -74,11 +74,34 @@ async function pruneStaleWorktreeBranches(git: ReturnType<typeof simpleGit>): Pr
   }
 }
 
+/**
+ * #508 item 2: materialize ONLY `sparsePaths` in the ephemeral worktree instead of the whole
+ * `checkpoint` tree. `git worktree add --no-checkout` + cone-mode `sparse-checkout set` before the
+ * first real checkout — verified empirically (not just per git's docs) that a NEW file written under
+ * a path NOT covered by the sparse patterns is silently refused by `git add` ("outside of your
+ * sparse-checkout definition"), so `sparsePaths` MUST include every directory `fn` will WRITE to as
+ * well as every one it reads from — a narrower-than-needed list doesn't error, it silently drops the
+ * write. Precise, provably-safe callers only (see call sites); anything uncertain omits `sparsePaths`
+ * and gets the full checkout (the safe default, unchanged).
+ */
+async function checkoutWorktree(git: ReturnType<typeof simpleGit>, wt: string, workBranch: string, checkpoint: string, sparsePaths?: readonly string[]): Promise<void> {
+  if (!sparsePaths || sparsePaths.length === 0) {
+    await git.raw('worktree', 'add', '--force', '-B', workBranch, wt, checkpoint);
+    return;
+  }
+  await git.raw('worktree', 'add', '--force', '--no-checkout', '-B', workBranch, wt, checkpoint);
+  const wtGit = boundedGit(wt);
+  await wtGit.raw('sparse-checkout', 'init', '--cone');
+  await wtGit.raw('sparse-checkout', 'set', ...sparsePaths);
+  await wtGit.raw('checkout', workBranch);
+}
+
 export async function withEphemeralWorktree<T>(
   root: string,
   stage: string,
   checkpoint: string,
   fn: (ctx: { wt: string; workBranch: string }) => Promise<T>,
+  sparsePaths?: readonly string[],
 ): Promise<T> {
   root = path.resolve(root);
   const id = ulid();
@@ -89,7 +112,7 @@ export async function withEphemeralWorktree<T>(
   await git.raw('worktree', 'prune'); // reap any orphan worktree dir from a prior crash before adding
   await pruneStaleWorktreeBranches(git); // …then reap orphan work branches a failed teardown left
   await fs.mkdir(path.dirname(wt), { recursive: true });
-  await git.raw('worktree', 'add', '--force', '-B', workBranch, wt, checkpoint);
+  await checkoutWorktree(git, wt, workBranch, checkpoint, sparsePaths);
   try {
     return await fn({ wt, workBranch });
   } finally {
@@ -276,6 +299,14 @@ export interface ConcurrentAdvanceOptions {
   label?: string;
   /** Dev-log for the ORCH-27 acquire-finds-stale heal to surface a `orch.lock.healed`/`held` event. */
   log?: DevLog;
+  /** #508 item 2: materialize ONLY these paths in the ephemeral worktree (cone-mode sparse-checkout)
+   *  instead of the whole checkpoint tree. MUST include every path `prepare` reads OR writes — a path
+   *  outside this list is silently dropped on `git add`, not a loud failure (see `checkoutWorktree`).
+   *  Only set this when the item's full read+write path set is provably known BEFORE `prepare` runs
+   *  (e.g. archive/decompose, whose target is a function of the item id); omit for anything that scans
+   *  an unbounded/unpredictable part of the tree (e.g. connect's cross-vault blocking) — the default
+   *  (omitted) is the full checkout, always correct. */
+  sparsePaths?: readonly string[];
 }
 
 /** Context handed to a `prepare` callback under {@link withConcurrentAdvance}: its PRIVATE ephemeral
@@ -304,11 +335,17 @@ export async function withConcurrentAdvance(
   const maxRetries = opts.maxCollisionRetries ?? DEFAULT_MAX_COLLISION_RETRIES;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const base = await canonicalHead(opts.root);
-    const outcome = await withEphemeralWorktree(opts.root, opts.stage, base, async ({ wt, workBranch }) => {
-      const committed = await prepare({ wt, base });
-      if (!committed) return 'noop' as const;
-      return opts.lock.run(() => advanceOrCollide(opts.root, workBranch, base, undefined, opts.log), opts.label ?? `${opts.stage}:advance`);
-    });
+    const outcome = await withEphemeralWorktree(
+      opts.root,
+      opts.stage,
+      base,
+      async ({ wt, workBranch }) => {
+        const committed = await prepare({ wt, base });
+        if (!committed) return 'noop' as const;
+        return opts.lock.run(() => advanceOrCollide(opts.root, workBranch, base, undefined, opts.log), opts.label ?? `${opts.stage}:advance`);
+      },
+      opts.sparsePaths,
+    );
     if (outcome === 'noop') return 'noop';
     if (outcome === 'advanced') return 'advanced';
     // 'collision' → retry the whole item in a fresh worktree against the moved canonical.

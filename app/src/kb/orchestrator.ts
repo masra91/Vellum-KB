@@ -156,7 +156,12 @@ export async function archiveOne(
     throw new Error(`archive: ${id} exhausted optimistic-advance retries (unexpected same-path collision)`);
   };
 
-  await withConcurrentAdvance({ root, lock, stage: 'archive' }, prepare, onExhausted);
+  // #508 item 2: archiveOne's ENTIRE read+write footprint is knowable before the worktree exists — the
+  // one inbox unit being archived, its fixed destination (a pure function of `id`), and the fixed
+  // sensitivity-overrides file. Sparse-checkout to just those instead of materializing the whole
+  // checkpoint tree (on a large vault, thousands of unrelated `sources/`/`entities/`/`claims/` files).
+  const sparsePaths = [path.join('inbox', id), destRel, path.join('.kb', 'sensitivity')];
+  await withConcurrentAdvance({ root, lock, stage: 'archive', sparsePaths }, prepare, onExhausted);
   return destRel;
 }
 

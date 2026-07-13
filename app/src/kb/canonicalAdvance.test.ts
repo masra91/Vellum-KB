@@ -321,6 +321,105 @@ describe.skipIf(!gitAvailable)('withEphemeralWorktree — per-item isolation for
   });
 });
 
+// #508 item 2: an ephemeral worktree used to `worktree add` (full checkout) the ENTIRE checkpoint tree
+// for every single item — on a large vault, thousands of unrelated files materialized per archive/
+// decompose. `sparsePaths` (cone-mode sparse-checkout) is opt-in per call; prove it actually narrows
+// what's on disk, that reads/writes WITHIN the sparse scope work normally (including a NEW file under a
+// not-yet-existing nested path), and that a path OUTSIDE the scope is never materialized.
+describe.skipIf(!gitAvailable)('withEphemeralWorktree sparsePaths — cone-mode sparse-checkout (#508 item 2)', () => {
+  /** Recursively count files under `dir` (excluding `.git`). */
+  async function countFiles(dir: string): Promise<number> {
+    let n = 0;
+    async function rec(d: string): Promise<void> {
+      const entries = await fs.readdir(d, { withFileTypes: true }).catch(() => [] as import('node:fs').Dirent[]);
+      for (const e of entries) {
+        if (e.name === '.git') continue;
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) await rec(p);
+        else n++;
+      }
+    }
+    await rec(dir);
+    return n;
+  }
+
+  it('materializes ONLY sparsePaths, not the whole large checkpoint tree', async () => {
+    const dir = await makeTempDir();
+    try {
+      const root = await makeCanonicalRepo(dir);
+      // Seed a "large vault": 200 unrelated files across many source dirs, PLUS the one this item cares about.
+      const seedGit = simpleGit(root);
+      for (let i = 0; i < 200; i++) {
+        const p = path.join(root, `sources/bulk-${i}/source.md`);
+        await fs.mkdir(path.dirname(p), { recursive: true });
+        await fs.writeFile(p, `bulk ${i}`);
+      }
+      await fs.mkdir(path.join(root, 'inbox/UNIT1'), { recursive: true });
+      await fs.writeFile(path.join(root, 'inbox/UNIT1/raw.md'), 'raw content');
+      await seedGit.raw('add', '-A');
+      await seedGit.commit('seed 200 unrelated + 1 target');
+      const base = await canonicalHead(root);
+
+      let materializedCount = -1;
+      let sawUnrelated = false;
+      let sawTarget = false;
+      const outcome = await withEphemeralWorktree(
+        root,
+        'archive',
+        base,
+        async ({ wt, workBranch }) => {
+          materializedCount = await countFiles(wt);
+          sawUnrelated = await exists('', path.join(wt, 'sources/bulk-0/source.md'));
+          sawTarget = await exists('', path.join(wt, 'inbox/UNIT1/raw.md'));
+          // Write a NEW file under a not-yet-existing nested path INSIDE the sparse scope.
+          const dest = path.join(wt, 'sources/2026/01/NEWID');
+          await fs.mkdir(dest, { recursive: true });
+          await fs.writeFile(path.join(dest, 'source.md'), 'archived');
+          const g = simpleGit(wt);
+          await ensureGitIdentity(g);
+          await g.raw('add', '-A');
+          await g.commit('archive UNIT1');
+          return advanceOrCollide(root, workBranch, base);
+        },
+        ['inbox/UNIT1', 'sources/2026/01/NEWID'],
+      );
+
+      expect(outcome).toBe('advanced');
+      expect(sawUnrelated).toBe(false); // the 200 unrelated files were never materialized
+      expect(sawTarget).toBe(true); // the item's own input WAS materialized
+      expect(materializedCount).toBeLessThanOrEqual(3); // inbox/UNIT1/raw.md + audit-ish overhead, not 201+
+      // The new write inside the sparse scope reached the canonical worktree.
+      expect(await exists(root, 'sources/2026/01/NEWID/source.md')).toBe(true);
+      // The 200 unrelated files are still there, untouched.
+      expect(await exists(root, 'sources/bulk-0/source.md')).toBe(true);
+    } finally {
+      await rmTempDir(dir);
+    }
+  });
+
+  it('omitting sparsePaths keeps the full-checkout default (no regression for callers that need it)', async () => {
+    const dir = await makeTempDir();
+    try {
+      const root = await makeCanonicalRepo(dir);
+      const seedGit = simpleGit(root);
+      await fs.mkdir(path.join(root, 'entities/x'), { recursive: true });
+      await fs.writeFile(path.join(root, 'entities/x/e.md'), 'entity');
+      await seedGit.raw('add', '-A');
+      await seedGit.commit('seed entity');
+      const base = await canonicalHead(root);
+
+      let sawEntity = false;
+      await withEphemeralWorktree(root, 'connect', base, async ({ wt }) => {
+        sawEntity = await exists('', path.join(wt, 'entities/x/e.md'));
+        return 'ok';
+      }); // no sparsePaths — connect needs the broad scan, must see everything
+      expect(sawEntity).toBe(true);
+    } finally {
+      await rmTempDir(dir);
+    }
+  });
+});
+
 describe.skipIf(!gitAvailable)('withConcurrentAdvance — ephemeral-worktree wrapper for cap>1 (ORCH-20)', () => {
   it('advances on the happy path — prepare writes in the helper-provided ephemeral worktree', async () => {
     const dir = await makeTempDir();
