@@ -50,6 +50,8 @@ import * as watchControlPanel from './registries/watchControlPanel';
 import * as researchersControlPanel from './registries/researchersControlPanel';
 import * as intakeControlPanel from './registries/intakeControlPanel';
 import * as sourceSensitivityControlPanel from './registries/sourceSensitivityControlPanel';
+import * as instanceSettingsControlPanel from './registries/instanceSettingsControlPanel';
+import * as modelsControlPanel from './registries/modelsControlPanel';
 import { researchDepsOptions, intakeDepsOptions, mediaExtractOptions } from './researchWiring';
 import { createVaultTracer } from '../kb/tracing';
 import { loadPerfIndex } from '../kb/perfIndex';
@@ -82,13 +84,10 @@ import { JobScheduler } from '../kb/jobScheduler';
 import { exampleJobBehavior, EXAMPLE_JOB_TYPE } from '../kb/exampleJob';
 import { makeReflectJobBehavior, REFLECT_JOB_TYPE } from '../kb/reflectJob';
 import { makeReflectDecider } from '../kb/reflectAgent';
-import { isAutonomyPosture } from '../kb/jobsPanel';
-import { readInstanceConfig, writeInstanceConfig, instanceConfigPath, defaultInstanceConfig, clampRecallBudgetMs, resolveRecallMaxToolCallsWrite, resolveStageCaps, clampStageCap, resolveCeilingWrite, SCALE_STAGES, DEV_LOG_LEVELS, DEFAULT_DEV_LOG_LEVEL, DEFAULT_QUICK_CAPTURE_ACCELERATOR, DEFAULT_RECALL_BUDGET_MS, type DevLogLevel, type ScaleStage, type InstanceConfig } from '../kb/instanceConfig';
+import { readInstanceConfig, defaultInstanceConfig, resolveStageCaps } from '../kb/instanceConfig';
 import { applyCopilotCeiling } from '../kb/copilotConcurrency';
-import { getQuickCaptureAgent } from './quickCaptureService';
-import { AGENT_CATALOG, buildAgentViews } from '../kb/agentCatalog';
-import { resolveCopilotModel, setResolvedLaunchModel, setAgentModelOverrides } from '../kb/copilotModel';
-import { initLaunchModel, probeAcceptedModels, validateModel } from '../kb/copilotModelProbe';
+import { resolveCopilotModel, setAgentModelOverrides } from '../kb/copilotModel';
+import { initLaunchModel } from '../kb/copilotModelProbe';
 import { appendAuditEvent } from '../kb/audit';
 import { researcherRegistryPath } from '../kb/researcherRegistry';
 import { seedDefaultResearcherIfAbsent } from '../kb/researcherSeed';
@@ -1312,227 +1311,44 @@ export async function jobHistoryForActive(id: string): Promise<JobLastRun[]> {
 }
 
 // --- Control Panel · Settings + Agents (SPEC-0027 PANEL-3/5) ---
+// Full implementation lives in registries/instanceSettingsControlPanel.ts + registries/modelsControlPanel.ts (#528 ENG-7).
 
-/** The per-Instance settings for the active KB (PANEL-5). No active KB → safe defaults. */
 export async function getActiveInstanceSettings(): Promise<InstanceSettings> {
-  if (!active) return defaultInstanceConfig();
-  return readInstanceConfig(active.stagingWt);
+  return instanceSettingsControlPanel.getInstanceSettings(active?.stagingWt ?? null);
 }
 
-/**
- * Persist the per-Instance settings (PANEL-5/6): write `.kb/instance.json` + git-commit on `staging`
- * under the lock (durability), then emit a conforming `panel` audit event when the autonomy default
- * changed (PANEL-7 / AUDIT-2/11 — `→ Autonomous` is a risky, audited change). An invalid posture is
- * refused (fail-safe). Takes effect immediately (new jobs inherit it via `resolveJobPosture`).
- */
 export async function setActiveInstanceSettings(settings: InstanceSettings): Promise<InstanceSettings> {
   if (!active) return defaultInstanceConfig();
-  const root = active.stagingWt;
-  if (!isAutonomyPosture(settings.autonomyDefault)) return readInstanceConfig(root); // reject invalid
-  let prior: InstanceConfig = defaultInstanceConfig();
-  let devLogLevel: DevLogLevel = DEFAULT_DEV_LOG_LEVEL;
-  let quickCaptureAccelerator: string = DEFAULT_QUICK_CAPTURE_ACCELERATOR;
-  let recallBudgetMs: number = DEFAULT_RECALL_BUDGET_MS;
-  let recallMaxToolCalls: number | undefined;
-  let stageCaps: Partial<Record<ScaleStage, number>> | undefined;
-  let copilotCeiling: number | undefined;
-  let priorCfg = defaultInstanceConfig();
-  await active.lock.run(async () => {
-    prior = await readInstanceConfig(root);
-    priorCfg = prior as typeof priorCfg;
-    // OBS-10: keep a valid level. Server-side merge (QA-2 hardening / the #102 lesson): an
-    // omitted/invalid level PRESERVES the prior — no caller can clobber a field by omission.
-    devLogLevel = (DEV_LOG_LEVELS as readonly string[]).includes(settings.devLogLevel) ? settings.devLogLevel : prior.devLogLevel;
-    // QCAP-6: preserve-on-omission (the #102 merge lesson) — an empty/omitted accelerator keeps prior.
-    quickCaptureAccelerator =
-      typeof settings.quickCaptureAccelerator === 'string' && settings.quickCaptureAccelerator.trim().length > 0
-        ? settings.quickCaptureAccelerator
-        : prior.quickCaptureAccelerator;
-    // ASK-17: preserve-on-omission — an omitted recall budget keeps prior; a provided one is clamped to
-    // the sane bounds. (prior.recallBudgetMs is always set: readInstanceConfig fills it.)
-    recallBudgetMs = settings.recallBudgetMs === undefined ? (prior.recallBudgetMs ?? DEFAULT_RECALL_BUDGET_MS) : clampRecallBudgetMs(settings.recallBudgetMs);
-    // ASK-19: the retrieval tool-call override — `undefined` preserves prior (#102), `null` CLEARS it
-    // back to the graph-size-scaled default ("scale to KB size"), a number is clamped (pure +
-    // unit-tested in recallConstants). Omitted from the write below ⇒ no override key persisted.
-    recallMaxToolCalls = resolveRecallMaxToolCallsWrite(priorCfg.recallMaxToolCalls, settings.recallMaxToolCalls);
-    // SCALE-1/2 preserve-on-omission (#102): a wholly-omitted `stageCaps`/`copilotCeiling` keeps prior;
-    // a provided one is merged key-by-key + clamped (Connect pinned to 1, SCALE-5). The model override
-    // + preference list (#345) are likewise preserved on the write below — InstanceSettings carries
-    // them but an omitted value must keep prior, never wipe the Principal's pick.
-    if (settings.stageCaps === undefined) {
-      stageCaps = priorCfg.stageCaps;
-    } else {
-      const merged: Partial<Record<ScaleStage, number>> = { ...(priorCfg.stageCaps ?? {}) };
-      for (const stage of SCALE_STAGES) {
-        if (settings.stageCaps[stage] !== undefined) merged[stage] = clampStageCap(stage, settings.stageCaps[stage]);
-      }
-      stageCaps = Object.keys(merged).length > 0 ? merged : undefined;
-    }
-    // `undefined` preserves prior (#102); `null` is the Auto toggle's explicit CLEAR (→ cores-derived);
-    // a number is clamped (see resolveCeilingWrite — pure + unit-tested in scaleConstants).
-    copilotCeiling = resolveCeilingWrite(priorCfg.copilotCeiling, settings.copilotCeiling);
-    await writeInstanceConfig(root, {
-      autonomyDefault: settings.autonomyDefault,
-      devLogLevel,
-      quickCaptureAccelerator,
-      recallBudgetMs,
-      ...(recallMaxToolCalls !== undefined ? { recallMaxToolCalls } : {}), // ASK-19: omitted ⇒ scaled default
-      ...(priorCfg.modelPreferences ? { modelPreferences: priorCfg.modelPreferences } : {}), // preserve MODEL (#345)
-      ...(priorCfg.model ? { model: priorCfg.model } : {}),
-      ...(priorCfg.agentModels ? { agentModels: priorCfg.agentModels } : {}), // preserve per-agent picks (SPEC-0048)
-      ...(stageCaps ? { stageCaps } : {}),
-      ...(copilotCeiling !== undefined ? { copilotCeiling } : {}),
-    });
-    await commitControlFile(root, instanceConfigPath(root), `instance autonomyDefault=${settings.autonomyDefault} devLogLevel=${devLogLevel} quickCaptureAccelerator=${quickCaptureAccelerator} recallBudgetMs=${recallBudgetMs} recallMaxToolCalls=${recallMaxToolCalls ?? 'scaled'} ceiling=${copilotCeiling ?? 'default'} caps=${JSON.stringify(stageCaps ?? {})}`);
-  }, 'instance-settings:write');
-  // QCAP-6: apply a changed hotkey live (no restart) — conflict-aware via the agent; degrades to the
-  // menubar if the new accelerator clashes (QCAP-9). No-op when running headless without an agent.
-  if (prior.quickCaptureAccelerator !== quickCaptureAccelerator) {
-    getQuickCaptureAgent()?.setAccelerator(quickCaptureAccelerator);
-    await appendAuditEvent(root, {
-      actor: 'panel',
-      eventType: 'instance-config-change',
-      subjects: {},
-      payload: { field: 'quickCaptureAccelerator', from: prior.quickCaptureAccelerator, to: quickCaptureAccelerator, why: 'Principal change via Control Panel' },
-    });
-  }
-  if (prior.autonomyDefault !== settings.autonomyDefault) {
-    await appendAuditEvent(root, {
-      actor: 'panel',
-      eventType: 'instance-config-change',
-      subjects: {},
-      payload: { field: 'autonomyDefault', from: prior.autonomyDefault, to: settings.autonomyDefault, why: 'Principal change via Control Panel' },
-    });
-  }
-  // OBS-10 + AUDIT-2: audit a verbosity change too — `→ debug` is security-relevant (it logs
-  // redaction-protected `sensitive` fields verbatim), so it's never silent (QA-2 #2).
-  if (prior.devLogLevel !== devLogLevel) {
-    await appendAuditEvent(root, {
-      actor: 'panel',
-      eventType: 'instance-config-change',
-      subjects: {},
-      payload: { field: 'devLogLevel', from: prior.devLogLevel, to: devLogLevel, why: 'Principal change via Control Panel' },
-    });
-  }
-  // SPEC-0048 SCALE-4: apply scale changes LIVE (no restart). Resize the global ceiling (env still
-  // wins) and live-set each stage's cap — the new cap is read on the stage's NEXT batch (`setCap`),
-  // so a "run harder/softer" change takes effect within a sweep without rebuilding the pipeline.
-  const effectiveCeiling = applyCopilotCeiling(copilotCeiling);
-  const liveCaps = resolveStageCaps({ stageCaps });
-  active.orch.setCap(liveCaps.archive);
-  active.decompose.setCap(liveCaps.decompose);
-  active.claims.setCap(liveCaps.claims);
-  active.compose.setCap(liveCaps.compose);
-  active.connect.setCap(liveCaps.connect); // SCALE-5: Connect's resolve drain is now live-tunable too
-  const priorCeiling = priorCfg.copilotCeiling;
-  const priorCaps = JSON.stringify(priorCfg.stageCaps ?? {});
-  if (priorCeiling !== copilotCeiling || priorCaps !== JSON.stringify(stageCaps ?? {})) {
-    active.log.info('scale.applied', { ceiling: effectiveCeiling, caps: liveCaps });
-    await appendAuditEvent(root, {
-      actor: 'panel',
-      eventType: 'instance-config-change',
-      subjects: {},
-      payload: { field: 'scale', ceiling: copilotCeiling ?? 'default', caps: stageCaps ?? {}, why: 'Principal change via Control Panel' },
-    });
-  }
-  return readInstanceConfig(root);
-}
-
-/** The librarian/stage agents for observe-only display (PANEL-3): the static catalog overlaid with
- *  the resolved model (env-requested or Copilot default) + live running/idle status (PANEL-9). */
-export async function listAgentsForActive(): Promise<AgentView[]> {
-  // SPEC-0048: per-agent resolution — each row shows the model THAT agent launches with (its own pin
-  // → global → floor) + its configured pick (for the picker). `agentModels` read from the persisted
-  // config so the view reflects the saved picks even before a restart re-applies the override cache.
-  const configuredModels = active ? (await readInstanceConfig(active.stagingWt)).agentModels : undefined;
-  return buildAgentViews(AGENT_CATALOG, {
-    resolveModel: (agentKey) => resolveCopilotModel(undefined, agentKey),
-    configuredModels,
-    pipelineActive: active !== null,
+  return instanceSettingsControlPanel.setInstanceSettings(settings, {
+    root: active.stagingWt,
+    lock: active.lock,
+    log: active.log,
+    applyLiveCaps: (caps) => {
+      active!.orch.setCap(caps.archive);
+      active!.decompose.setCap(caps.decompose);
+      active!.claims.setCap(caps.claims);
+      active!.compose.setCap(caps.compose);
+      active!.connect.setCap(caps.connect); // SCALE-5: Connect's resolve drain is now live-tunable too
+    },
   });
 }
 
-/** SPEC-0048 — the model picker's data: the live CLI accepted catalog (probed), the currently-resolved
- *  launch model, the persisted global pick (if any), and whether that pick is stale (no longer accepted
- *  by this CLI version → the brass note). Best-effort: a probe miss leaves `accepted` null (the picker
- *  shows the resolved/configured value but can't offer a fresh list). */
-export async function getModelCatalogForActive(): Promise<ModelCatalogView> {
-  const accepted = await probeAcceptedModels();
-  const resolved = resolveCopilotModel();
-  const configured = active ? (await readInstanceConfig(active.stagingWt)).model : undefined;
-  const staleConfigured = !!configured && accepted !== null && !accepted.includes(configured);
-  return { accepted, resolved, configured, staleConfigured };
+export async function listAgentsForActive(): Promise<AgentView[]> {
+  return modelsControlPanel.listAgents(active ? { root: active.stagingWt, pipelineActive: true } : null);
 }
 
-/** SPEC-0048 — persist the Principal's global model pick (Agents-view picker), validated against the
- *  live CLI catalog first so a stale/rejected id is REFUSED (never persisted into a hard-break). An
- *  empty/null id clears the override (→ the preference-list probe re-resolves). Applies live via
- *  `setResolvedLaunchModel` so new launches use it without a restart. */
+export async function getModelCatalogForActive(): Promise<ModelCatalogView> {
+  return modelsControlPanel.getModelCatalog(active?.stagingWt ?? null);
+}
+
 export async function setActiveModel(id: string | null): Promise<SetModelResult> {
   if (!active) return { ok: false, resolved: resolveCopilotModel() };
-  const root = active.stagingWt;
-  const trimmed = (id ?? '').trim();
-
-  if (trimmed.length === 0) {
-    // Clear the override → re-resolve from the preference list against the live catalog.
-    let prefs: string[] | undefined;
-    await active.lock.run(async () => {
-      const prior = await readInstanceConfig(root);
-      prefs = prior.modelPreferences;
-      const { model: _drop, ...rest } = prior;
-      void _drop;
-      await writeInstanceConfig(root, rest);
-      await commitControlFile(root, instanceConfigPath(root), 'instance model=cleared');
-    }, 'instance-model:write');
-    await initLaunchModel({ preferences: prefs, log: active.log.child({ scope: 'model' }) }).catch(() => {});
-    return { ok: true, resolved: resolveCopilotModel() };
-  }
-
-  // Validate the pick against the live catalog: a rejected id is refused (resolution unchanged). An
-  // `unknown` (un-probable CLI) is allowed — the per-call `auto` net still guards a real launch reject.
-  const { result } = await validateModel(trimmed);
-  if (result === 'rejected') return { ok: false, resolved: resolveCopilotModel(), reason: 'rejected' };
-
-  await active.lock.run(async () => {
-    const prior = await readInstanceConfig(root);
-    await writeInstanceConfig(root, { ...prior, model: trimmed });
-    await commitControlFile(root, instanceConfigPath(root), `instance model=${trimmed}`);
-  }, 'instance-model:write');
-  setResolvedLaunchModel(trimmed); // apply live — new launches use it immediately
-  return { ok: true, resolved: resolveCopilotModel() };
+  return modelsControlPanel.setModel(id, { root: active.stagingWt, lock: active.lock, log: active.log });
 }
 
-/** SPEC-0048 — set/clear ONE agent's per-agent model pick (Agents-view per-agent picker). Validated
- *  against the live catalog (rejected → refused). Empty/null clears that agent's pick (→ global default).
- *  Persists `instance.agentModels` under the lock + applies live via `setAgentModelOverrides`. Returns
- *  that agent's now-resolved model. */
 export async function setActiveAgentModel(agentKey: string, id: string | null): Promise<SetModelResult> {
   if (!active) return { ok: false, resolved: resolveCopilotModel(undefined, agentKey) };
-  const root = active.stagingWt;
-  const key = agentKey.trim();
-  const trimmed = (id ?? '').trim();
-  if (key.length === 0) return { ok: false, resolved: resolveCopilotModel() };
-
-  // A non-empty pick must be catalog-accepted (rejected → refuse, leave the agent on its current model).
-  if (trimmed.length > 0) {
-    const { result } = await validateModel(trimmed);
-    if (result === 'rejected') return { ok: false, resolved: resolveCopilotModel(undefined, agentKey), reason: 'rejected' };
-  }
-
-  let next: Record<string, string> = {};
-  await active.lock.run(async () => {
-    const prior = await readInstanceConfig(root);
-    const map = { ...(prior.agentModels ?? {}) };
-    if (trimmed.length > 0) map[key] = trimmed;
-    else delete map[key]; // clear → fall back to the global default
-    next = map;
-    const { agentModels: _drop, ...rest } = prior;
-    void _drop;
-    await writeInstanceConfig(root, { ...rest, ...(Object.keys(map).length > 0 ? { agentModels: map } : {}) });
-    await commitControlFile(root, instanceConfigPath(root), `instance agentModels.${key}=${trimmed || 'cleared'}`);
-  }, 'instance-agent-model:write');
-  setAgentModelOverrides(next); // apply live
-  return { ok: true, resolved: resolveCopilotModel(undefined, agentKey) };
+  return modelsControlPanel.setAgentModel(agentKey, id, { root: active.stagingWt, lock: active.lock, log: active.log });
 }
 
 // --- Control Panel · Watched folders (SPEC-0037 WATCH-9; over the watch registry) ---
