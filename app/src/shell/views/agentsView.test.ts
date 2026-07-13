@@ -394,4 +394,46 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
     expect(block).toMatch(/var\(--viridian\b/);
     expect(block).toMatch(/var\(--ink\b/);
   });
+
+  // #512 PERF-R7: listAgents/getModelCatalog used to run sequentially even though neither depends on
+  // the other — the issue's own "worst-case 16s Loading…" came from summing two 8s-bounded reads
+  // instead of overlapping them. A deferred-promise mock asserts the actual ordering (both in flight
+  // before either resolves), not just the eventual rendered result.
+  describe('#512 both probes run concurrently (PERF-R7)', () => {
+    function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+      let resolve!: (v: T) => void;
+      const promise = new Promise<T>((r) => (resolve = r));
+      return { promise, resolve };
+    }
+
+    it('getModelCatalog is already in flight before listAgents resolves (concurrent, not sequential)', async () => {
+      const agents = deferred<AgentView[]>();
+      const catalog = deferred<ModelCatalogView>();
+      const listAgents = vi.fn(() => agents.promise);
+      const getModelCatalog = vi.fn(() => catalog.promise);
+      setApi(listAgents, getModelCatalog);
+
+      mountAgents(root).show?.();
+      await tick();
+      // The old sequential code would never have called getModelCatalog this early — listAgents hasn't
+      // resolved yet, and a sequential await would still be blocked on it.
+      expect(listAgents).toHaveBeenCalledTimes(1);
+      expect(getModelCatalog).toHaveBeenCalledTimes(1);
+
+      catalog.resolve({ accepted: ['gpt-x'], configured: 'gpt-x', resolved: 'gpt-x' } as ModelCatalogView);
+      agents.resolve(AGENTS);
+      await tick();
+      expect(root.textContent).toContain('Decompose');
+    });
+
+    it('a getModelCatalog failure never blocks the agent list (isolated, degrades to no picker)', async () => {
+      const listAgents = vi.fn(async () => AGENTS);
+      const getModelCatalog = vi.fn(() => Promise.reject(new Error('no catalog')));
+      setApi(listAgents, getModelCatalog);
+
+      mountAgents(root).show?.();
+      await tick();
+      expect(root.textContent).toContain('Decompose'); // the agent grid still rendered
+    });
+  });
 });

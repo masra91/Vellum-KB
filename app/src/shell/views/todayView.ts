@@ -44,17 +44,23 @@ const DECISION_ICON: Record<TodayDecision['kind'], string> = { contradiction: 's
  *  hue carried by `data-status` in CSS (brass / oxide) — the glyph keeps the signal non-colour-alone (#184). */
 const HEALTH_ICON: Record<TodayHealthRow['status'], string> = { ok: 'circle-check', warn: 'alert-triangle', bad: 'alert-triangle' };
 
-export function mountToday(container: HTMLElement): ViewHandle {
+export function mountToday(container: HTMLElement, initialFetch?: Promise<TodayProjectionView>): ViewHandle {
   const state: TodayState = {};
   paintSkeleton(container, HEADER, 'prose');
   let unsubscribe: (() => void) | null = null;
+  // #512 PERF-R6: the FIRST show() can reuse a read the shell already kicked off concurrently with
+  // getState() (before this container even existed), so Today's first paint doesn't wait behind an
+  // extra sequential round-trip. Consumed exactly once — every later show() (a switch-back) does its
+  // own fresh read, same as before this.
+  let prefetch = initialFetch;
   return {
     // #510: show() re-reads the maintained projection every time Today becomes visible (first activation
     // AND every switch-back — STATE-8 AC1, kills the freeze-after-first-paint bug) and subscribes to the
     // 'today' push topic so a canonical advance repaints within ~1s while Today stays visible (AC2), not
     // just on the next switch-away-and-back.
     show: () => {
-      void load(container, state);
+      void load(container, state, prefetch);
+      prefetch = undefined;
       unsubscribe ??= subscribeProjectionChanged('today', () => void load(container, state));
     },
     hide: () => {
@@ -67,11 +73,12 @@ export function mountToday(container: HTMLElement): ViewHandle {
 
 /** Read the maintained Today projection (ONE read, no live scan — STATE-1) and paint. `status` is
  *  first-class: `warming`/null data → a calm warming face + auto-recheck; `error` or a thrown IPC →
- *  honest degrade with Recheck (never a stuck spinner, #160). */
-async function load(container: HTMLElement, state: TodayState): Promise<void> {
+ *  honest degrade with Recheck (never a stuck spinner, #160). `prefetch`, when given, is used INSTEAD of
+ *  a fresh `getTodayProjection()` call for this one load (#512 PERF-R6) — the caller already started it. */
+async function load(container: HTMLElement, state: TodayState, prefetch?: Promise<TodayProjectionView>): Promise<void> {
   let env: TodayProjectionView;
   try {
-    env = await window.kbApi.getTodayProjection();
+    env = await (prefetch ?? window.kbApi.getTodayProjection());
   } catch (err) {
     reportLoadFailure('today', err); // un-swallow to the app-log, then honest error face
     clearTimers(state);

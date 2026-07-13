@@ -266,4 +266,46 @@ describe('Today v2 — command-center home (SPEC-0058 STATE-7)', () => {
       }
     });
   });
+
+  // #512 PERF-R6: the shell can kick off Today's first read CONCURRENTLY with getState() (before this
+  // container even exists) and hand the in-flight promise to mountToday — the FIRST show() should use
+  // THAT read rather than firing a redundant second one, while every later show() (a switch-back) still
+  // does its own fresh read.
+  describe('#512 accepts a prefetched first read (PERF-R6)', () => {
+    it('the FIRST show() consumes the prefetch instead of calling getTodayProjection again', async () => {
+      const c = document.createElement('div');
+      document.body.appendChild(c);
+      const prefetch = Promise.resolve(ready({ greeting: { salutation: 'Good evening', name: 'Prefetched' } }));
+      mountToday(c, prefetch).show?.();
+      await flush();
+      expect(getTodayProjection).not.toHaveBeenCalled(); // the mocked IPC was never invoked
+      expect(c.textContent).toContain('Prefetched');
+    });
+
+    it('a SECOND show() (switch-back) does its OWN fresh read, not the stale prefetch', async () => {
+      const c = document.createElement('div');
+      document.body.appendChild(c);
+      const prefetch = Promise.resolve(ready({ greeting: { salutation: 'Good evening', name: 'Prefetched' } }));
+      const handle = mountToday(c, prefetch);
+      handle.show?.();
+      await flush();
+      handle.hide?.();
+
+      getTodayProjection.mockResolvedValueOnce(ready({ greeting: { salutation: 'Good morning', name: 'FreshRead' } }));
+      handle.show?.();
+      await flush();
+      expect(getTodayProjection).toHaveBeenCalledTimes(1); // exactly one real IPC call, on the revisit
+      expect(c.textContent).toContain('FreshRead');
+    });
+
+    it('a rejected prefetch degrades to the retryable error face, same as a failed live read', async () => {
+      const c = document.createElement('div');
+      document.body.appendChild(c);
+      const prefetch = Promise.reject(new Error('boom'));
+      mountToday(c, prefetch).show?.();
+      await flush();
+      expect(c.querySelector('.load-error')).toBeTruthy();
+      expect(reportRendererError).toHaveBeenCalled();
+    });
+  });
 });

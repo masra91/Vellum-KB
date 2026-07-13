@@ -84,23 +84,21 @@ async function render(container: HTMLElement): Promise<void> {
   // Settings must never error the shell. Any IPC failure (incl. a #145 hang — withTimeout bounds
   // every await below) degrades to a friendly, retryable message.
   try {
-    const state = await withTimeout(window.kbApi.getState());
+    // #512 PERF-R6: getState/getInstanceSettings are mutually independent (neither's input depends on
+    // the other's output) but used to run sequentially anyway — Promise.all them so Settings paints on
+    // whichever pair of 8s-bounded reads is slower, not their SUM. `inspect(vaultPath)` genuinely can't
+    // join this pair (it needs `state.activeVaultPath` first) — instead of blocking the whole page on
+    // it too, the page paints immediately with a "checking…" Copilot placeholder that a background
+    // `inspect()` patches in-place once it resolves (AC: "Settings paints controls without waiting on
+    // kb:inspect").
+    const [state, instanceSettings] = await Promise.all([
+      withTimeout(window.kbApi.getState()),
+      withTimeout(window.kbApi.getInstanceSettings()).catch(() => null),
+    ]);
     const name = state.vaultConfig?.name ?? '—';
     const vaultPath = state.activeVaultPath;
 
-    // Copilot availability comes from the same inspection the Setup flow uses (SETUP-4).
-    let copilotLine = '<li class="settings-note">Copilot — status unavailable</li>';
-    if (vaultPath) {
-      try {
-        const ins = await withTimeout(window.kbApi.inspect(vaultPath));
-        // UX v2 (#184): a tokenized hue-dot, not an emoji — sprout when ready, brass (caution) when not.
-        // The hue rides the aria-hidden dot; the label stays ink (state also reads via the detail text).
-        const dot = `<span class="settings-status-dot ${ins.copilot.available ? 'settings-status-dot--ok' : 'settings-status-dot--warn'}" aria-hidden="true">●</span>`;
-        copilotLine = `<li class="settings-copilot">${dot} Copilot — <span class="settings-note">${esc(ins.copilot.detail)}</span></li>`;
-      } catch {
-        // Leave the fallback line.
-      }
-    }
+    const copilotLine = '<li class="settings-note" id="settings-copilot-line">Copilot — checking…</li>';
 
     // PANEL-5 / OBS-10: the editable per-Instance settings (autonomy default + dev-log verbosity).
     // Never errors the shell — falls back to safe defaults. Shared mutable object so each control
@@ -108,11 +106,7 @@ async function render(container: HTMLElement): Promise<void> {
     // quickCaptureAccelerator (QCAP-6) isn't edited here yet — it's loaded + sent back unchanged so
     // each control still sends the whole settings object without clobbering it (preserve-on-omission).
     const settings: InstanceSettings = { autonomyDefault: 'guarded', devLogLevel: 'info', quickCaptureAccelerator: 'Alt+Space' };
-    try {
-      Object.assign(settings, await withTimeout(window.kbApi.getInstanceSettings()));
-    } catch {
-      // Leave the safe defaults.
-    }
+    if (instanceSettings) Object.assign(settings, instanceSettings);
 
     // SPEC-0048 SCALE view-model: effective per-stage caps, and the ceiling mode (Auto = let the app
     // decide / cores-derived; Manual = the Principal's value). The manual stepper seeds at the saved
@@ -246,6 +240,37 @@ async function render(container: HTMLElement): Promise<void> {
       </div>
       <p class="settings-footer"><button type="button" id="about-link" class="viz-btn viz-btn--ghost viz-focusable">About Vellum</button></p>
       </div>`;
+
+    // #512: Copilot availability comes from the same inspection the Setup flow uses (SETUP-4) — kicked
+    // off only now, AFTER the page has already painted, so a slow/hung `inspect()` can never hold up
+    // the rest of Settings. Patches ONLY the placeholder `<li>` in place once it resolves; a view
+    // switch-away/re-render in the meantime just makes this a harmless no-op (the querySelector misses).
+    // Isolated in its OWN try/catch (never the outer one) — same discipline as the pre-#512 inline
+    // await had: a Copilot-status failure must only ever fall back to this one line, never blow away
+    // the rest of an already-painted page (the outer catch's renderLoadError would do exactly that).
+    try {
+      if (vaultPath) {
+        void withTimeout(window.kbApi.inspect(vaultPath))
+          .then((ins) => {
+            const el = container.querySelector('#settings-copilot-line');
+            if (!el) return;
+            // UX v2 (#184): a tokenized hue-dot, not an emoji — sprout when ready, brass (caution) when
+            // not. The hue rides the aria-hidden dot; the label stays ink (state also reads via the text).
+            const dot = `<span class="settings-status-dot ${ins.copilot.available ? 'settings-status-dot--ok' : 'settings-status-dot--warn'}" aria-hidden="true">●</span>`;
+            el.outerHTML = `<li class="settings-copilot" id="settings-copilot-line">${dot} Copilot — <span class="settings-note">${esc(ins.copilot.detail)}</span></li>`;
+          })
+          .catch(() => {
+            const el = container.querySelector('#settings-copilot-line');
+            if (el) el.textContent = 'Copilot — status unavailable';
+          });
+      } else {
+        const el = container.querySelector('#settings-copilot-line');
+        if (el) el.textContent = 'Copilot — status unavailable';
+      }
+    } catch {
+      const el = container.querySelector('#settings-copilot-line');
+      if (el) el.textContent = 'Copilot — status unavailable';
+    }
 
     container.querySelector<HTMLButtonElement>('#about-link')?.addEventListener('click', () => mountAboutPanel());
     wireTheme(container);

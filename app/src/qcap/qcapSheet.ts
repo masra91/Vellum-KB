@@ -11,6 +11,11 @@
 // auto-dismiss + focus-restore (QCAP-2); Esc cancels; a failure holds in `--viz-oxide` with `⏎ retry`
 // and does NOT auto-dismiss (no silent loss). A DENIED permission (Accessibility QCAP-9 / Screen
 // Recording QCAP-13) shows a quiet --viz-brass steer-to-Settings + graceful degrade — never a dead end.
+//
+// #512: CSS lives here (not `renderer.ts`) so the qcap route's dynamic-import chunk carries ONLY what
+// it needs — the shared --viz-* token foundation + its own sheet styles, never the shell/setup CSS.
+import '../shell/design-system.css';
+import './qcap.css';
 import { esc } from '../shell/html';
 import type { ScreenshotMode } from '../kb/types';
 

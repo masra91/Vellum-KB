@@ -37,6 +37,7 @@ import { mountAgentsHub } from './views/agentsHubView';
 import { mountSources } from './views/sourcesView';
 import { mountSettings } from './views/settingsView';
 import type { MountFn, ViewHandle } from './viewLifecycle';
+import type { TodayProjectionView } from '../kb/types';
 
 // The Vellum crystalline mark as the v3 MOTION brand-diamond (SPEC-0060 §5): `.dmk` with `.is-working`
 // (the inner core looms — the "always working" signature) + the shell adds `.is-thinking` (the mid frame
@@ -74,6 +75,21 @@ const SIDEBAR_WMARK =
   `<g fill="none" stroke="var(--viz-brass)" stroke-linejoin="round" stroke-width="0.5"><polygon points="12,2 22,12 12,22 2,12"/>` +
   `<polygon points="12,7 17,12 12,17 7,12"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></g></svg></div>`;
 
+// #512 PERF-R8: SIDEBAR_WMARK's ambient `viz-drift` animation used to run unconditionally the ENTIRE
+// time the app is open (it's persistent shell chrome, not tied to any view) — pure decoration keeping
+// the compositor from ever going idle in the background/unfocused. `body.shell-idle` (index.css) pauses
+// it via `animation-play-state`; toggled here, once, on blur/focus/visibilitychange. No per-mount
+// closure state (unlike navHandler/cmdkHandler/ctxHandler below), so — unlike those — this registers
+// once at module load rather than re-binding on every `mountShell` call.
+function updateShellIdleClass(): void {
+  document.body.classList.toggle('shell-idle', document.hidden || !document.hasFocus());
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('blur', updateShellIdleClass);
+  window.addEventListener('focus', updateShellIdleClass);
+  document.addEventListener('visibilitychange', updateShellIdleClass);
+}
+
 /** Build the rail's inner HTML: a section heading before each new `group`, then one button per view. */
 function railHtml(views: readonly NavView[]): string {
   let lastGroup: string | undefined;
@@ -106,12 +122,14 @@ let ctxHandler: ((e: Event) => void) | null = null;
 // nav/cmdk/ctx handler re-bind pattern above.
 let badgePoll: VisibilityPoll | null = null;
 
-export function mountShell(root: HTMLElement, vaultPath: string, name: string): void {
+export function mountShell(root: HTMLElement, vaultPath: string, name: string, todayPrefetch?: Promise<TodayProjectionView>): void {
   badgePoll?.stop(); // #509: stop the PRIOR shell's badge poll before this (re)mount starts a new one
   badgePoll = null;
 
   const mounts: Record<string, MountFn> = {
-    [VIEW_TODAY]: mountToday,
+    // #512 PERF-R6: hand Today the read the caller may have already kicked off concurrently with
+    // getState() — its OWN show()/load() still does a fresh read on every later activation.
+    [VIEW_TODAY]: (c) => mountToday(c, todayPrefetch),
     [VIEW_CAPTURE]: (c) => mountCapture(c, vaultPath, name),
     [VIEW_REVIEWS]: mountReviews,
     [VIEW_ACTIVITY]: mountActivity,

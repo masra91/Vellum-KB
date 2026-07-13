@@ -629,7 +629,11 @@ describe('Settings · #145 load resilience (no infinite spinner on a hung IPC)',
 
   it('times out a hung getState → retryable error, and Retry re-loads successfully', async () => {
     const getState = vi.fn<KbApi['getState']>().mockReturnValueOnce(new Promise(() => {})); // hangs
-    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = { getState };
+    // #512: getState and getInstanceSettings now run concurrently (Promise.all) — both must be mocked
+    // even though this test only cares about getState's hang; getInstanceSettings resolves promptly so
+    // the timeout is unambiguously attributable to getState.
+    const getInstanceSettings = vi.fn(async () => ({ autonomyDefault: 'guarded' as const, devLogLevel: 'info' as const, quickCaptureAccelerator: 'Alt+Space' }));
+    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = { getState, getInstanceSettings };
     mountSettings(root).show?.();
     expect(root.querySelector('[aria-busy="true"]')).not.toBeNull(); // skeleton initially (#520)
     expect(root.textContent).not.toContain('Loading…'); // never bare "Loading…" (#520 §8)
@@ -650,6 +654,78 @@ describe('Settings · #145 load resilience (no infinite spinner on a hung IPC)',
     root.querySelector<HTMLButtonElement>('.load-retry')!.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(root.textContent).toContain('My Library');
+  });
+});
+
+// #512 PERF-R6: getState/getInstanceSettings used to run sequentially even though neither depends on
+// the other, and the whole page waited on `inspect()` (which genuinely CAN'T start until getState
+// resolves) before painting anything. Deferred-promise mocks assert the actual ordering, not just the
+// eventual rendered result — the issue's own "Test cases" note calls for exactly this style.
+describe('Settings · #512 first-paint waterfall (PERF-R6)', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="r"></div>';
+    root = document.getElementById('r')!;
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+
+  it('getState and getInstanceSettings are BOTH in flight before either resolves (concurrent, not sequential)', async () => {
+    const state = deferred<Awaited<ReturnType<KbApi['getState']>>>();
+    const instanceSettings = deferred<InstanceSettings>();
+    const getState = vi.fn(() => state.promise);
+    const getInstanceSettings = vi.fn(() => instanceSettings.promise);
+    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = { getState, getInstanceSettings };
+
+    mountSettings(root).show?.();
+    await tick();
+    // The old sequential code would never have called getInstanceSettings this early — getState hasn't
+    // resolved yet, and a sequential await would still be blocked on it.
+    expect(getState).toHaveBeenCalledTimes(1);
+    expect(getInstanceSettings).toHaveBeenCalledTimes(1);
+
+    instanceSettings.resolve({ autonomyDefault: 'guarded', devLogLevel: 'info', quickCaptureAccelerator: 'Alt+Space' });
+    state.resolve({ activeVaultPath: '/v', vaultConfig: { schemaVersion: 1, id: 'x', name: 'My Library', createdAt: 't' } });
+    await tick();
+    expect(root.textContent).toContain('My Library');
+  });
+
+  it('paints controls WITHOUT waiting on kb:inspect — a hung inspect() never blocks the rest of Settings', async () => {
+    const getState = vi.fn(async () => ({ activeVaultPath: '/v', vaultConfig: { schemaVersion: 1, id: 'x', name: 'My Library', createdAt: 't' } }));
+    const getInstanceSettings = vi.fn(async () => ({ autonomyDefault: 'guarded' as const, devLogLevel: 'info' as const, quickCaptureAccelerator: 'Alt+Space' }));
+    const inspect = vi.fn(() => new Promise<Awaited<ReturnType<KbApi['inspect']>>>(() => {})); // hangs forever
+    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = { getState, getInstanceSettings, inspect };
+
+    mountSettings(root).show?.();
+    await tick();
+    // The rest of the page is fully painted — Autonomy/Scale/Recall controls all present — even though
+    // inspect() never resolves.
+    expect(root.querySelector('#autonomy-default')).not.toBeNull();
+    expect(root.querySelector('#ceiling-mode')).not.toBeNull();
+    expect(root.textContent).toContain('checking…'); // the Copilot placeholder, not blocked-on-inspect blank
+  });
+
+  it('a slow inspect() patches ONLY the Copilot line in place once it resolves — nothing else repaints', async () => {
+    const ins = deferred<Awaited<ReturnType<KbApi['inspect']>>>();
+    const getState = vi.fn(async () => ({ activeVaultPath: '/v', vaultConfig: { schemaVersion: 1, id: 'x', name: 'My Library', createdAt: 't' } }));
+    const getInstanceSettings = vi.fn(async () => ({ autonomyDefault: 'guarded' as const, devLogLevel: 'info' as const, quickCaptureAccelerator: 'Alt+Space' }));
+    const inspect = vi.fn(() => ins.promise);
+    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = { getState, getInstanceSettings, inspect };
+
+    mountSettings(root).show?.();
+    await tick();
+    const autonomyBefore = root.querySelector('#autonomy-default');
+    expect(root.querySelector('#settings-copilot-line')?.textContent).toContain('checking…');
+
+    ins.resolve({ copilot: { available: true, detail: 'ready to help' } } as Awaited<ReturnType<KbApi['inspect']>>);
+    await tick();
+    expect(root.querySelector('#settings-copilot-line')?.textContent).toContain('ready to help');
+    expect(root.querySelector('#autonomy-default')).toBe(autonomyBefore); // untouched by the inspect patch
   });
 });
 

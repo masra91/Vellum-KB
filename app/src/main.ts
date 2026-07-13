@@ -46,6 +46,15 @@ const createWindow = () => {
     // (49.6 − 12px light diameter) / 2 ≈ 19; x = 14 matches `.bar`'s own `padding: 0 0.9rem` left inset.
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 14, y: 19 },
+    // #512 PERF-R5: without `show:false` the OS paints the frame (default white) before Chromium has
+    // ANYTHING to composite, so every launch flashes white for one frame regardless of load speed.
+    // `backgroundColor` matches the fixed-light Vellum cream (index.css `--bg` / SPEC-0057 brand §3) —
+    // the shell's own default identity — so even the brief pre-`ready-to-show` window is on-brand rather
+    // than blank. Dark mode is a renderer-only `localStorage` preference (shell/theme.ts) unreadable
+    // synchronously from main, so this can't track it; light is the correct default for the vast
+    // majority of launches (dark is opt-in v1).
+    show: false,
+    backgroundColor: '#f4efe3',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },
@@ -58,6 +67,11 @@ const createWindow = () => {
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
     );
   }
+  // #512: reveal only once the renderer has actually painted a first frame — this is what actually
+  // eliminates the flash (`backgroundColor` above only covers the sliver before this fires).
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show();
+  });
   mainWindow.on('closed', () => {
     mainWindow = null; // so QCAP-11's restore re-creates rather than touching a destroyed window
   });
