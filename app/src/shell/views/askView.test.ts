@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { mountAsk, linkifyCitationMarkers } from './askView';
-import type { AskResult, Citation, KbApi, Conversation, ConversationSummary } from '../../kb/types';
+import type { AskResult, Citation, KbApi, Conversation, ConversationSummary, AskProgressEvent } from '../../kb/types';
 
 const GROUNDED: AskResult = {
   question: 'Who was Ada Lovelace?',
@@ -628,5 +628,92 @@ describe('Ask view · Past chats + Save chat (VUX-11 slice-3)', () => {
     root.querySelector<HTMLButtonElement>('#askSaveChat')!.click();
     await tick();
     expect(saveConversation).toHaveBeenLastCalledWith(expect.not.objectContaining({ id: 'C1' })); // new thread
+  });
+});
+
+// #514 — live progress: the status line names the in-flight tool + call count within the same tick the
+// model calls it, instead of a static "Searching…" line for the whole 40-65s run.
+describe('Ask view — live progress during an in-flight ask (#514)', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="r"></div>';
+    root = document.getElementById('r')!;
+  });
+
+  /** A controllable ask(): resolves only when the test calls `resolve`, so progress events can be fired
+   *  mid-flight and the DOM inspected before the turn settles. */
+  function setControllableAsk(): { resolve: (r: AskResult) => void; onAskProgress: KbApi['onAskProgress']; unsubscribe: ReturnType<typeof vi.fn>; progressCb: () => (evt: AskProgressEvent) => void } {
+    let resolve!: (r: AskResult) => void;
+    const promise = new Promise<AskResult>((res) => {
+      resolve = res;
+    });
+    const ask = vi.fn(async () => promise);
+    let cb: ((evt: AskProgressEvent) => void) | null = null;
+    const unsubscribe = vi.fn();
+    const onAskProgress = vi.fn((c: (evt: AskProgressEvent) => void) => {
+      cb = c;
+      return unsubscribe;
+    });
+    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = { ask, onAskProgress };
+    return { resolve, onAskProgress, unsubscribe, progressCb: () => cb! };
+  }
+
+  it('subscribes for the ask, updates the status line in place per event, and unsubscribes once it settles', async () => {
+    const { resolve, onAskProgress, unsubscribe, progressCb } = setControllableAsk();
+    mountAsk(root);
+    type(root, 'q');
+    submit(root);
+    await tick();
+
+    expect(onAskProgress).toHaveBeenCalledTimes(1); // subscribed exactly once for this ask
+    expect(root.querySelector('.ask-status .what')?.textContent).toBe('Searching your library…'); // initial, generic
+
+    progressCb()({ phase: 'tool-call', tool: 'entityLookup', used: 1, max: 4 });
+    expect(root.querySelector('.ask-status .what')?.textContent).toBe('Looking up entities — retrieval 1 of 4');
+
+    progressCb()({ phase: 'tool-call', tool: 'claimsForEntity', used: 2, max: 4 });
+    expect(root.querySelector('.ask-status .what')?.textContent).toBe('Looking up claims — retrieval 2 of 4');
+    expect(unsubscribe).not.toHaveBeenCalled(); // still in flight
+
+    resolve(GROUNDED);
+    await tick();
+    expect(unsubscribe).toHaveBeenCalledTimes(1); // unsubscribed the instant the ask settles
+  });
+
+  it('a budget-exhausted event shows an honest wrapping-up label, not a raw tool name', async () => {
+    const { progressCb } = setControllableAsk();
+    mountAsk(root);
+    type(root, 'q');
+    submit(root);
+    await tick();
+    progressCb()({ phase: 'budget-exhausted', tool: 'grep', used: 4, max: 4 });
+    expect(root.querySelector('.ask-status .what')?.textContent).toBe('Wrapping up your answer…');
+  });
+
+  it('unsubscribes even when the ask REJECTS (error path never leaks the subscription)', async () => {
+    let reject!: (err: Error) => void;
+    const promise = new Promise<AskResult>((_res, rej) => {
+      reject = rej;
+    });
+    const ask = vi.fn(async () => promise);
+    const unsubscribe = vi.fn();
+    const onAskProgress = vi.fn(() => unsubscribe);
+    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = { ask, onAskProgress };
+    mountAsk(root);
+    type(root, 'q');
+    submit(root);
+    await tick();
+    reject(new Error('boom'));
+    await tick();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('gracefully degrades when onAskProgress is unavailable — no throw, the static status line stays (ENG-15/16)', async () => {
+    setAsk(vi.fn(async () => GROUNDED)); // no onAskProgress on window.kbApi at all
+    mountAsk(root);
+    type(root, 'q');
+    expect(() => submit(root)).not.toThrow();
+    await tick();
+    expect(root.querySelector('.ask-ans')).not.toBeNull(); // the ask still completed normally
   });
 });

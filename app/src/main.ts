@@ -2,7 +2,7 @@ import { app, BrowserWindow, crashReporter } from 'electron';
 import path from 'node:path';
 import v8 from 'node:v8';
 import started from 'electron-squirrel-startup';
-import { registerIpc, initPipeline } from './main/ipc';
+import { registerIpc, initPipeline, stopRecallClient } from './main/ipc';
 import { stopPipeline, getActiveInstanceSettings, activeSnapshotDir, pipelineStatusForActive, quiesceActive, resumeActive, isActiveQuiescing } from './main/pipeline';
 import { quiesceTrayItems } from './main/quiesceTray';
 import { startTelemetry, stopTelemetry } from './main/telemetry';
@@ -128,8 +128,11 @@ app.on('ready', async () => {
 });
 
 // Release the global hotkey on quit (Electron best practice — a left-registered accelerator lingers).
+// #514: also release the process-wide RecallClient's `copilot` CLI server (its own `client.stop()` had
+// no production caller before this — every Ask leaked a server process for the app's lifetime).
 app.on('will-quit', () => {
   qcapAgent?.stop();
+  void stopRecallClient().catch(() => {}); // best-effort — quitting must never hang on this
 });
 
 // QCAP-8 dual-model (also CAPTURE-12 / ORCH-1): on macOS the app stays alive with no window open — a

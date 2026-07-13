@@ -112,6 +112,9 @@ export function makeSdkRecallClient(opts: SdkRecallClientOptions = {}): RecallCl
         tools,
         availableTools: config.allowedTools, // allow-list: ONLY our read tools + submitAnswer (ASK-3)
         onPermissionRequest: approveAll,
+        // #514: the honest Quick-tier lever — gated per-model on the SDK side (a model that doesn't
+        // support it just ignores the field), so it's safe to forward unconditionally.
+        ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort as SessionConfig['reasoningEffort'] } : {}),
       };
       const session = await client.createSession(sessionConfig);
       return {

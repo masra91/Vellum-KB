@@ -349,6 +349,34 @@ describe('captureView — Vellum UX v2 glance (SPEC-0058 STATE content view, DL-
   });
 });
 
+// #509 — the pipeline poll must survive a rejecting `pipelineStatus()`: before this fix there was NO
+// try/catch, so a rejection became an unhandledrejection every tick (never surfaced, never recovered).
+describe('captureView — pipeline poll resilience (#509)', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.appendChild(root);
+  });
+  afterEach(() => {
+    root.remove();
+    vi.restoreAllMocks();
+  });
+
+  it('a rejecting pipelineStatus() never throws past mount / crashes the view', async () => {
+    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = {
+      capture: vi.fn().mockResolvedValue(OK),
+      pipelineStatus: vi.fn().mockRejectedValue(new Error('IPC channel down')),
+      probeVaultAccess: vi.fn().mockResolvedValue({ ok: true, denied: false, message: 'ok' }),
+      openSystemSettingsPrivacy: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    expect(() => mountCapture(root, '/v', 'KB')).not.toThrow();
+    await flush();
+    // Never crashed the surface — the composer is still fully there and usable.
+    expect(root.querySelector('#captureText')).not.toBeNull();
+    expect(root.querySelector('#capture')).not.toBeNull();
+  });
+});
+
 // SPEC-0060 VUX-1: the Capture CSS block migrates off the instrument-panel --viz-* names onto the
 // warm-vellum v3 tokens. NO ember (capture is input, not a decision). Guard on the CSS source.
 describe('VUX-1 v3 token migration (SPEC-0060 — off --viz-*)', () => {

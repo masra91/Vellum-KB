@@ -45,6 +45,7 @@ export interface AgentTrace {
   ms?: number; // call duration
   at?: string; // ISO timestamp of the invocation
   repairs?: number; // SPEC-0049 HEAL-1: self-repair rounds taken before a parseable response (0 = first try)
+  effort?: string; // #514: the tier that actually ran (e.g. recall's 'quick' | 'considered') — honest, not assumed
 }
 
 /** A decider maps a captured unit's metadata to an archival decision. */

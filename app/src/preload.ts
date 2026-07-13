@@ -31,6 +31,14 @@ const kbApi: KbApi = {
   resume: () => ipcRenderer.invoke('kb:resume'),
   quiesceStatus: () => ipcRenderer.invoke('kb:quiesceStatus'),
   ask: (req) => ipcRenderer.invoke('kb:ask', req),
+  // #514: live tool-call progress pushed from main during an in-flight kb:ask. A thin `.on` wrapper —
+  // the ONLY push-style channel in this app (everything else is poll-based); scoped narrowly to this
+  // one event rather than a generic subscribe framework.
+  onAskProgress: (cb) => {
+    const handler = (_e: Electron.IpcRendererEvent, evt: import('./kb/types').AskProgressEvent): void => cb(evt);
+    ipcRenderer.on('kb:askProgress', handler);
+    return () => ipcRenderer.removeListener('kb:askProgress', handler);
+  },
   saveRecallOutput: (result) => ipcRenderer.invoke('kb:saveRecallOutput', result),
   saveConversation: (req) => ipcRenderer.invoke('kb:saveConversation', req), // SPEC-0060 VUX-11 past-chats
   listConversations: () => ipcRenderer.invoke('kb:listConversations'),

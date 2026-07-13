@@ -53,7 +53,8 @@ import {
 import { getQuickCaptureAgent } from './quickCaptureService';
 import { captureScreenshot, consumeScreenshotHandle, clipboardImageHandle } from './quickCaptureScreenshot';
 import { noteRendererError } from './telemetry';
-import { recall } from '../kb/recall';
+import { recall, type RecallClient, type AskProgressEvent } from '../kb/recall';
+import { makeSdkRecallClient } from '../kb/recallAgent';
 import { recallEffortLevers, DEFAULT_RECALL_BUDGET_MS } from '../kb/recallConstants';
 import { saveConversation, listConversations, loadConversation, deleteConversation } from './conversationStore';
 import type { Conversation, ConversationTurn, ConversationSummary } from '../kb/conversation';
@@ -145,6 +146,32 @@ const NO_PIPELINE: CaptureResult = {
   committed: false,
   message: 'No active library.',
 };
+
+// #514: a fresh RecallClient was built on EVERY kb:ask (recall.ts:257's `opts.client ?? makeSdkRecallClient`
+// default) and never disconnected — `RecallClient.disconnect` had no production caller — so every question
+// cold-booted (~1.5-3s) a NEW `copilot` CLI server process that then leaked for the app's lifetime. Build
+// ONE process-wide client lazily on first ask and reuse it for every subsequent question (the underlying
+// CopilotClient inside makeSdkRecallClient is itself created lazily + held, so passing the SAME RecallClient
+// instance here is what makes the 2nd+ question skip the server boot). `stopRecallClient` releases it —
+// wired to `app.on('will-quit', …)` in main.ts, mirroring the QuickCaptureAgent shutdown pattern.
+let recallClient: RecallClient | null = null;
+
+function getRecallClient(): RecallClient {
+  if (!recallClient) {
+    // BUG #65: point the SDK at the resolved BYOA `copilot` CLI so it spawns in the packaged app —
+    // resolved ONCE here (deterministic per launch), not per-question.
+    recallClient = makeSdkRecallClient({ cliPath: resolveExecutable('copilot') ?? undefined });
+  }
+  return recallClient;
+}
+
+/** Stop the process-wide RecallClient (releases its CLI server), if one was ever created. Idempotent. */
+export async function stopRecallClient(): Promise<void> {
+  if (!recallClient) return;
+  const client = recallClient;
+  recallClient = null;
+  await client.disconnect?.();
+}
 
 /** Start the orchestrator if a valid KB is already configured (called on app launch). */
 export async function initPipeline(): Promise<void> {
@@ -444,28 +471,42 @@ export function registerIpc(): void {
   // recall engine on the active vault root (the evergreen `main` checkout). Multi-turn history is
   // supplied by the Ask view (ephemeral session, F5). KB_ASK_E2E_STUB short-circuits to a
   // deterministic answer so the UI→IPC→render path is e2e-testable without a live SDK/CLI.
-  ipcMain.handle('kb:ask', async (_e, req: AskRequest): Promise<AskResult> => {
+  ipcMain.handle('kb:ask', async (e, req: AskRequest): Promise<AskResult> => {
     if (process.env.KB_ASK_E2E_STUB) return stubbedAsk(req);
     const cfg = await readAppConfig();
     if (!cfg.activeVaultPath) {
       return { question: req.question, answer: 'No active library — set one up first.', citations: [], grounded: false, toolCalls: 0, truncated: false };
     }
-    // BUG #65: hand recall the resolved BYOA `copilot` path so the SDK spawns it in the packaged
-    // app (PATH was ensured at boot, STACK-9). Null → SDK default search (dev fallback).
-    const cliPath = resolveExecutable('copilot') ?? undefined;
     // ASK-17: hand recall the Principal-configured work budget (from Instance Settings on `staging`)
     // so a real grounded multi-hop has room to finish past the SDK's tight 60s default. ASK-19: also
     // forward the optional retrieval tool-call override (`undefined` ⇒ recall's graph-size-scaled
     // default applies — see `recallBudget`; a set value wins as `opts.maxToolCalls`).
     const { recallBudgetMs, recallMaxToolCalls } = await getActiveInstanceSettings();
-    // SPEC-0060 VUX-11: the Ask "Quick vs Considered" toggle modulates recall DEPTH honestly — Quick
-    // forces the floor hop + 60s time budget for a fast shallow lookup; Considered (the default when no
-    // effort is sent) keeps the Principal-configured / graph-scaled depth. No fake model swap (the CLI
-    // tiers by `--model` only, and no recall-quick/-considered model exists) — see recallEffortLevers.
+    // SPEC-0060 VUX-11 (ratified, PM-confirmed 2026-07-13 — stands, NOT superseded by #514's suggested
+    // approach): effort is expressed ONLY through recall's depth levers (tool-call budget + time budget),
+    // never a model swap — no recall-quick/-considered model exists in the catalog. `reasoningEffort` is
+    // a depth/effort lever on the SAME model (Copilot SDK's gated param), so it doesn't conflict with
+    // VUX-11 and is the honest part of #514's "Quick tier" fix.
     const { maxToolCalls, sessionBudgetMs } = recallEffortLevers(req.effort, { maxToolCalls: recallMaxToolCalls ?? undefined, sessionBudgetMs: recallBudgetMs ?? DEFAULT_RECALL_BUDGET_MS });
+    const quick = req.effort === 'quick';
     // ORCH-16: pin the model recall's SDK session runs on, same as the enrich deciders — prod
     // otherwise passed no model and the SDK inherited `~/.copilot/settings.json` (model-pin gap).
-    return recall(path.resolve(cfg.activeVaultPath), { question: req.question, history: req.history }, { cliPath, sessionBudgetMs, maxToolCalls, model: resolveCopilotModel(undefined, 'recall') });
+    const model = resolveCopilotModel(undefined, 'recall');
+    return recall(
+      path.resolve(cfg.activeVaultPath),
+      { question: req.question, history: req.history },
+      {
+        client: getRecallClient(), // #514: process-wide reuse — 2nd+ question skips the CLI server boot
+        sessionBudgetMs,
+        maxToolCalls,
+        model,
+        reasoningEffort: quick ? 'low' : undefined, // #514: honest Quick tier — gated per-model on the SDK side
+        effort: req.effort,
+        // #514: push live tool-call progress back to the SAME renderer that invoked this ask, so the
+        // status line can name the in-flight tool + call count instead of a static "Searching…" line.
+        onProgress: (evt: AskProgressEvent) => e.sender.send('kb:askProgress', evt),
+      },
+    );
   });
 
   // SPEC-0026 ASK-6: save a grounded recall answer as an inert KB Output (outputs/recall/<id>.md,

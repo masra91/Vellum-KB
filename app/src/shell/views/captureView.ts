@@ -10,6 +10,7 @@
 import { esc } from '../html';
 import { mountPermissionGate } from '../permissionGate';
 import { interpretPaste } from '../../kb/richText';
+import { createVisibilityPoll, type VisibilityPoll } from '../visibilityPoll';
 import type { CaptureInput } from '../../kb/types';
 
 // Soft thresholds (RICHIN-11): warn, never block. Preservation stays in-vault at any size.
@@ -23,7 +24,8 @@ let stagedFiles: { name: string; data: Uint8Array }[] = [];
 // verbatim sidecar can be preserved (RICHIN-2). Only attached when the textarea still holds
 // exactly that pasted Markdown (a clean single rich paste).
 let pendingPaste: { markdown: string; html: string } | null = null;
-let statusTimer: ReturnType<typeof setInterval> | null = null;
+let statusPoll: VisibilityPoll | null = null;
+let lastStatusSig = ''; // the last-painted pipeline readout — #509: write the DOM only when it changes
 let vaultPath = ''; // the active vault path (for the MACOS-7 Blocked recovery on a denied capture)
 let vaultName = '';
 // The window-level drop guard must only be installed once across (re)mounts.
@@ -161,11 +163,24 @@ function sizeWarning(text: string, files: { data: Uint8Array }[]): string {
 }
 
 /** The pipeline queue readout (DL-2 contract): a mono count + a tokenized sprout glyph (queued/processing
- *  = sprout), no emoji. STATE-1-safe: reads the cheap pipeline status, never a vault walk. */
+ *  = sprout), no emoji. STATE-1-safe: reads the cheap pipeline status, never a vault walk.
+ *
+ *  #509: previously had NO try/catch — a rejecting `pipelineStatus()` became an unhandledrejection + a
+ *  `reportRendererError` IPC + a log line every 1.5s until relaunch. The visibility poll wrapper
+ *  (createVisibilityPoll) now catches + backs off, but this still guards a direct/manual call. Also
+ *  writes the DOM only when the readout actually changed (was: every tick, even unchanged). */
 async function refreshStatus(container: HTMLElement): Promise<void> {
   const el = container.querySelector<HTMLElement>('#pipeline');
   if (!el) return;
-  const s = await window.kbApi.pipelineStatus();
+  let s: Awaited<ReturnType<typeof window.kbApi.pipelineStatus>>;
+  try {
+    s = await window.kbApi.pipelineStatus();
+  } catch {
+    return; // transient IPC failure — leave the last-known readout, the poll wrapper backs off the retry
+  }
+  const sig = `${s.queueDepth}|${s.processing ?? ''}`;
+  if (sig === lastStatusSig) return; // unchanged — no DOM write
+  lastStatusSig = sig;
   const active = s.queueDepth > 0 || !!s.processing;
   el.className = `capture-queue viz-body${active ? ' capture-queue--active' : ''}`;
   const glyph = `<span class="capture-queue-glyph" aria-hidden="true">◷</span>`;
@@ -229,6 +244,7 @@ async function onCapture(container: HTMLElement): Promise<void> {
 export function mountCapture(container: HTMLElement, vaultPathArg: string, name: string): void {
   vaultPath = vaultPathArg;
   vaultName = name;
+  lastStatusSig = ''; // a fresh mount replaces the DOM below — the next refreshStatus must always paint it
   // v3 (SPEC-0060 VUX-1): a calm centered composer on the warm-vellum tokens. De-slopped copy — a plain
   // eyebrow + a human title (no "Vellum reads it, files it, and connects it" marketing line, no slop
   // placeholder). NO ember (capture is input, not a decision); accent=interactive, sprout=captured-✓.
@@ -289,5 +305,7 @@ export function mountCapture(container: HTMLElement, vaultPathArg: string, name:
 
   renderStagedFiles(container);
   void refreshStatus(container);
-  if (statusTimer == null) statusTimer = setInterval(() => void refreshStatus(container), 1500);
+  // #509: was a bare `setInterval` with no visibility gate — ran even minimized, and Capture's own
+  // container is the `.view` the shell toggles, so the shared helper's `.view` check applies directly.
+  if (statusPoll == null) statusPoll = createVisibilityPoll(container, 1500, () => refreshStatus(container));
 }

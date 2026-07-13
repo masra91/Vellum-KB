@@ -12,6 +12,7 @@
 // and never while a note is being written (so it can't clobber in-progress input).
 import { esc, emptyState } from '../html';
 import { withTimeout, renderLoadError } from '../loadGuard';
+import { createVisibilityPoll, type VisibilityPoll } from '../visibilityPoll';
 
 // UX v2 (SPEC-0058): the Reviews "needs you" queue, lifted off the legacy `.card`/`--border` chrome onto
 // the v2 material. `reviews-v2` scopes every override to this surface. Reviews is the ONE peripheral screen
@@ -42,7 +43,7 @@ function scrubUlids(text: string | null | undefined): string {
 }
 
 // View-local state (the shell mounts this view once; reset on each mount for test isolation).
-let pollTimer: ReturnType<typeof setInterval> | undefined;
+let poll: VisibilityPoll | undefined;
 let renderedSig = ''; // the open-review id set currently painted — re-render only when it changes
 // REVIEW-20 (optimistic confirm/deny): an answered item leaves the queue INSTANTLY on click; the
 // verdict IPC + backend resume/merge run async (the UI never waits). `answeredIds` suppresses an
@@ -55,8 +56,8 @@ let failedIds = new Map<string, string>();
 let lastList: ReviewSummary[] = [];
 
 export async function mountReviews(container: HTMLElement): Promise<void> {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = undefined;
+  poll?.stop();
+  poll = undefined;
   renderedSig = '';
   answeredIds = new Set();
   failedIds = new Map();
@@ -83,21 +84,15 @@ function paintSkeleton(container: HTMLElement): void {
     </div>`;
 }
 
-/** Keep the list in sync with the live badge: re-fetch while visible; skip when hidden or mid-note. */
+/** Keep the list in sync with the live badge: re-fetch while visible; skip when hidden or mid-note.
+ *  #509: the visibility/detach mechanics now come from the shared helper (geometry-based, bounded error
+ *  backoff on a failing `refresh`) — this keeps only the Reviews-specific "don't yank a note out from
+ *  under someone typing" guard. */
 function startPoll(container: HTMLElement): void {
-  pollTimer = setInterval(() => {
-    if (!document.contains(container)) {
-      // The shell tore the view out — stop polling.
-      if (pollTimer) clearInterval(pollTimer);
-      pollTimer = undefined;
-      return;
-    }
-    // Not visible (another view is shown, or the window is backgrounded) → nobody's looking.
-    if (document.hidden || container.classList.contains('hidden')) return;
-    // Don't yank the list out from under someone composing a correction note.
-    if (hasDirtyNote(container)) return;
-    void refresh(container, { onlyIfChanged: true });
-  }, REVIEW_POLL_MS);
+  poll = createVisibilityPoll(container, REVIEW_POLL_MS, () => {
+    if (hasDirtyNote(container)) return; // don't yank the list out from under an in-progress note
+    return refresh(container, { onlyIfChanged: true });
+  });
 }
 
 /** A note the Principal is actively writing (focused or non-empty) — re-rendering would lose it. */

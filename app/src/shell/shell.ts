@@ -23,6 +23,7 @@ import { esc, baseName } from './html';
 import { navIcon } from './icons';
 import { NAVIGATE_EVENT, TOPBAR_CONTEXT_EVENT, type NavigateDetail, type TopbarContextDetail } from './nav';
 import { reviewBadgeText, reviewBadgeAria } from './reviewBadge';
+import { createVisibilityPoll, type VisibilityPoll } from './visibilityPoll';
 import { mountToday } from './views/todayView';
 import { mountCapture } from './views/captureView';
 import { mountReviews } from './views/reviewsView';
@@ -90,8 +91,17 @@ type MountFn = (container: HTMLElement) => void | Promise<void>;
 let navHandler: ((e: Event) => void) | null = null;
 let cmdkHandler: ((e: KeyboardEvent) => void) | null = null;
 let ctxHandler: ((e: Event) => void) | null = null;
+// The reviews rail badge poll (#509): a vault switch calls `mountShell` again on the SAME `root` element
+// (`root.innerHTML` is replaced, `root` itself never leaves the document), so the prior interval's own
+// `document.contains(root)` self-stop check never fired — every re-mount stacked ANOTHER permanent poller
+// pinning the detached prior `reviewsBtn` forever. Stop the previous one explicitly, mirroring the
+// nav/cmdk/ctx handler re-bind pattern above.
+let badgePoll: VisibilityPoll | null = null;
 
 export function mountShell(root: HTMLElement, vaultPath: string, name: string): void {
+  badgePoll?.stop(); // #509: stop the PRIOR shell's badge poll before this (re)mount starts a new one
+  badgePoll = null;
+
   const mounts: Record<string, MountFn> = {
     [VIEW_TODAY]: mountToday,
     [VIEW_CAPTURE]: (c) => mountCapture(c, vaultPath, name),
@@ -239,15 +249,9 @@ export function mountShell(root: HTMLElement, vaultPath: string, name: string): 
       reviewsBtn.setAttribute('aria-label', `${reviewsBtn.textContent?.trim() ?? 'Reviews'} — ${reviewBadgeAria(count)}`);
     };
     void updateReviewBadge();
-    const timer = setInterval(() => {
-      if (!document.contains(root)) {
-        clearInterval(timer);
-        return;
-      }
-      // The badge lives in the always-visible rail, so it stays live across in-app view switches —
-      // but skip the IPC when the window itself is hidden/backgrounded (no one's looking).
-      if (document.hidden) return;
-      void updateReviewBadge();
-    }, 5000);
+    // The badge lives in the always-visible rail, so it stays live across in-app view switches (`root`
+    // has no `.view` ancestor to gate on) — but skips the IPC when the window itself is hidden/backgrounded
+    // (no one's looking), and stops itself once `root` is detached.
+    badgePoll = createVisibilityPoll(root, 5000, updateReviewBadge);
   }
 }
