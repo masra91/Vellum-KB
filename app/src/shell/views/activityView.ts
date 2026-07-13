@@ -220,7 +220,7 @@ export function bodyHtml(s: BodyState): string {
   if (s.loading) return `<p class="activity-note">Loading…</p>`;
   // #145: a failed/timed-out load is retryable, never an infinite spinner. The view's header +
   // controls stay mounted around this body, so a button here (not a full renderLoadError) suffices.
-  if (s.errorMsg) return `<p class="activity-error error">Couldn’t load activity: ${esc(s.errorMsg)} <button type="button" class="viz-btn viz-btn--sm viz-focusable load-retry" data-act="retry-load">Retry</button></p>`;
+  if (s.errorMsg) return `<p class="activity-error error">Couldn’t load activity: ${esc(s.errorMsg)} <button type="button" class="v3-btn v3-btn--ghost v3-btn--sm load-retry" data-act="retry-load">Retry</button></p>`;
   if (s.entries.length === 0) return `<p class="activity-note activity-empty">No activity yet — once your library starts processing, what it does shows up here.</p>`;
   const note = s.truncated
     ? `<p class="activity-note activity-truncation">Showing the ${s.entries.length} most recent of ${s.total} events.</p>`

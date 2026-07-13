@@ -404,6 +404,10 @@ describe('Activity view · #145 load resilience (no infinite spinner on a hung I
     expect(c.textContent).not.toContain('Loading…'); // no infinite spinner
     expect(c.querySelector('.activity-error')).toBeTruthy();
     expect(c.querySelector('.load-retry')).toBeTruthy();
+    // VUX-CONFORM #524 §3/§8 — v3-surface buttons use the sentence-case .v3-btn pill, not bare
+    // .viz-btn (whose uppercase instrument tell is correct on Researchers/Jobs, wrong here).
+    expect(c.querySelector('.load-retry')?.classList.contains('viz-btn')).toBe(false);
+    expect(c.querySelector('.load-retry')?.classList.contains('v3-btn')).toBe(true);
 
     // Retry succeeds → the feed renders.
     activityFeed.mockResolvedValueOnce(feed(ENTRIES, 3));

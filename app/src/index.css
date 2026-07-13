@@ -178,6 +178,17 @@ ul.checks li {
 /* Primary CTA — filled viridian "Keep it" (the warm capture action); scoped so global .viz-btn--primary is untouched. */
 .capture-submit { margin-left: auto; background: var(--viridian); border-color: var(--viridian); color: #f6f2e6; border-radius: var(--r-pill); text-transform: none; letter-spacing: 0; font-family: var(--ui); font-weight: 600; padding: 0.45rem 1.2rem; }
 .capture-submit:hover, .capture-submit.is-hover, .capture-submit:focus-visible { background: #2a5f50; border-color: #2a5f50; color: #f6f2e6; }
+/* Shared v3 pill button (VUX-CONFORM #524 §3) — sentence-case, replaces bare .viz-btn on warm-vellum
+   surfaces. .viz-btn's uppercase is the correct instrument tell on Researchers/Jobs/Field Desk; v3
+   surfaces were hand-overriding text-transform per call site (.capture-submit, .review-confirm) —
+   this promotes that override to a reusable class so future v3 buttons don't re-derive it or forget it. */
+.v3-btn { appearance: none; font: inherit; font-family: var(--ui); font-weight: 600; text-transform: none; letter-spacing: 0; border-radius: var(--r-pill); padding: 0.45rem 1.2rem; cursor: pointer; transition: var(--t); }
+.v3-btn:disabled { opacity: 0.5; cursor: default; }
+.v3-btn--primary { background: var(--viridian); border: 1px solid var(--viridian); color: #f6f2e6; }
+.v3-btn--primary:hover, .v3-btn--primary.is-hover, .v3-btn--primary:focus-visible { background: color-mix(in srgb, var(--viridian) 82%, black); border-color: color-mix(in srgb, var(--viridian) 82%, black); color: #f6f2e6; }
+.v3-btn--ghost { background: transparent; border: 1px solid transparent; color: var(--stone); }
+.v3-btn--ghost:hover, .v3-btn--ghost.is-hover, .v3-btn--ghost:focus-visible { color: var(--viridian); }
+.v3-btn--sm { font-size: 0.78rem; padding: 0.25rem 0.7rem; }
 /* Dropzone — a dashed region that hover-lifts; drag-over = a slate wash (interactive, NOT sprout/ember). */
 .capture-dropzone { margin-top: 0.9rem; padding: 1.1rem; border: 1px dashed var(--hair); border-radius: var(--r-chip); text-align: center; color: var(--stone); font-family: var(--ui); font-size: 0.85rem; transition: transform var(--t), border-color var(--t), background var(--t); }
 .capture-dropzone:hover { transform: translateY(-1px); border-color: var(--stone); }
@@ -266,7 +277,7 @@ body.shell-active #app {
 .topsearch:focus-visible { outline: none; box-shadow: var(--ring); border-color: var(--viridian); color: var(--stone); }
 .topsearch svg { width: 0.95rem; height: 0.95rem; color: var(--gold-deep); flex: none; }
 .topsearch .ts-ph { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.topsearch .kbd { margin-left: auto; font-family: var(--mono); font-size: 0.68rem; color: #9a927e; border: 0.5px solid var(--hair); border-radius: 5px; padding: 0.05rem 0.35rem; background: var(--linen); }
+.topsearch .kbd { margin-left: auto; font-family: var(--mono); font-size: 0.68rem; color: var(--stone); border: 0.5px solid var(--hair); border-radius: 5px; padding: 0.05rem 0.35rem; background: var(--linen); }
 /* Per-view contextual filter slot — populated by each view via setTopbarContext (empty until a view fills it). */
 .topctx { display: flex; align-items: center; gap: 0.45rem; min-width: 0; overflow: hidden; }
 .topctx:empty { display: none; }
@@ -592,7 +603,7 @@ button:disabled {
 .ask-pastdel-no { color: var(--faint); }
 .ask-pastdel-no:hover, .ask-pastdel-no:focus-visible { color: var(--ink); background: var(--hover); }
 .ask-pasttitle { font-family: var(--ui); font-weight: 600; font-size: 0.86rem; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ask-pastmeta { font-family: var(--mono); font-size: 0.68rem; color: var(--faint); }
+.ask-pastmeta { font-family: var(--mono); font-size: 0.68rem; color: var(--stone); }
 .ask-pastprev { font-family: var(--ui); font-size: 0.78rem; color: var(--stone); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── Scrolling conversation column (reclaims full width; reading measure on .ask-col) ──────────── */
@@ -693,7 +704,7 @@ button:disabled {
 .ask-send:hover { filter: brightness(1.06); }
 .ask-send:disabled { opacity: 0.55; cursor: default; }
 .ask-send .ask-send-i { font-weight: 700; }
-.ask-hint { font-family: var(--mono); font-size: 0.66rem; color: var(--faint); margin-top: 0.45rem; }
+.ask-hint { font-family: var(--mono); font-size: 0.66rem; color: var(--stone); margin-top: 0.45rem; }
 
 /* Reduced-motion: the seal pulse + skeleton shimmer collapse to calm static (state reads via colour). */
 @media (prefers-reduced-motion: reduce) {
@@ -1356,7 +1367,7 @@ option { background: var(--card); color: var(--fg); }
 .activity-fw {
   flex: none;
   white-space: nowrap;
-  color: var(--faint);
+  color: var(--stone);
   font-size: 0.78rem;
   font-family: var(--mono);
 }

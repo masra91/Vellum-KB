@@ -167,6 +167,18 @@ describe('Today v2 — command-center home (SPEC-0058 STATE-7)', () => {
     expect(c.querySelectorAll('.today-hrow[data-status="warn"]')).toHaveLength(2);
   });
 
+  // VUX-CONFORM #524 §3/§8 — a card title is not signage; the shared .viz-signage uppercase
+  // treatment is the instrument tell (Researchers/Jobs) and must not leak onto v3 card titles.
+  it('decision + health-row titles are sentence-case (no viz-signage uppercase, VUX-CONFORM #524)', async () => {
+    const c = await mount();
+    const decideTitle = c.querySelector('.today-decide-tx b');
+    const healthTitle = c.querySelector('.today-ht b');
+    expect(decideTitle).toBeTruthy();
+    expect(healthTitle).toBeTruthy();
+    expect(decideTitle?.classList.contains('viz-signage')).toBe(false);
+    expect(healthTitle?.classList.contains('viz-signage')).toBe(false);
+  });
+
   it('deep-links via the panel "View all" / "Full report" links', async () => {
     const c = await mount();
     const targets: string[] = [];
