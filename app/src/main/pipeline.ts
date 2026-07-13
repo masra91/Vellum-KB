@@ -115,7 +115,7 @@ import type { Review } from '../kb/reviews';
 import { reviewToSummary } from '../kb/reviewSummary';
 import type { AuditEvent } from '../kb/audit';
 import type { AskResult } from '../kb/recall';
-import type { FullReplayResult, ComposeBacklogResult, JobView, JobConfigPatch, RunJobResult, InstanceSettings, AgentView, ModelCatalogView, SetModelResult, ResearcherView, ResearcherConfigPatch, ResearcherLastRun, RunResearcherResult, SaveRecallOutputResult, PipelineControlRequest, PipelineControlResult, QuiesceStatus, ReviewSummary } from '../kb/types';
+import type { FullReplayResult, ComposeBacklogResult, JobView, JobConfigPatch, JobLastRun, RunJobResult, InstanceSettings, AgentView, ModelCatalogView, SetModelResult, ResearcherView, ResearcherConfigPatch, ResearcherLastRun, RunResearcherResult, SaveRecallOutputResult, PipelineControlRequest, PipelineControlResult, QuiesceStatus, ReviewSummary } from '../kb/types';
 import { lastRunFromEvent } from '../kb/researchersPanel';
 
 /** Factory to create a job behavior resolver with scoped vaultPath (SPEC-0023, Copilot context scope).
@@ -1418,6 +1418,18 @@ export async function runActiveJobNow(id: string): Promise<RunJobResult> {
   });
   if (res === 'skipped' || res === 'not-found' || res === 'unknown-type') return { ran: false, reason: res };
   return { ran: true, outcome: res.outcome, applied: res.applied, deferred: res.deferred };
+}
+
+/** VUX-17 (#524 §5 / #559): the Agents drill-in's past-runs timeline — a job's full journal
+ *  (`.kb/jobs/<id>/journal.jsonl`), newest-first (readJournal returns oldest→newest; a timeline reads
+ *  top-down as "most recent first", same convention as listResearcherRunsForActive below). */
+export async function jobHistoryForActive(id: string): Promise<JobLastRun[]> {
+  if (!active) return [];
+  const journal = await readJournal(active.stagingWt, id);
+  return journal
+    .slice()
+    .reverse()
+    .map((e) => ({ ts: e.ts, inspected: e.inspected, applied: e.applied, deferred: e.deferred, ...(e.note ? { note: e.note } : {}) }));
 }
 
 /** A short, human commit summary of a job-config change (the conforming audit event carries from/to). */

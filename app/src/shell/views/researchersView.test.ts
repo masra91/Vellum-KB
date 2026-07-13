@@ -17,6 +17,7 @@ let listResearchers: ReturnType<typeof vi.fn>;
 let setResearcherConfig: ReturnType<typeof vi.fn>;
 let removeResearcher: ReturnType<typeof vi.fn>;
 let runResearcherNow: ReturnType<typeof vi.fn>;
+let listResearcherRuns: ReturnType<typeof vi.fn>;
 
 function setApi(): void {
   (window as unknown as { kbApi: Partial<KbApi> }).kbApi = {
@@ -24,6 +25,7 @@ function setApi(): void {
     setResearcherConfig: setResearcherConfig as unknown as KbApi['setResearcherConfig'],
     removeResearcher: removeResearcher as unknown as KbApi['removeResearcher'],
     runResearcherNow: runResearcherNow as unknown as KbApi['runResearcherNow'],
+    listResearcherRuns: listResearcherRuns as unknown as KbApi['listResearcherRuns'],
   };
 }
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
@@ -33,6 +35,7 @@ beforeEach(() => {
   setResearcherConfig = vi.fn(async () => [{ ...webRow, enabled: true }]);
   removeResearcher = vi.fn(async () => []);
   runResearcherNow = vi.fn(async () => ({ ran: true, sourceIds: ['SRC1'], note: 'ok' }));
+  listResearcherRuns = vi.fn(async () => []);
   setApi();
 });
 
@@ -106,10 +109,11 @@ describe('Field Desk — render (RESEARCH-15)', () => {
 
 // VUX-17 (#524 §5) — every strip gets a chevron cue + click-to-open detail (identity + current config).
 describe('Field Desk — VUX-17 drill-in shell', () => {
-  it('clicking the chevron opens the detail with kind/clearance/schedule/autonomy/limits + most-recent-run + placeholder', async () => {
+  it('clicking the chevron opens the detail with kind/clearance/schedule/autonomy/limits + most-recent-run', async () => {
     listResearchers = vi.fn(async () => [
       { ...webRow, schedule: 'daily', posture: 'autonomous', lastRun: { ts: '2026-06-02T01:00:00.000Z', eventType: 'researched', what: 'Atlas', citations: 3 } },
     ]);
+    listResearcherRuns = vi.fn(async () => new Promise<never>(() => {})); // never resolves — assert the pre-fetch state
     setApi();
     const c = await mount();
     const strip = c.querySelector<HTMLElement>('.rdesk-strip[data-id="web-1"]')!;
@@ -124,7 +128,6 @@ describe('Field Desk — VUX-17 drill-in shell', () => {
     expect(detail.textContent).toContain('Autonomous'); // posture
     expect(detail.textContent).toContain('8'); // budget.maxToolCalls (base fixture)
     expect(detail.textContent).toContain('brought back'); // reportLine's real most-recent-run text
-    expect(detail.textContent).toContain('available yet'); // disclosed placeholder for deeper history
     chev.click();
     expect(detail.hidden).toBe(true);
   });
@@ -134,6 +137,60 @@ describe('Field Desk — VUX-17 drill-in shell', () => {
     const strip = c.querySelector<HTMLElement>('.rdesk-strip[data-id="web-1"]')!;
     strip.querySelector<HTMLButtonElement>('.rdesk-arm')!.click();
     expect(strip.querySelector<HTMLElement>('.ag-detail')?.hidden).toBe(true);
+  });
+});
+
+// #559 — the real past-runs timeline (VUX-17 fast-follow), lazy-fetched via the (previously unwired)
+// listResearcherRuns IPC.
+describe('Field Desk — #559 past-runs timeline backfill', () => {
+  it('the detail panel starts with no "Loading…"/placeholder text before it has ever been opened', async () => {
+    const c = await mount();
+    const strip = c.querySelector<HTMLElement>('.rdesk-strip[data-id="web-1"]')!;
+    expect(strip.querySelector('.ag-detail')?.textContent).not.toContain('Loading…');
+    expect(listResearcherRuns).not.toHaveBeenCalled(); // never opened → never fetched
+  });
+
+  it('renders a populated timeline (newest-first, per the audit stream) once the fetch resolves', async () => {
+    listResearcherRuns = vi.fn(async () => [
+      { ts: '2026-06-03T00:00:00.000Z', eventType: 'researched', what: 'Atlas licensing', citations: 2 },
+      { ts: '2026-06-01T00:00:00.000Z', eventType: 'no-finding', what: 'Atlas licensing', citations: 0 },
+    ]);
+    setApi();
+    const c = await mount();
+    const strip = c.querySelector<HTMLElement>('.rdesk-strip[data-id="web-1"]')!;
+    strip.querySelector<HTMLButtonElement>('.ag-drill')!.click();
+    await flush();
+    expect(listResearcherRuns).toHaveBeenCalledWith('web-1');
+    const rows = strip.querySelectorAll('.ag-detail-run');
+    expect(rows).toHaveLength(2);
+    // Timestamp rendering is locale/timezone-dependent (formatTimestamp → shortDate); assert ordering via
+    // the outcome text instead of the formatted date, which differs between local dev and UTC CI.
+    expect(rows[0].textContent).toContain('brought back 2 cited sources'); // newest first (researched, 2026-06-03)
+    expect(rows[1].textContent).toContain('no new findings'); // the older, second run (no-finding, 2026-06-01)
+    expect(strip.querySelector('.ag-detail')?.textContent).not.toContain('Loading…');
+  });
+
+  it('renders an honest "No runs yet" empty state for a researcher that has never dispatched', async () => {
+    listResearcherRuns = vi.fn(async () => []);
+    setApi();
+    const c = await mount();
+    const strip = c.querySelector<HTMLElement>('.rdesk-strip[data-id="web-1"]')!;
+    strip.querySelector<HTMLButtonElement>('.ag-drill')!.click();
+    await flush();
+    expect(strip.querySelectorAll('.ag-detail-run')).toHaveLength(0);
+    expect(strip.textContent).toContain('No runs yet.');
+  });
+
+  it('fetches at most once across repeated open/close cycles on the same render', async () => {
+    const c = await mount();
+    const strip = c.querySelector<HTMLElement>('.rdesk-strip[data-id="web-1"]')!;
+    const chev = strip.querySelector<HTMLButtonElement>('.ag-drill')!;
+    chev.click(); // open (fetches)
+    await flush();
+    chev.click(); // close
+    chev.click(); // open again (should NOT re-fetch)
+    await flush();
+    expect(listResearcherRuns).toHaveBeenCalledTimes(1);
   });
 });
 

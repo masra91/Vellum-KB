@@ -16,7 +16,7 @@
 import { esc } from '../html';
 import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import { formatTimestamp } from '../formatTime';
-import { drillChevronHtml, wireDrillIn, pastRunsPlaceholderHtml, detailRowHtml } from './agentDrillIn';
+import { drillChevronHtml, wireDrillIn, detailRowHtml, runsPendingHtml, runsLoadingHtml, runsTimelineHtml } from './agentDrillIn';
 import {
   schedulePresetLabel,
   SCHEDULE_OPTIONS,
@@ -35,7 +35,7 @@ import type { ViewHandle } from '../viewLifecycle';
 import type { EgressTier } from '../../kb/researchers';
 import type { WorkIqStatus } from '../../kb/types'; // WORKIQ-UI contract — defined by DEV-3's WORKIQ-FIX
 import type { WorkIqCardModel, WorkIqCardPresentation } from '../../kb/researchersPanel';
-import type { ResearcherView, ResearcherConfigPatch } from '../../kb/types';
+import type { ResearcherView, ResearcherConfigPatch, ResearcherLastRun } from '../../kb/types';
 
 /** Source-kind glyph (design §2) — a named instrument, not a dropdown value. */
 const KIND_GLYPH: Record<ResearcherView['template'], string> = { web: '◇', code: '◆', m365: '▣', custom: '＋' };
@@ -58,8 +58,42 @@ const HEADER = `<p class="rdesk-sub viz-body">Agents you brief and dispatch outs
 
 export function mountResearchers(container: HTMLElement): ViewHandle {
   paintSkeleton(container, HEADER, 'cards');
-  wireDrillIn(container); // VUX-17: delegated on the container (survives re-render) — wire once, not per-render.
+  // VUX-17/#559: delegated on the container (survives re-render) — wire once, not per-render. `onOpen`
+  // lazy-fetches that researcher's real ledger on first reveal, not for every strip on every render.
+  wireDrillIn(container, (card) => void loadResearcherHistory(container, card));
   return { show: () => void render(container) }; // #510: re-read on every activation (no timers here)
+}
+
+/** #559: fetch + render one researcher's real past-runs timeline into its already-open detail panel —
+ *  reuses the existing (previously unwired) `listResearcherRuns` IPC, its own `researcher` audit events,
+ *  newest-first. Loads at most once per open (guarded by `data-runs-loaded`, cleared on a fresh render). */
+async function loadResearcherHistory(container: HTMLElement, card: HTMLElement): Promise<void> {
+  if (card.dataset.runsLoaded === 'true') return;
+  card.dataset.runsLoaded = 'true';
+  const id = card.dataset.id;
+  if (!id) return;
+  const select = (): HTMLElement | null => container.querySelector<HTMLElement>(`.rdesk-strip[data-id="${id}"] .ag-detail-runs`);
+  const pending = select();
+  if (pending) pending.outerHTML = runsLoadingHtml(); // the fetch is now actually in flight — say so
+  try {
+    const runs = await withTimeout(window.kbApi.listResearcherRuns(id));
+    const slot = select();
+    if (slot) slot.outerHTML = runsTimelineHtml(runs.map(researcherRunRowHtml));
+  } catch {
+    card.dataset.runsLoaded = 'false'; // a failed fetch is retryable on the next open
+  }
+}
+
+/** One researcher-history row (#559) — the same outcome vocabulary as `reportLine`'s single most-recent
+ *  line (researcherOutcomeLabel, the "brought back N cited sources" detail), without the escalation
+ *  deep-link: that button is wired at initial render (`wire()`, non-delegated) and a history row is
+ *  injected later, after an async fetch, so it would never receive that binding — an inert "open review"
+ *  button would be worse than the informational-only line this renders instead. */
+function researcherRunRowHtml(lr: ResearcherLastRun): string {
+  const when = esc(formatTimestamp(lr.ts));
+  const outcome = researcherOutcomeLabel(lr.eventType);
+  const detail = lr.eventType === 'researched' ? ` — brought back ${lr.citations} cited source${lr.citations === 1 ? '' : 's'} on “${esc(lr.what)}”` : '';
+  return `${when} · ${esc(outcome)}${detail}`;
 }
 
 async function render(container: HTMLElement): Promise<void> {
@@ -213,10 +247,12 @@ function strip(r: ResearcherView): string {
     </li>`;
 }
 
-/** VUX-17 detail panel — identity + current config from ResearcherView's existing fields (richest of
- *  the three hub sections: clearance, reach limits, schedule/autonomy already visible above). Reuses
- *  `reportLine` for the most-recent dispatch ahead of the "earlier history" placeholder. Interaction
- *  consistency across the hub, not because this item type hides anything. */
+/** VUX-17/#559 detail panel — identity + current config from ResearcherView's existing fields (richest
+ *  of the three hub sections: clearance, reach limits, schedule/autonomy already visible above), the
+ *  existing `reportLine` most-recent-dispatch line (its own block, NOT `.ag-detail-runs` — that class is
+ *  reserved for the lazy-fetched timeline below so `loadResearcherHistory`'s selector finds the right
+ *  slot), and the real past-runs timeline (lazy-fetched on first open). Interaction consistency across
+ *  the hub, not because this item type hides anything. */
 function researcherDetailHtml(r: ResearcherView): string {
   const maxCalls = r.budget?.maxToolCalls;
   const maxDepth = r.budget?.maxDepth;
@@ -229,11 +265,11 @@ function researcherDetailHtml(r: ResearcherView): string {
       ${detailRowHtml('Autonomy', POSTURE_LABEL[r.posture] ?? r.posture)}
       ${detailRowHtml('Limits', `${maxCalls ?? '—'} searches · depth ${maxDepth ?? '—'} · ${timeoutMin}`)}
     </div>
-    <div class="ag-detail-runs">
+    <div class="ag-detail-lastrun">
       <h4 class="ag-detail-h">Most recent run</h4>
       <p class="ag-detail-empty viz-body">${reportLine(r)}</p>
     </div>
-    ${pastRunsPlaceholderHtml()}
+    ${runsPendingHtml()}
   </div>`;
 }
 

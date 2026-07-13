@@ -819,6 +819,8 @@ export interface KbApi {
   listJobs(): Promise<JobView[]>;
   setJobConfig(patch: JobConfigPatch): Promise<JobView[]>;
   runJobNow(id: string): Promise<RunJobResult>;
+  // VUX-17 (#524 §5 / #559): the Agents drill-in's past-runs timeline — a job's full journal, newest-first.
+  jobHistory(id: string): Promise<JobLastRun[]>;
   // SPEC-0029 Audit & Activity (read-only): the curated feed, raw events (drill-down/search), lineage.
   activityFeed(filter?: ActivityFilter): Promise<ActivityFeedResult>;
   activityEvents(filter?: ActivityFilter): Promise<AuditEvent[]>;

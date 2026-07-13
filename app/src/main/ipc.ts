@@ -23,6 +23,7 @@ import {
   listJobsForActive,
   setActiveJobConfig,
   runActiveJobNow,
+  jobHistoryForActive,
   getActiveInstanceSettings,
   setActiveInstanceSettings,
   listAgentsForActive,
@@ -108,6 +109,7 @@ import type {
   OpenSourceRefResult,
   JobView,
   JobConfigPatch,
+  JobLastRun,
   RunJobResult,
   ActivityFilter,
   ActivityFeedResult,
@@ -714,6 +716,9 @@ export function registerIpc(): void {
       return { ran: false, reason: 'not-found' };
     }
   });
+
+  // VUX-17 (#524 §5 / #559): the Agents drill-in's past-runs timeline — a job's full journal, read-only.
+  ipcMain.handle('kb:jobHistory', async (_e, id: string): Promise<JobLastRun[]> => jobHistoryForActive(id));
 
   // SPEC-0029 Audit & Activity (read-only). All three read the active `staging` worktree — the full
   // working-zone audit (AUDIT-10), a superset of the evergreen archive. Empty when no KB is active.

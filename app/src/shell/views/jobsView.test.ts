@@ -27,9 +27,9 @@ function job(over: Partial<JobView> & Pick<JobView, 'id'>): JobView {
   };
 }
 
-type JobsApi = Pick<KbApi, 'listJobs' | 'setJobConfig' | 'runJobNow'>;
-function setApi(api: JobsApi): void {
-  (window as unknown as { kbApi: JobsApi }).kbApi = api;
+type JobsApi = Pick<KbApi, 'listJobs' | 'setJobConfig' | 'runJobNow' | 'jobHistory'>;
+function setApi(api: Partial<JobsApi>): void {
+  (window as unknown as { kbApi: Partial<JobsApi> }).kbApi = { jobHistory: vi.fn(async () => []), ...api };
 }
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
@@ -236,13 +236,15 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
 
   // VUX-17 (#524 §5) — every card gets a chevron cue + click-to-open detail (identity + current config).
   describe('VUX-17 drill-in shell', () => {
-    it('clicking the chevron opens the detail with schedule/autonomy/state + most-recent-run + placeholder', async () => {
+    it('clicking the chevron opens the detail with schedule/autonomy/state + most-recent-run + a loading past-runs slot', async () => {
+      const jobHistory = vi.fn(async () => new Promise<never>(() => {})); // never resolves — assert the pre-fetch state
       setApi({
         listJobs: vi.fn(async () => [
           job({ id: 'reflect', schedule: 'hourly', posture: 'autonomous', enabled: true, lastRun: { ts: '2026-06-02T07:00:00.000Z', inspected: 'entities/', applied: 1, deferred: 0 } }),
         ]),
         setJobConfig: vi.fn(),
         runJobNow: vi.fn(),
+        jobHistory: jobHistory as unknown as KbApi['jobHistory'],
       });
       mountJobs(root).show?.();
       await tick();
@@ -257,7 +259,8 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
       expect(detail.textContent).toContain('Autonomous');
       expect(detail.textContent).toContain('Enabled');
       expect(detail.textContent).toContain('2026-06-02T07:00:00.000Z'); // the one real run we have
-      expect(detail.textContent).toContain('available yet'); // disclosed placeholder for deeper history
+      expect(detail.querySelector('.ag-detail-runs')?.getAttribute('aria-busy')).toBe('true'); // #559: fetch in flight
+      expect(detail.querySelectorAll('.skel-row')).toHaveLength(2); // shaped skeleton, never bare "Loading…" (#520 §8)
     });
 
     it('does NOT open the detail when clicking an existing control (arm switch, schedule segment, Run now)', async () => {
@@ -267,6 +270,70 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
       const row = li(root, 'reflect');
       row.querySelector<HTMLButtonElement>('.job-enabled')!.click();
       expect(row.querySelector<HTMLElement>('.ag-detail')?.hidden).toBe(true);
+    });
+  });
+
+  // #559 — the real past-runs timeline (VUX-17 fast-follow), lazy-fetched via kb:jobHistory.
+  describe('#559 past-runs timeline backfill', () => {
+    it('renders a populated timeline (newest-first, per the journal) once the fetch resolves', async () => {
+      const jobHistory = vi.fn(async () => [
+        { ts: '2026-06-03T00:00:00.000Z', inspected: 'entities/ (5 nodes)', applied: 2, deferred: 0 },
+        { ts: '2026-06-02T00:00:00.000Z', inspected: 'entities/ (3 nodes)', applied: 1, deferred: 1, note: 'collision-exhausted' },
+      ]);
+      setApi({
+        listJobs: vi.fn(async () => [job({ id: 'reflect' })]),
+        setJobConfig: vi.fn(),
+        runJobNow: vi.fn(),
+        jobHistory: jobHistory as unknown as KbApi['jobHistory'],
+      });
+      mountJobs(root).show?.();
+      await tick();
+      const row = li(root, 'reflect');
+      row.querySelector<HTMLButtonElement>('.ag-drill')!.click();
+      await tick();
+      expect(jobHistory).toHaveBeenCalledWith('reflect');
+      const rows = row.querySelectorAll('.ag-detail-run');
+      expect(rows).toHaveLength(2);
+      expect(rows[0].textContent).toContain('2026-06-03T00:00:00.000Z'); // newest first
+      expect(rows[0].textContent).toContain('2 applied, 0 deferred');
+      expect(rows[1].textContent).toContain('collision-exhausted'); // the set-aside note carries through
+      expect(row.querySelector('.ag-detail')?.textContent).not.toContain('Loading…');
+    });
+
+    it('renders an honest "No runs yet" empty state for a job that has never run', async () => {
+      setApi({
+        listJobs: vi.fn(async () => [job({ id: 'reflect' })]),
+        setJobConfig: vi.fn(),
+        runJobNow: vi.fn(),
+        jobHistory: vi.fn(async () => []) as unknown as KbApi['jobHistory'],
+      });
+      mountJobs(root).show?.();
+      await tick();
+      const row = li(root, 'reflect');
+      row.querySelector<HTMLButtonElement>('.ag-drill')!.click();
+      await tick();
+      expect(row.querySelectorAll('.ag-detail-run')).toHaveLength(0);
+      expect(row.textContent).toContain('No runs yet.');
+    });
+
+    it('fetches at most once across repeated open/close cycles on the same render', async () => {
+      const jobHistory = vi.fn(async () => []);
+      setApi({
+        listJobs: vi.fn(async () => [job({ id: 'reflect' })]),
+        setJobConfig: vi.fn(),
+        runJobNow: vi.fn(),
+        jobHistory: jobHistory as unknown as KbApi['jobHistory'],
+      });
+      mountJobs(root).show?.();
+      await tick();
+      const row = li(root, 'reflect');
+      const chev = row.querySelector<HTMLButtonElement>('.ag-drill')!;
+      chev.click(); // open (fetches)
+      await tick();
+      chev.click(); // close
+      chev.click(); // open again (should NOT re-fetch)
+      await tick();
+      expect(jobHistory).toHaveBeenCalledTimes(1);
     });
   });
 });
@@ -281,6 +348,7 @@ describe('Jobs view · WS2 — composes the shared design-system primitives (no 
     listJobs: vi.fn(async () => [job({ id: 'reflect', schedule: 'off', posture: 'guarded' })]),
     setJobConfig: vi.fn(),
     runJobNow: vi.fn(),
+    jobHistory: vi.fn(async () => []),
   });
 
   it('uses NO native <select> anywhere — schedule + autonomy are SegmentedControls (the generic-look fix)', async () => {
