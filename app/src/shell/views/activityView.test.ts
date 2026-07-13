@@ -187,9 +187,117 @@ describe('Drill-down to raw events (AUDIT-5)', () => {
     expect(c.querySelector('.activity-raw')?.textContent).toContain('"eventType": "claimed"');
     expect(c.querySelectorAll('.activity-event')).toHaveLength(2); // both raw events in the run
     expect(c.textContent).toContain('sources/2026/01/S1/audit.jsonl:2'); // provenance shown
-    // re-query: the body innerHTML was swapped on toggle, so the prior node is detached.
-    c.querySelector<HTMLButtonElement>('.activity-entry-head')!.click(); // collapse
+    // #511: toggling no longer swaps the whole body — the SAME <button> node is reused across
+    // expand/collapse (see the describe block below for the full reference-identity assertions).
+    head.click(); // collapse
     expect(c.querySelector('.activity-raw')).toBeNull();
+  });
+});
+
+// #511: expanding/collapsing one entry used to rebuild the WHOLE ≤1000-row feed via one innerHTML swap
+// (destroying the just-clicked toggle button, dropping keyboard focus to <body>) and every reload —
+// even one returning IDENTICAL data — repainted the entire list. These assert the actual DOM-mutation
+// scope, not just the visible result (MutationObserver-count style, per the issue's own test-case list).
+describe('#511 keyed/incremental rendering — Activity', () => {
+  it('expanding one entry mutates ONLY that entry\'s <li> subtree — every sibling <li> stays the SAME DOM node', async () => {
+    const c = await mount();
+    const rows = () => Array.from(c.querySelectorAll<HTMLElement>('.activity-entry'));
+    const before = rows();
+    expect(before).toHaveLength(2); // C1 (claims) + A1 (archivist)
+    const otherRowBefore = before[1]; // A1 — not the one we're about to toggle
+
+    const obs = new MutationObserver(() => {});
+    obs.observe(c, { childList: true, subtree: true });
+
+    c.querySelector<HTMLButtonElement>('.activity-entry-head')!.click(); // expand C1 (the first entry)
+    // MutationObserver callbacks deliver as a microtask — drain the queue synchronously via
+    // takeRecords() rather than waiting on the callback, so this stays deterministic.
+    const records = obs.takeRecords();
+    obs.disconnect();
+    const mutatedNodes = records.reduce((n, r) => n + r.addedNodes.length + r.removedNodes.length, 0);
+
+    // Exactly one node was added — the freshly-inserted `.activity-raw` drill-down — nothing else in
+    // the tree was touched (no li destroyed/recreated, no sibling rows re-stringified).
+    expect(mutatedNodes).toBe(1);
+    const after = rows();
+    expect(after).toHaveLength(2);
+    expect(after[1]).toBe(otherRowBefore); // A1's <li> is the EXACT SAME node — never touched
+    expect(after[0].querySelector('.activity-raw')).not.toBeNull(); // C1 expanded correctly
+  });
+
+  it('keyboard focus stays on the toggle button across expand AND collapse', async () => {
+    const c = await mount();
+    const head = c.querySelector<HTMLButtonElement>('.activity-entry-head')!;
+    head.focus();
+    expect(document.activeElement).toBe(head);
+    head.click(); // expand
+    expect(document.activeElement).toBe(head); // #511: the button was never destroyed/recreated
+    head.click(); // collapse
+    expect(document.activeElement).toBe(head);
+  });
+
+  it('collapsing removes the raw block WITHOUT re-stringifying it (drops the node, no re-render)', async () => {
+    const c = await mount();
+    const head = c.querySelector<HTMLButtonElement>('.activity-entry-head')!;
+    head.click(); // expand
+    const rawBefore = c.querySelector('.activity-raw');
+    expect(rawBefore).not.toBeNull();
+    head.click(); // collapse
+    expect(c.querySelector('.activity-raw')).toBeNull();
+    expect(head.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('a reload that returns IDENTICAL data performs NO DOM writes to the feed', async () => {
+    const c = await mount();
+    const ul = c.querySelector('.activity-feed')!;
+    const rowsBefore = Array.from(ul.children);
+
+    const obs = new MutationObserver(() => {
+      throw new Error('the feed list was mutated on an identical-data reload');
+    });
+    obs.observe(ul, { childList: true, subtree: true });
+
+    // Re-trigger load() via a filter round-trip that resolves to the SAME entries (activityFeed's mock
+    // is deterministic — same ENTRIES every call) — e.g. selecting then clearing the actor filter.
+    const actorSelect = c.querySelector<HTMLSelectElement>('#activityActor')!;
+    actorSelect.value = '';
+    actorSelect.dispatchEvent(new Event('change'));
+    await flush();
+    obs.disconnect();
+
+    const rowsAfter = Array.from(ul.children);
+    expect(rowsAfter).toEqual(rowsBefore); // same node references, same order — truly untouched
+  });
+
+  it('a reload that changes the data still repaints (the no-write path is data-conditioned, not blanket)', async () => {
+    const c = await mount();
+    expect(c.querySelectorAll('.activity-entry')).toHaveLength(2);
+    activityFeed = vi.fn(async () => feed([ENTRIES[0]], 1)); // now only ONE entry
+    setApi();
+    const actorSelect = c.querySelector<HTMLSelectElement>('#activityActor')!;
+    actorSelect.value = 'claims';
+    actorSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    await flush();
+    expect(c.querySelectorAll('.activity-entry')).toHaveLength(1); // genuinely repainted
+  });
+
+  it('a reload in flight keeps the STALE feed visible (aria-busy, no skeleton flash / scroll-jump)', async () => {
+    const c = await mount();
+    expect(c.querySelectorAll('.activity-entry')).toHaveLength(2);
+    let resolveFeed!: (v: ActivityFeedResult) => void;
+    activityFeed = vi.fn(() => new Promise<ActivityFeedResult>((r) => (resolveFeed = r)));
+    setApi();
+    const actorSelect = c.querySelector<HTMLSelectElement>('#activityActor')!;
+    actorSelect.value = 'claims';
+    actorSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    await flush();
+    // Still mid-flight: the OLD rows are still there (not blanked to a 3-row skeleton) — just marked busy.
+    expect(c.querySelectorAll('.activity-entry')).toHaveLength(2);
+    expect(c.querySelector('#activityBody')?.getAttribute('aria-busy')).toBe('true');
+    resolveFeed(feed([ENTRIES[0]], 1));
+    await flush();
+    expect(c.querySelectorAll('.activity-entry')).toHaveLength(1); // now reflects the resolved data
+    expect(c.querySelector('#activityBody')?.getAttribute('aria-busy')).toBe('false');
   });
 });
 

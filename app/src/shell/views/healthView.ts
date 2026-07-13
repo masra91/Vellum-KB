@@ -21,13 +21,21 @@ import type { ViewHandle } from '../viewLifecycle';
 
 const HEADER = `<h1 class="health-title viz-voice">Health</h1><p class="health-sub viz-body">Structural lint of your knowledge graph — orphans, dead links, and thin pages. Scanned without AI; fix or dismiss each one inline.</p>`;
 
+// #511: a debounced background-rescan handle, module-scoped so a burst of dismiss/remediate clicks
+// shares ONE pending rescan instead of firing `healthReport()` (a full live-vault scan) once per click.
+const RESCAN_DEBOUNCE_MS = 1200;
+let rescanTimer: ReturnType<typeof setTimeout> | undefined;
+
 export function mountHealth(container: HTMLElement): ViewHandle {
   container.innerHTML = `<div class="health viz-surface">${HEADER}<p class="health-scanning viz-body">Scanning…</p></div>`;
   wireTopctxRescan(container);
   // #510: re-scan on every activation (STATE-8 AC1) — Health has no live/push-eligible store yet
   // (`kb:healthReport` is still a per-read scan, not projection-backed; see the STATE-3 note above), so
   // switching back is the freshness signal, same as before this change just without the freeze.
-  return { show: () => void render(container) };
+  return {
+    show: () => void render(container),
+    hide: () => clearTimeout(rescanTimer), // #511: a pending debounced rescan shouldn't fire while hidden
+  };
 }
 
 /**
@@ -226,6 +234,48 @@ function setRowError(restore: () => void, row: HTMLElement, message: string): vo
   if (status) status.innerHTML = `<span class="health-row-error viz-body">${esc(message)}</span>`;
 }
 
+/** Minimal CSS.escape fallback (finding keys are simple derived strings; belt-and-suspenders — mirrors
+ *  reviewsView.ts's `cssEscape` for the same reason: a data-attribute selector must never break on an
+ *  unexpected character in agent/derived data). */
+function cssEscape(s: string): string {
+  return s.replace(/["\\]/g, '\\$&');
+}
+
+/**
+ * #511: remove ONE row immediately on a successful dismiss/remediate — no full-list re-scan+repaint (the
+ * old behavior reset scroll position and rebuilt every row for a one-row change). Mirrors reviewsView.ts's
+ * `optimisticallyRemove`: fade the row out, remove it from the DOM once the transition ends (or a timeout
+ * fallback for reduced-motion), and drop the whole dimension section to its clean/empty state if that was
+ * the last finding in it. The severity tile + count are NOT recomputed client-side (that needs the same
+ * rules `healthProjection.ts` already applies) — `scheduleBackgroundRescan` catches them up shortly after.
+ */
+function optimisticallyRemoveRow(container: HTMLElement, findingKey: string): void {
+  const row = container.querySelector<HTMLElement>(`.health-row[data-finding-key="${cssEscape(findingKey)}"]`);
+  if (!row) return;
+  const dimension = row.closest<HTMLElement>('.health-dimension');
+  let done = false;
+  const finish = (): void => {
+    if (done) return;
+    done = true;
+    row.remove();
+    // If that was the last visible row in its dimension's list, drop the (now-empty) `<ul>` too — an
+    // empty `.health-row-list` would otherwise read as a structural glitch, not "all clear".
+    if (dimension && !dimension.querySelector('.health-row')) dimension.querySelector('.health-row-list')?.remove();
+  };
+  row.classList.add('is-leaving');
+  row.addEventListener('transitionend', finish, { once: true });
+  setTimeout(finish, 340); // matches --dur-settle; reduced-motion fallback
+}
+
+/** #511: coalesce a burst of dismiss/remediate successes into ONE `healthReport()` re-scan (the AC's
+ *  "≤1 healthReport call per burst of N dismissals") — each optimistic removal already updated the row
+ *  the Principal is looking at; this background rescan just reconciles the tile severities/counts (and
+ *  catches anything the optimistic remove got wrong) once the burst goes quiet, not once per click. */
+function scheduleBackgroundRescan(container: HTMLElement): void {
+  clearTimeout(rescanTimer);
+  rescanTimer = setTimeout(() => void render(container), RESCAN_DEBOUNCE_MS);
+}
+
 function wire(container: HTMLElement): void {
   // Click-through: open the node in Obsidian (HEALTH leads back to reading; reuses ASK-14 openCitation).
   for (const btn of Array.from(container.querySelectorAll<HTMLButtonElement>('.health-open'))) {
@@ -234,26 +284,35 @@ function wire(container: HTMLElement): void {
       if (rel) void window.kbApi.openCitation(rel);
     });
   }
-  // VUX-16 APPLY (relink / find-homes): non-destructive, applies directly. Working (loom) → on ok re-scan
-  // (the fixed finding drops from the list + count — the "it moved" payoff); on error, inline oxide, retryable.
+  // VUX-16 APPLY (relink / find-homes): non-destructive, applies directly. Working (loom) → on a REAL
+  // change (res.changed — #511: an idempotent no-op must NOT optimistically hide a still-open finding)
+  // the row is removed immediately + a debounced rescan reconciles the tile/count; on error, inline
+  // oxide, retryable.
   for (const btn of Array.from(container.querySelectorAll<HTMLButtonElement>('.health-act'))) {
     btn.addEventListener('click', () => {
       const row = btn.closest<HTMLElement>('.health-row');
       const action = btn.dataset.action;
       const nodeRel = btn.dataset.rel ?? '';
+      const findingKey = row?.dataset.findingKey ?? '';
       if (!row || (action !== 'relink' && action !== 'find-homes')) return;
       const restore = setRowWorking(row, action === 'relink' ? 'Relinking…' : 'Finding homes…');
       void window.kbApi
         .healthRemediate({ action, nodeRel })
         .then((res) => {
-          if (res?.ok) void render(container); // re-scan → the row resolves away (or stays if no change)
-          else setRowError(restore, row, res?.message || 'Couldn’t apply — try again.');
+          if (!res?.ok) {
+            setRowError(restore, row, res?.message || 'Couldn’t apply — try again.');
+            return;
+          }
+          if (res.changed) optimisticallyRemoveRow(container, findingKey);
+          else restore(); // idempotent no-op — nothing to fix, leave the row exactly as it was
+          scheduleBackgroundRescan(container);
         })
         .catch(() => setRowError(restore, row, 'Couldn’t apply — try again.'));
     });
   }
-  // VUX-16 DISMISS (✕): immediate, non-destructive + restorable (DL-1 / #496 ruling — no confirm). On ok,
-  // re-scan so the dismissed finding drops from the list + count.
+  // VUX-16 DISMISS (✕): immediate, non-destructive + restorable (DL-1 / #496 ruling — no confirm). #511:
+  // the row is removed optimistically the instant the backend confirms — dismiss is unconditional (there's
+  // no "no-op" case), so unlike apply it removes on every `ok`. A debounced rescan reconciles the tile.
   for (const btn of Array.from(container.querySelectorAll<HTMLButtonElement>('.health-dismiss'))) {
     btn.addEventListener('click', () => {
       const row = btn.closest<HTMLElement>('.health-row');
@@ -264,8 +323,10 @@ function wire(container: HTMLElement): void {
       void window.kbApi
         .dismissHealthFinding({ findingKey, kind })
         .then((res) => {
-          if (res?.ok) void render(container);
-          else setRowError(restore, row, res?.message || 'Couldn’t dismiss — try again.');
+          if (res?.ok) {
+            optimisticallyRemoveRow(container, findingKey);
+            scheduleBackgroundRescan(container);
+          } else setRowError(restore, row, res?.message || 'Couldn’t dismiss — try again.');
         })
         .catch(() => setRowError(restore, row, 'Couldn’t dismiss — try again.'));
     });

@@ -53,6 +53,11 @@ interface Turn {
   savedRel?: string; // set once saved as an Output (ASK-6)
   saveError?: string;
   citeError?: string;
+  // #511: the turn's last-rendered `<div class="ask-turn">` markup, cached once the turn is SETTLED
+  // (resolved, no error) — `renderTranscript` skips a settled+cached turn entirely (no re-run of
+  // `marked.parse`/DOMPurify, no DOM churn) instead of rebuilding the whole transcript on every call.
+  // Cleared (by never being set) for an in-flight/errored turn, so it keeps re-rendering until settled.
+  renderedHtml?: string;
 }
 
 // View-local, ephemeral session state (F5). The shell mounts once + toggles visibility.
@@ -232,7 +237,10 @@ async function openCitation(container: HTMLElement, turnIndex: number, citeIndex
   } catch (err) {
     t.citeError = err instanceof Error ? err.message : String(err);
   }
-  if (t.citeError) renderTranscript(container);
+  if (t.citeError) {
+    t.renderedHtml = undefined; // #511: invalidate this settled turn's cache — it needs to repaint
+    renderTranscript(container);
+  }
 }
 
 /** Save a completed turn's answer as a KB Output (ASK-6) — once; updates the turn + re-renders. */
@@ -252,6 +260,7 @@ async function saveTurn(container: HTMLElement, index: number): Promise<void> {
   } catch (err) {
     t.saveError = err instanceof Error ? err.message : String(err);
   }
+  t.renderedHtml = undefined; // #511: invalidate this settled turn's cache — it needs to repaint
   renderTranscript(container);
 }
 
@@ -634,6 +643,17 @@ function renderTurn(t: Turn, index: number): string {
   </div>`;
 }
 
+/**
+ * #511: keyed, incremental transcript patching — replaces the old `el.innerHTML = turns.map(...).join('')`
+ * full rebuild, which cost O(N) `marked.parse`/DOMPurify passes on every call (turn N re-sanitized turns
+ * 1..N-1 too, on EVERY event: ask, save, cite-open, progress). Turns are keyed by position (append-only —
+ * they're never reordered/removed except via a whole-array replace on #askNew/loadConv, which this
+ * function still handles correctly since a stale positional node with no matching cache is just
+ * overwritten). A SETTLED turn (resolved, no pending error) caches its rendered markup on `t.renderedHtml`
+ * and is skipped entirely on every later call — zero re-parse, zero DOM touch, so its node stays
+ * reference-identical (openCitation/saveTurn explicitly invalidate the cache when they mutate a settled
+ * turn afterward, so those repaint on demand instead of going stale).
+ */
 function renderTranscript(container: HTMLElement): void {
   const el = container.querySelector<HTMLElement>('#askTranscript');
   if (!el) return;
@@ -642,5 +662,20 @@ function renderTranscript(container: HTMLElement): void {
     el.innerHTML = `<div class="ask-empty"><span class="ask-empty-seal" aria-hidden="true">✦</span><p class="ask-empty-h">Ask your library a question</p><p class="ask-empty-sub">Answers are grounded in your sources, entities, and claims — every one cites where it came from, and you can open it.</p></div>`;
     return;
   }
-  el.innerHTML = turns.map((t, i) => renderTurn(t, i)).join('');
+  if (el.querySelector('.ask-empty')) el.innerHTML = ''; // the first-ever turn just landed — drop the placeholder
+
+  turns.forEach((t, i) => {
+    const existing = el.children[i] as HTMLElement | undefined;
+    if (existing && t.renderedHtml !== undefined) return; // settled + cached — skip (reference-identical)
+    const html = renderTurn(t, i);
+    if (existing) existing.outerHTML = html;
+    else el.insertAdjacentHTML('beforeend', html);
+    // Cache once the turn is no longer in-flight (a result landed, OR the ask itself failed) — either
+    // way it won't change again on its own. `openCitation`/`saveTurn` explicitly bust this cache when
+    // they mutate a settled turn afterward (citeError/saveError/savedRel), so it never goes stale.
+    if (t.result !== null || t.error !== undefined) t.renderedHtml = html;
+  });
+  // Turns only ever grow (or the whole array is replaced, handled above) — but trim defensively in case
+  // a shorter array was ever assigned wholesale (e.g. a future edit) so no stale trailing node lingers.
+  while (el.children.length > turns.length) el.lastElementChild?.remove();
 }
