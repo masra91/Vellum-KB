@@ -56,18 +56,25 @@ const config: ForgeConfig = {
           },
         }
       : {}),
-    // SPEC-0061 T1 (#530): `@electron-forge/plugin-vite` auto-sets `packagerConfig.ignore` to exclude
-    // EVERYTHING except the `/.vite` bundle output (verified empirically: packaging without this
-    // override copies no `node_modules` at all, so an externalized native `require()` — e.g. fsevents,
-    // canvas/path2d, and now better-sqlite3 — resolves to nothing at runtime; `AutoUnpackNativesPlugin`
+    // SPEC-0061 T1 (#530) + #540: `@electron-forge/plugin-vite` auto-sets `packagerConfig.ignore` to
+    // exclude EVERYTHING except the `/.vite` bundle output (verified empirically: packaging without
+    // this override copies no `node_modules` at all, so an externalized native `require()`/dynamic
+    // `import()` — fsevents, better-sqlite3 — resolves to nothing at runtime; `AutoUnpackNativesPlugin`
     // below has nothing to unpack if the native was never copied into the package in the first place).
     // Providing our OWN `ignore` here (which plugin-vite detects and leaves alone, per its own guard)
-    // reproduces its default AND carves out the one runtime dependency closure the library index
-    // needs: `better-sqlite3` itself, `bindings` (resolves the platform `.node` path), and `bindings`'
-    // own dependency `file-uri-to-path`. Extend this list if a future externalized native needs the
-    // same treatment (fsevents/canvas/path2d are optionalDependencies that degrade gracefully when
-    // absent, so they were never actually exercised by this gap — better-sqlite3 is NOT optional, so
-    // packaging it without a copy path would silently ship a library index that can never open).
+    // reproduces its default AND carves out the runtime dependency closures below. Extend this list if
+    // a future externalized native needs the same treatment.
+    //
+    // `canvas`/`path2d` are deliberately NOT here (#540): they're pdfjs-dist's OPTIONAL Node canvas
+    // polyfill deps, referenced only via `await import(...)` wrapped in try/catch at module load —
+    // verified in node_modules/pdfjs-dist/legacy/build/pdf.mjs — used solely to polyfill
+    // `DOMMatrix`/`Path2D` for pdfjs's RENDERING path. MEDIA-8 (mediaExtract.ts) only ever calls
+    // `getDocument().getPage().getTextContent()`, never rendering, so a failed dynamic import here is
+    // fully inert (pdfjs itself catches it and just warns "rendering may be broken" — never thrown,
+    // never hit). `canvas` isn't even installed in this repo's node_modules today and nothing breaks.
+    // Externalizing them (vite.main.config.ts) without a copy path is therefore the CORRECT permanent
+    // state, not a gap: adding a copy path would ship a heavy native module (canvas needs cairo/pango)
+    // for a code path that never runs.
     ignore: (file: string) => {
       if (!file) return false;
       if (file.startsWith('/.vite')) return false;
@@ -75,7 +82,18 @@ const config: ForgeConfig = {
       // itself (and every ancestor of a kept dep below) must return `false` (don't prune here) even
       // though its OTHER children are excluded individually.
       if (file === '/node_modules') return false;
-      const RUNTIME_NATIVE_DEPS = ['better-sqlite3', 'bindings', 'file-uri-to-path'];
+      const RUNTIME_NATIVE_DEPS = [
+        'better-sqlite3',
+        'bindings',
+        'file-uri-to-path',
+        // #540: chokidar's macOS-only native fs-event accelerator (SPEC-0037 WATCH). Externalized in
+        // vite.main.config.ts but — unlike canvas/path2d — genuinely exercised at runtime (chokidar's
+        // real watcher, not a dead code path): without a copy path it silently degrades every shipped
+        // macOS build to polling, which this carve-out fixes. `os: ["darwin"]` in its own package.json
+        // means it's simply absent from `node_modules` (and this walk) on any other platform — safe to
+        // list unconditionally.
+        'fsevents',
+      ];
       if (RUNTIME_NATIVE_DEPS.some((dep) => file === `/node_modules/${dep}` || file.startsWith(`/node_modules/${dep}/`))) return false;
       return true;
     },

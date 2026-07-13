@@ -266,6 +266,20 @@ jobs:
             exit 1
           fi
           echo "better-sqlite3 native unpacked OK: $hit"
+      # #540: the actual class of break this job exists to catch (#247) had NO assertion of its own —
+      # only the generic "app launches" check above, which can't distinguish a real native-fs-events
+      # build from one silently degraded to chokidar's polling fallback (SPEC-0037 WATCH). fsevents is
+      # `os: ["darwin"]`-only, so this can only run on the macOS leg.
+      - name: Assert fsevents was unpacked into app.asar.unpacked (#540)
+        shell: bash
+        run: |
+          hit=$(find out -path '*/app.asar.unpacked/*/fsevents/fsevents.node' 2>/dev/null | head -n1)
+          if [ -z "$hit" ]; then
+            echo "::error::fsevents.node not found under any app.asar.unpacked/ — a shipped macOS build would silently degrade WATCH to polling. externalize/auto-unpack-natives regression?"
+            find out -iname '*.node' || true
+            exit 1
+          fi
+          echo "fsevents native unpacked OK: $hit"
 
   e2e:
     name: e2e (packaged smoke) — phased / opt-in
