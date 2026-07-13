@@ -143,6 +143,15 @@ interface ActivePipeline {
   watch: WatchScheduler; // SPEC-0037: live folder watchers (stable files → primary sources, non-destructive)
   lock: Mutex;
   promoter: CoalescingPromoter; // STAGING-12: coalesces per-drain promotion into infrequent batched bursts
+  // BUG-11 (#518): consecutive coalesced-promote failures + the last error, since we started force-
+  // flushing for the current quiesce. Bounds `quiesceStatusForActive`'s auto-flush (below) so a
+  // persistently-failing promote() doesn't get hammered every ~1s poll forever — after
+  // MAX_QUIESCE_FLUSH_ATTEMPTS we stop forcing an immediate retry and surface the real cause instead of
+  // an eternal "Publishing…". The underlying promoter still retries on its own quiescent/max-wait cadence
+  // (`runPromote`'s `if (dirty) arm()`) — a later success resets this back to 0. A plain mutable object
+  // (not fields directly on `active`) so the promoter's closures — created before `active` is assigned —
+  // mutate ONE fixed target rather than the swappable `active` singleton.
+  quiesceFlush: { attempts: number; error: string | null };
   log: DevLog; // the vault dev-log — reused by Run-now so a researcher failure is logged (#160)
   quiescing: boolean; // SPEC-0045 QUIESCE: true once "Prepare for shutdown" paused new work (drain in progress)
   // #506: the status tick used to re-walk decompose/connect/claims' queues + conversion counts + set-
@@ -165,6 +174,9 @@ interface ActivePipeline {
 // "calm-vault" backoff is the tracked follow-up.)
 const PROMOTE_QUIESCENT_MS = 30_000; // 30s of quiet → promote
 const PROMOTE_MAX_WAIT_MS = 180_000; // …but at least every 3 min under a continuous drain
+// BUG-11 (#518): how many consecutive forced flushes `quiesceStatusForActive` will attempt before it
+// gives up hammering promote() every poll and defers to the promoter's own (much slower) backoff.
+export const MAX_QUIESCE_FLUSH_ATTEMPTS = 3;
 
 let active: ActivePipeline | null = null;
 
@@ -264,6 +276,10 @@ export async function quiesceActive(): Promise<QuiesceStatus> {
   if (!active) return { quiescing: false, remaining: 0, safe: false, detail: 'No library is open.' };
   if (!active.quiescing) {
     active.quiescing = true;
+    // BUG-11 (#518): a fresh quiesce gets a fresh bounded-retry budget — a failure from a PRIOR
+    // shutdown attempt (that the Principal then resumed from) shouldn't poison this one.
+    active.quiesceFlush.attempts = 0;
+    active.quiesceFlush.error = null;
     stopProducers(active);
     active.log.child({ scope: 'quiesce' }).info('quiesce.start', { why: 'Principal requested Prepare for shutdown' });
   }
@@ -284,6 +300,31 @@ export async function resumeActive(): Promise<QuiesceStatus> {
 /** Is the active pipeline quiescing? (the capture path checks this to pause new ingestion, QUIESCE-1). */
 export function isActiveQuiescing(): boolean {
   return active?.quiescing === true;
+}
+
+/**
+ * BUG-11 (#518): the flush-bounding + `detail` decision, pulled out pure (no I/O) so it's directly
+ * testable without spinning up a whole pipeline. See the call site below for the retry-storm history.
+ */
+export function quiesceFlushDecision(
+  quiescing: boolean,
+  remaining: number,
+  promotePending: boolean,
+  flush: { attempts: number; error: string | null },
+): { shouldFlush: boolean; safe: boolean; detail: string } {
+  const flushExhausted = flush.attempts >= MAX_QUIESCE_FLUSH_ATTEMPTS;
+  const shouldFlush = quiescing && remaining === 0 && promotePending && !flushExhausted;
+  const safe = quiescing && remaining === 0 && !promotePending;
+  const detail = !quiescing
+    ? 'Running normally.'
+    : safe
+      ? 'Safe to shut down — all work finished.'
+      : remaining === 0 && promotePending && flushExhausted
+        ? `Couldn't publish — ${flush.error ?? 'the last changes to your library are stuck.'}` // BUG-11: honest failure instead of an eternal "Publishing…"
+        : remaining === 0 && promotePending
+          ? 'Publishing the last changes to your library…'
+          : `Finishing up — ${remaining} item${remaining === 1 ? '' : 's'} remaining…`; // "items" matches Status/tray vocab (Design-Lead)
+  return { shouldFlush, safe, detail };
 }
 
 /**
@@ -313,16 +354,18 @@ export async function quiesceStatusForActive(): Promise<QuiesceStatus | null> {
   // STAGING-12: a pending coalesced promotion means `main` still owes its last batch — NOT safe to quit
   // yet. When everything else is idle, flush it now (don't wait the debounce window) so the vault is
   // current and "safe" is reached promptly + honestly.
+  //
+  // BUG-11 (#518): settingsView polls this every ~1s while quiescing, and `flushNow()` never throws (a
+  // failed promote() is swallowed internally — see coalescingPromoter's onError/dirty-retry). Calling it
+  // unconditionally forced an IMMEDIATE retry on every single poll — bypassing the promoter's own
+  // debounce/cap backoff entirely — with the failure never surfaced beyond a dev-log line, so a
+  // persistently-failing promote() looked like a permanently-stuck "Publishing…" and hammered promote()
+  // forever. Now bounded: stop forcing an immediate retry after MAX_QUIESCE_FLUSH_ATTEMPTS consecutive
+  // failures (the promoter still retries on its own slower cadence in the background) and report the
+  // real cause instead of pretending it's still in progress.
   const promotePending = active.promoter.pending();
-  if (quiescing && remaining === 0 && promotePending) void active.promoter.flushNow();
-  const safe = quiescing && remaining === 0 && !promotePending;
-  const detail = !quiescing
-    ? 'Running normally.'
-    : safe
-      ? 'Safe to shut down — all work finished.'
-      : remaining === 0 && promotePending
-        ? 'Publishing the last changes to your library…'
-        : `Finishing up — ${remaining} item${remaining === 1 ? '' : 's'} remaining…`; // "items" matches Status/tray vocab (Design-Lead)
+  const { shouldFlush, safe, detail } = quiesceFlushDecision(quiescing, remaining, promotePending, active.quiesceFlush);
+  if (shouldFlush) void active.promoter.flushNow();
   return { quiescing, remaining, safe, detail };
 }
 
@@ -430,13 +473,24 @@ export async function startPipeline(vaultPath: string): Promise<Orchestrator> {
   // promotes directly — it REQUESTS a promotion, and the coalescer publishes in infrequent batched
   // bursts (debounced by a quiescent window; capped so continuous processing still publishes), each a
   // single commit run serialized under the canonical-writer lock (STAGING-3). Obsidian settles between.
+  // BUG-11 (#518): tracks consecutive promote() failures + the last cause, so `quiesceStatusForActive`
+  // can bound its forced-flush retries and surface an honest "Couldn't publish — <cause>" instead of
+  // hammering promote() every ~1s poll forever. A fixed object (not `active.quiesceFlush` directly) —
+  // this closure is created before `active` is assigned below.
+  const quiesceFlush: { attempts: number; error: string | null } = { attempts: 0, error: null };
   const promoter = createCoalescingPromoter({
     promote: async () => {
       await lock.run(() => promote(vaultPath, undefined, undefined, log.child({ scope: 'promote' })), 'coalesced:promote'); // STAGING-12 coalesced; log surfaces ORCH-27 stale-lock heal
+      quiesceFlush.attempts = 0;
+      quiesceFlush.error = null;
     },
     quiescentMs: PROMOTE_QUIESCENT_MS,
     maxWaitMs: PROMOTE_MAX_WAIT_MS,
-    onError: (err) => log.child({ scope: 'promote' }).warn('promote.coalesced-failed', { itemId: vaultPath, err }),
+    onError: (err) => {
+      log.child({ scope: 'promote' }).warn('promote.coalesced-failed', { itemId: vaultPath, err });
+      quiesceFlush.attempts += 1;
+      quiesceFlush.error = err instanceof Error ? err.message : String(err);
+    },
   });
   // The promotion gate: publish the evergreen subset staging→main (SPEC-0021 STAGING-3/4). A stage
   // runs it after a drain that changed an evergreen path (archive→sources; connect→entities); per
@@ -549,6 +603,7 @@ export async function startPipeline(vaultPath: string): Promise<Orchestrator> {
     watch,
     lock,
     promoter,
+    quiesceFlush,
     log,
     quiescing: false,
     statusCache: {
