@@ -12,6 +12,7 @@
 import { esc } from '../html';
 import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import { createVisibilityPoll, type VisibilityPoll } from '../visibilityPoll';
+import { drillChevronHtml, wireDrillIn, pastRunsPlaceholderHtml, detailRowHtml } from './agentDrillIn';
 import type { ViewHandle } from '../viewLifecycle';
 import type { AgentView, ModelCatalogView } from '../../kb/types';
 
@@ -19,6 +20,7 @@ import type { AgentView, ModelCatalogView } from '../../kb/types';
 // header/naming, so this section renders the librarian grid (the global default-model control above it).
 export function mountAgents(container: HTMLElement): ViewHandle {
   paintSkeleton(container, '', 'cards');
+  wireDrillIn(container); // VUX-17: delegated on the container (survives re-render) — wire once, not per-render.
   let poll: VisibilityPoll | null = null;
   // #509 fixed the wrong-element visibility bug (this container is the Librarians SECTION nested inside
   // the Agents hub, not the shell's outer `.view` — `createVisibilityPoll`'s ancestor-aware check handles
@@ -158,12 +160,30 @@ function agentCard(a: AgentView, catalog: ModelCatalogView | null): string {
           <div class="ag-kind">${esc(a.role)}</div>
         </div>
         ${statePill(a.status)}
+        ${drillChevronHtml(a.label)}
       </div>
       <div class="ag-foot">
         <span class="ag-last"><span class="path">${esc(a.instructions)}</span></span>
       </div>
       ${modelDisclosure(a, catalog)}
+      ${agentDetailHtml(a)}
     </article>`;
+}
+
+/** VUX-17 detail panel — identity + current config, all from AgentView's existing fields (nothing
+ *  fabricated). Librarians have the thinnest data of the three hub sections; everything here already
+ *  shows on the card face too — the drill-in exists for interaction CONSISTENCY across Librarians/
+ *  Schedules/Researchers (the ratified design decision), not because this item type hides anything. */
+function agentDetailHtml(a: AgentView): string {
+  return `<div class="ag-detail" hidden>
+    <div class="ag-detail-rows">
+      ${detailRowHtml('Role', a.role)}
+      ${detailRowHtml('Status', a.status === 'running' ? 'Running' : 'Idle')}
+      ${detailRowHtml('Model', a.model)}
+      ${detailRowHtml('Instructions', a.instructions)}
+    </div>
+    ${pastRunsPlaceholderHtml()}
+  </div>`;
 }
 
 /** The live state pill (status-first, PANEL-9): running flies the continuous LOOM mark; idle is a calm

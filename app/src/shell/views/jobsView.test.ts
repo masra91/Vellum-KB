@@ -233,6 +233,42 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
     expect(root.querySelector('.load-error')?.textContent).toContain('Couldn’t load'); // retryable fallback (#145)
     expect(root.querySelector('.load-retry')).toBeTruthy();
   });
+
+  // VUX-17 (#524 §5) — every card gets a chevron cue + click-to-open detail (identity + current config).
+  describe('VUX-17 drill-in shell', () => {
+    it('clicking the chevron opens the detail with schedule/autonomy/state + most-recent-run + placeholder', async () => {
+      setApi({
+        listJobs: vi.fn(async () => [
+          job({ id: 'reflect', schedule: 'hourly', posture: 'autonomous', enabled: true, lastRun: { ts: '2026-06-02T07:00:00.000Z', inspected: 'entities/', applied: 1, deferred: 0 } }),
+        ]),
+        setJobConfig: vi.fn(),
+        runJobNow: vi.fn(),
+      });
+      mountJobs(root).show?.();
+      await tick();
+      const row = li(root, 'reflect');
+      const chev = row.querySelector<HTMLButtonElement>('.ag-drill')!;
+      expect(chev.getAttribute('aria-expanded')).toBe('false');
+      chev.click();
+      const detail = row.querySelector<HTMLElement>('.ag-detail')!;
+      expect(detail.hidden).toBe(false);
+      expect(chev.getAttribute('aria-expanded')).toBe('true');
+      expect(detail.textContent).toContain('Hourly');
+      expect(detail.textContent).toContain('Autonomous');
+      expect(detail.textContent).toContain('Enabled');
+      expect(detail.textContent).toContain('2026-06-02T07:00:00.000Z'); // the one real run we have
+      expect(detail.textContent).toContain('available yet'); // disclosed placeholder for deeper history
+    });
+
+    it('does NOT open the detail when clicking an existing control (arm switch, schedule segment, Run now)', async () => {
+      setApi({ listJobs: vi.fn(async () => [job({ id: 'reflect' })]), setJobConfig: vi.fn(), runJobNow: vi.fn() });
+      mountJobs(root).show?.();
+      await tick();
+      const row = li(root, 'reflect');
+      row.querySelector<HTMLButtonElement>('.job-enabled')!.click();
+      expect(row.querySelector<HTMLElement>('.ag-detail')?.hidden).toBe(true);
+    });
+  });
 });
 
 describe('Jobs view · WS2 — composes the shared design-system primitives (no generic chrome)', () => {

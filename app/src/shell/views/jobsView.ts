@@ -14,6 +14,7 @@
 import { esc } from '../html';
 import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import { schedulePresetLabel, SCHEDULE_OPTIONS, isRiskyJobChange } from '../../kb/jobsPanel';
+import { drillChevronHtml, wireDrillIn, pastRunsPlaceholderHtml, detailRowHtml } from './agentDrillIn';
 import type { ViewHandle } from '../viewLifecycle';
 import type { JobView, JobConfigPatch } from '../../kb/types';
 
@@ -26,6 +27,7 @@ const HEADER = `<p class="job-sub viz-body">Recurring background tasks that keep
 
 export function mountJobs(container: HTMLElement): ViewHandle {
   paintSkeleton(container, HEADER, 'cards');
+  wireDrillIn(container); // VUX-17: delegated on the container (survives re-render) — wire once, not per-render.
   return { show: () => void render(container) }; // #510: re-read on every activation (no timers here)
 }
 
@@ -87,6 +89,7 @@ function jobItem(j: JobView): string {
       <div class="job-head">
         <span class="job-label">${esc(j.label)}</span>${badge}
         <button type="button" class="job-enabled viz-focusable" role="switch" aria-checked="${j.enabled ? 'true' : 'false'}"><span class="dot" aria-hidden="true"></span>${j.enabled ? 'Enabled' : 'Paused'}</button>
+        ${drillChevronHtml(j.label)}
       </div>
       <p class="job-desc viz-body">${esc(j.description)}</p>
       <div class="job-controls">
@@ -101,7 +104,24 @@ function jobItem(j: JobView): string {
         <button type="button" class="viz-btn viz-btn--danger job-confirm-go">Confirm</button>
       </div>
       <p class="job-status viz-body" role="status" aria-live="polite"></p>
+      ${jobDetailHtml(j, last)}
     </li>`;
+}
+
+/** VUX-17 detail panel — identity + current config from JobView's existing fields, plus the single
+ *  most-recent run (already computed as `last` above) ahead of the "earlier history" placeholder — an
+ *  honest representation of "we have one data point, not a timeline". Everything here is already
+ *  editable inline above; this exists for interaction consistency across the hub, not to hide config. */
+function jobDetailHtml(j: JobView, lastRunLine: string): string {
+  return `<div class="ag-detail" hidden>
+    <div class="ag-detail-rows">
+      ${detailRowHtml('Schedule', schedulePresetLabel(j.schedule))}
+      ${detailRowHtml('Autonomy', POSTURE_LABEL[j.posture] ?? j.posture)}
+      ${detailRowHtml('State', j.enabled ? 'Enabled' : 'Paused')}
+      ${detailRowHtml('Most recent run', lastRunLine)}
+    </div>
+    ${pastRunsPlaceholderHtml()}
+  </div>`;
 }
 
 function wire(container: HTMLElement, jobs: JobView[]): void {
