@@ -8,58 +8,22 @@
 // CAPTURE-10) — the point is to PROVE the disposable-session + parse + fallback pattern
 // that Enrich's richer agents will reuse. The subprocess is injectable so CI stays
 // deterministic and never needs real credentials.
-import { execFile } from 'node:child_process';
 import { extractBalancedJson } from './jsonExtract';
-import { promisify } from 'node:util';
-import { withCopilotSlot } from './copilotConcurrency';
 import type { CapturedMeta } from './ingest';
 import { type ArchiveDecision, type ArchivistDecider, deterministicDecide } from './archivist';
-import { COPILOT_OP } from './tracing';
 import { detectCopilot } from './copilot';
-import { resolveCopilotModel } from './copilotModel';
-import { runWithModelFallback } from './copilotLaunch';
-import { runWithSelfRepair, appendRepairInstruction } from './selfRepair';
+import {
+  makeDefaultCopilotRunner,
+  runDeciderScaffold,
+  makeAvailabilityGate,
+  launchFlags,
+  type CopilotRunner,
+  type DeciderFailureInfo,
+} from './deciderScaffold';
 
-const exec = promisify(execFile);
 const COPILOT_TIMEOUT_MS = 60_000;
 
-/** Injectable runner: given the composed prompt (+ optional working directory + model override),
- *  return the session's stdout. `cwd` scopes the Copilot subprocess to the staging worktree; `model`
- *  (when given) is the exact `--model` id to launch with — the model-fallback wrapper passes `auto`
- *  here on a retry. Omitting `model` falls back to the in-app pin. */
-export type CopilotRunner = (prompt: string, cwd?: string, model?: string) => Promise<string>;
-
-/** Launch flags (excludes `-p <prompt>`); recorded verbatim in the AgentTrace. The model is
- *  pinned in-app (ORCH-16) — see `copilotModel.ts`. Because we always pass `--model`, prod no
- *  longer silently inherits `~/.copilot/settings.json` and the recorded model is the real one
- *  that ran (never `default`); the eval harness still overrides it per variant. `model` lets the
- *  fallback wrapper launch with `auto` when the pinned id is rejected (recorded as the real model). */
-function launchFlags(model: string = resolveCopilotModel()): string[] {
-  return ['--no-ask-user', '--model', model];
-}
-
-const defaultRunner: CopilotRunner = async (prompt, cwd, model) =>
-  // Acquire one global copilot slot so concurrent (cap>1) stage drains can't fan out past the
-  // process-wide ceiling (dogfood #4 / copilotConcurrency).
-  withCopilotSlot(async () => {
-    try {
-      // COPILOT-CONTEXT-SCOPE-BUG: run in the staging worktree (`cwd`) so Copilot's workspace
-      // scan (`tgrep count-files`) is rooted here, NOT the filesystem root. With no cwd the
-      // subprocess inherits Electron's cwd (`/` in a packaged app) → a runaway root scan.
-      // `cwd: undefined` (tests / unscoped) behaves exactly as before (inherits parent cwd).
-      const { stdout } = await exec('copilot', ['-p', prompt, ...launchFlags(model)], {
-        timeout: COPILOT_TIMEOUT_MS,
-        maxBuffer: 4 * 1024 * 1024,
-        cwd,
-      });
-      return stdout;
-    } catch (err) {
-      // Surface the subprocess stderr on the error so the failure trace records the real cause (OBS-4).
-      const stderr = (err as { stderr?: unknown }).stderr;
-      if (err instanceof Error && stderr) err.message += `\n[copilot stderr] ${String(stderr).slice(0, 2000)}`;
-      throw err;
-    }
-  }, { stage: 'archive' }); // SCALE-3: tag the stage so the ceiling reserves it a slot
+export type { CopilotRunner };
 
 /** The versioned per-stage instruction template (SPEC-0014 Q9), composed per item. */
 export function buildPrompt(meta: CapturedMeta): string {
@@ -108,57 +72,52 @@ export interface CopilotDeciderOptions {
 /**
  * Build the production archivist decider: a fresh Copilot session per item, falling back
  * to the deterministic decision whenever Copilot is unavailable or misbehaves. Never
- * throws — always yields a decision so the orchestrator proceeds.
+ * throws — always yields a decision so the orchestrator proceeds. This is the one decider
+ * that WRAPS the shared scaffold in its own try/catch (rather than letting a failure
+ * propagate) — the archivist is the only decider with a non-agent floor (ORCH-8).
  */
 export function makeCopilotDecider(opts: CopilotDeciderOptions = {}): ArchivistDecider {
-  const run = opts.run ?? defaultRunner;
+  const run = opts.run ?? makeDefaultCopilotRunner({ stage: 'archive', timeoutMs: COPILOT_TIMEOUT_MS, maxBufferBytes: 4 * 1024 * 1024 });
   const cwd = opts.vaultPath; // staging worktree → Copilot subprocess cwd (COPILOT-CONTEXT-SCOPE-BUG)
-  let available: boolean | null = opts.available ?? null;
+  const isAvailable = makeAvailabilityGate(opts.available, detectCopilot);
   return async (meta, ctx) => {
-    if (available === null) {
-      try {
-        available = (await detectCopilot()).available;
-      } catch {
-        available = false;
-      }
-    }
-    if (!available) {
+    if (!(await isAvailable())) {
       return { ...deterministicDecide(meta), agent: { via: 'deterministic', error: 'copilot unavailable' } };
     }
-
-    // ORCH-16: record what we launched and what happened on every model invocation. `modelUsed`
-    // starts at the pin and is rewritten to `auto` if the pinned id is rejected and we fall back —
-    // so the trace records the model that ACTUALLY ran, making a silent pin-drift visible.
-    let modelUsed = resolveCopilotModel(undefined, 'archivist'); // SPEC-0048: per-agent pin, else global
-    const at = new Date().toISOString();
-    const t0 = Date.now();
-    // OBS-13: time the Copilot call as a child of the stage's run span (failures included; the
-    // archivist falls back rather than throwing, so the span ends `error` without re-throwing).
-    const cs = ctx?.span?.child(COPILOT_OP);
-    // HEAL-1: self-repair tries to converge on a parseable decision (re-prompt with the error fed back,
-    // bounded) BEFORE the archivist's deterministic fallback — so a slightly-off response is corrected
-    // rather than discarded to the conservative default. A launch/timeout error still falls back as before.
-    const basePrompt = buildPrompt(meta);
-    let repairs = 0;
+    // `onFailure` hands back the same model/params/timing/repair bookkeeping the success path would
+    // have stamped, so the deterministic-fallback trace below is just as informative as before —
+    // without the archivist reimplementing that bookkeeping itself.
+    let failure: DeciderFailureInfo | undefined;
     try {
-      const { value: decision } = await runWithSelfRepair(
-        (repair) =>
-          runWithModelFallback((m) => run(repair ? appendRepairInstruction(basePrompt, repair) : basePrompt, cwd, m), {
-            agentKey: 'archivist',
-            onFallback: (_from, to) => {
-              modelUsed = to;
-            },
-          }),
-        (stdout) => parseDecision(stdout, meta),
-        { onRepair: () => { repairs += 1; } },
-      );
-      cs?.end('ok');
-      return { ...decision, agent: { via: 'copilot', runtime: 'copilot', model: modelUsed, params: launchFlags(modelUsed), ok: true, ms: Date.now() - t0, at, ...(repairs > 0 ? { repairs } : {}) } };
+      const { value: decision, agent } = await runDeciderScaffold({
+        agentKey: 'archivist',
+        buildPrompt: () => buildPrompt(meta),
+        parse: (stdout) => parseDecision(stdout, meta),
+        run,
+        cwd,
+        ctx,
+        onFailure: (info) => {
+          failure = info;
+        },
+      });
+      return { ...decision, agent };
     } catch (err) {
       // ORCH-8 resilience: fall back, but record the failure for posterity.
-      cs?.end('error');
       const error = err instanceof Error ? err.message : String(err);
-      return { ...deterministicDecide(meta), agent: { via: 'deterministic', runtime: 'copilot', model: modelUsed, params: launchFlags(modelUsed), ok: false, error, ms: Date.now() - t0, at, ...(repairs > 0 ? { repairs } : {}) } };
+      return {
+        ...deterministicDecide(meta),
+        agent: {
+          via: 'deterministic',
+          runtime: 'copilot',
+          model: failure?.model ?? '',
+          params: failure?.params ?? launchFlags(),
+          ok: false,
+          error,
+          ms: failure?.ms ?? 0,
+          at: failure?.at ?? new Date().toISOString(),
+          ...(failure && failure.repairs > 0 ? { repairs: failure.repairs } : {}),
+        },
+      };
     }
   };
 }

@@ -23,6 +23,7 @@ export const AGENT_CATALOG: AgentCatalogEntry[] = [
   { key: 'decompose', label: 'Decompose', role: 'Extracts candidate entities from each source.', instructions: 'kb/decomposeAgent.ts', agentBacked: true },
   { key: 'connect', label: 'Connect', role: 'Resolves candidates into canonical entities and links them.', instructions: 'kb/connectAgent.ts', agentBacked: true },
   { key: 'claims', label: 'Claims', role: 'Derives claims for entities and raises reviews when unsure.', instructions: 'kb/claimsAgent.ts', agentBacked: true },
+  { key: 'compose', label: 'Compose', role: 'Writes grounded, cited prose for each entity from its claims.', instructions: 'kb/composeAgent.ts', agentBacked: true },
   { key: 'recall', label: 'Recall (Ask)', role: 'Answers grounded questions over your library on demand.', instructions: 'kb/recallAgent.ts', agentBacked: true },
   { key: 'reflect', label: 'Reflect', role: 'Periodic rumination — surfaces missed structure, links, and stale topics.', instructions: 'kb/reflectAgent.ts', agentBacked: true },
 ];

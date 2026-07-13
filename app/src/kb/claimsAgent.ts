@@ -7,20 +7,13 @@
 // fabricates output: a bad/absent session must NOT invent claims (that would pollute the
 // graph). On any failure the decider throws and the stage treats it as a failed attempt
 // (retry, then set aside; CLAIMS-12 / ORCH-12).
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { withCopilotSlot } from './copilotConcurrency';
 import { detectCopilot } from './copilot';
-import { resolveCopilotModel } from './copilotModel';
-import { runWithModelFallback } from './copilotLaunch';
-import { runWithSelfRepair, appendRepairInstruction } from './selfRepair';
 import { UNTRUSTED_SOURCE_SKILL, UNTRUSTED_SOURCE_DELIMITER_NOTE } from './untrustedSource';
 import { parseClaimsDecision, type ClaimsDecision, CLAIM_STATUSES } from './claims';
 import type { SourceInput } from './decomposeAgent';
-import type { AgentTrace } from './archivist';
-import { COPILOT_OP, type SpanCtx } from './tracing';
+import { makeDefaultCopilotRunner, runDeciderScaffold, makeAvailabilityGate, type CopilotRunner } from './deciderScaffold';
+import type { SpanCtx } from './tracing';
 
-const exec = promisify(execFile);
 const COPILOT_TIMEOUT_MS = 120_000; // reading a whole source for substance takes time
 
 /** A review the Principal has already answered, fed back to a resumed re-run (REVIEW-6). */
@@ -44,39 +37,7 @@ export interface EntityInput {
 /** A decider maps an entity (+ its source) to a validated claims decision. May throw (CLAIMS-12). */
 export type ClaimsDecider = (input: EntityInput, ctx?: SpanCtx) => Promise<ClaimsDecision>;
 
-/** Injectable runner: given the composed prompt (+ optional working directory), return the
- *  session's stdout. `cwd` scopes the Copilot subprocess to the staging worktree. */
-export type CopilotRunner = (prompt: string, cwd?: string, model?: string) => Promise<string>;
-
-/** Launch flags (excludes `-p <prompt>`); recorded verbatim in the AgentTrace (ORCH-16). The
- *  model is pinned in-app so prod never silently inherits `~/.copilot/settings.json`. `model` lets
- *  the fallback wrapper launch with `auto` when the pinned id is rejected (recorded as the real model). */
-function launchFlags(model: string = resolveCopilotModel()): string[] {
-  return ['--no-ask-user', '--model', model];
-}
-
-const defaultRunner: CopilotRunner = async (prompt, cwd, model) =>
-  // Acquire one global copilot slot so concurrent (cap>1) stage drains can't fan out past the
-  // process-wide ceiling (dogfood #4 / copilotConcurrency).
-  withCopilotSlot(async () => {
-    try {
-      // COPILOT-CONTEXT-SCOPE-BUG: run in the staging worktree (`cwd`) so Copilot's workspace
-      // scan (`tgrep count-files`) is rooted here, NOT the filesystem root. With no cwd the
-      // subprocess inherits Electron's cwd (`/` in a packaged app) → a runaway root scan.
-      // `cwd: undefined` (tests / unscoped) behaves exactly as before (inherits parent cwd).
-      const { stdout } = await exec('copilot', ['-p', prompt, ...launchFlags(model)], {
-        timeout: COPILOT_TIMEOUT_MS,
-        maxBuffer: 8 * 1024 * 1024,
-        cwd,
-      });
-      return stdout;
-    } catch (err) {
-      // Surface the subprocess stderr on the error so the stage's dev-log records the real cause (OBS-4).
-      const stderr = (err as { stderr?: unknown }).stderr;
-      if (err instanceof Error && stderr) err.message += `\n[copilot stderr] ${String(stderr).slice(0, 2000)}`;
-      throw err;
-    }
-  }, { stage: 'claims' }); // SCALE-3: tag the stage so the ceiling reserves it a slot
+export type { CopilotRunner };
 
 /** The versioned per-stage instruction template (SPEC-0014 Q9 / SPEC-0016 §3.1), composed
  *  per entity. Signal `type` is an OPEN nudge in prose (CLAIMS-13); claim `status` is a
@@ -181,49 +142,19 @@ export interface ClaimsDeciderOptions {
  * sets the entity aside (CLAIMS-12). Stamps an ORCH-16 AgentTrace onto the returned decision.
  */
 export function makeClaimsDecider(opts: ClaimsDeciderOptions = {}): ClaimsDecider {
-  const run = opts.run ?? defaultRunner;
+  const run = opts.run ?? makeDefaultCopilotRunner({ stage: 'claims', timeoutMs: COPILOT_TIMEOUT_MS });
   const cwd = opts.vaultPath; // staging worktree → Copilot subprocess cwd (COPILOT-CONTEXT-SCOPE-BUG)
-  let available: boolean | null = opts.available ?? null;
+  const isAvailable = makeAvailabilityGate(opts.available, detectCopilot);
   return async (input, ctx) => {
-    if (available === null) {
-      try {
-        available = (await detectCopilot()).available;
-      } catch {
-        available = false;
-      }
-    }
-    if (!available) throw new Error('claims: copilot unavailable');
-
-    // ORCH-16: `modelUsed` starts at the pin and is rewritten to `auto` if the pinned id is rejected
-    // and we fall back — so the trace records the model that ACTUALLY ran (a silent pin-drift is visible).
-    let modelUsed = resolveCopilotModel(undefined, 'claims'); // SPEC-0048: per-agent pin, else global
-    const at = new Date().toISOString();
-    const t0 = Date.now();
-    // OBS-13: time the Copilot call as a child of the stage's run span (failures included).
-    const cs = ctx?.span?.child(COPILOT_OP);
-    // HEAL-1: self-repair wraps the launch — on a parse/validation failure, re-prompt with the error
-    // fed back (bounded). A launch/timeout/systemic error from `run` is NOT a parse error and
-    // propagates so the stage's set-aside + #256 breaker still see it (HEAL-6 boundary).
-    const basePrompt = buildClaimsPrompt(input);
-    let repairs = 0;
-    try {
-      const { value: decision } = await runWithSelfRepair(
-        (repair) =>
-          runWithModelFallback((m) => run(repair ? appendRepairInstruction(basePrompt, repair) : basePrompt, cwd, m), {
-            agentKey: 'claims',
-            onFallback: (_from, to) => {
-              modelUsed = to;
-            },
-          }),
-        (stdout) => parseClaimsDecision(stdout, input.entityId),
-        { onRepair: () => { repairs += 1; } },
-      );
-      cs?.end('ok');
-      const agent: AgentTrace = { via: 'copilot', runtime: 'copilot', model: modelUsed, params: launchFlags(modelUsed), ok: true, ms: Date.now() - t0, at, ...(repairs > 0 ? { repairs } : {}) };
-      return { ...decision, agent };
-    } catch (e) {
-      cs?.end('error');
-      throw e;
-    }
+    if (!(await isAvailable())) throw new Error('claims: copilot unavailable');
+    const { value: decision, agent } = await runDeciderScaffold({
+      agentKey: 'claims',
+      buildPrompt: () => buildClaimsPrompt(input),
+      parse: (stdout) => parseClaimsDecision(stdout, input.entityId),
+      run,
+      cwd,
+      ctx,
+    });
+    return { ...decision, agent };
   };
 }

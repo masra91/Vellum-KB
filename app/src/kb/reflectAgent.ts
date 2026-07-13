@@ -3,17 +3,12 @@
 // with NO tools (a single pass, not KB-traversing/multi-hop — so CLI, not the SDK, per #43): it
 // returns a JSON verdict of findings and the orchestrator (JobStage) does every effect. There is
 // NO fabricating fallback — a bad/absent session throws and the job run is treated as a failed pass.
-import { execFile } from 'node:child_process';
 import { extractBalancedJson } from './jsonExtract';
-import { promisify } from 'node:util';
-import { withCopilotSlot } from './copilotConcurrency';
 import { detectCopilot } from './copilot';
-import { resolveCopilotModel } from './copilotModel';
-import { runWithModelFallback } from './copilotLaunch';
-import { runWithSelfRepair, appendRepairInstruction } from './selfRepair';
 import { normalizeStatement as normalizeStatementForCompare } from './directives';
+import { makeDefaultCopilotRunner, runDeciderScaffold, makeAvailabilityGate, type CopilotRunner } from './deciderScaffold';
+import type { AgentTrace } from './archivist';
 
-const exec = promisify(execFile);
 const COPILOT_TIMEOUT_MS = 120_000;
 
 /** A node in the working set the agent ruminates over (a bounded slice — never the whole KB). */
@@ -58,31 +53,15 @@ export interface ReflectFinding {
 export interface ReflectResult {
   inspected: string; // what this pass looked at (for audit + journal)
   findings: ReflectFinding[];
+  /** #528 bug 2 fix: ORCH-16 provenance — previously never built (Reflect passes had zero record of
+   *  which model ran, timing, or self-repair rounds, unlike every other decider's decision). */
+  agent?: AgentTrace;
 }
 
 /** A reflect decider maps a working set to findings. May throw (no fabrication). Injectable for tests. */
 export type ReflectDecider = (ctx: ReflectContext) => Promise<ReflectResult>;
 
-/** Injected runner: given the composed prompt (+ optional working directory), return the session's
- *  stdout (tests stub this). `cwd` scopes the Copilot subprocess to the staging worktree. */
-export type CopilotRunner = (prompt: string, cwd?: string, model?: string) => Promise<string>;
-
-/** Launch flags (excludes `-p <prompt>`). The model is pinned in-app (ORCH-16) so prod never
- *  silently inherits `~/.copilot/settings.json`. `model` lets the fallback wrapper launch with
- *  `auto` when the pinned id is rejected. */
-function launchFlags(model: string = resolveCopilotModel()): string[] {
-  return ['--no-ask-user', '--model', model];
-}
-const defaultRunner: CopilotRunner = async (prompt, cwd, model) =>
-  // Acquire one global copilot slot so concurrent (cap>1) job/stage drains can't fan out past the
-  // process-wide ceiling (dogfood #4 / copilotConcurrency).
-  withCopilotSlot(async () => {
-    // COPILOT-CONTEXT-SCOPE-BUG: run in the staging worktree (`cwd`) so Copilot's workspace scan
-    // (`tgrep count-files`) is rooted here, not the filesystem root (inherited `/` in a packaged
-    // app). `cwd: undefined` (tests / unscoped) behaves exactly as before (inherits parent cwd).
-    const { stdout } = await exec('copilot', ['-p', prompt, ...launchFlags(model)], { timeout: COPILOT_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, cwd });
-    return stdout;
-  });
+export type { CopilotRunner };
 
 export const REFLECT_PROMPT_VERSION = 'reflect/v1';
 
@@ -205,27 +184,22 @@ export interface ReflectDeciderOptions {
 /** Build the production Reflect decider: a fresh Copilot session per pass. Throws when Copilot is
  *  unavailable or the output is bad (the run is a failed pass; no fabrication). */
 export function makeReflectDecider(opts: ReflectDeciderOptions = {}): ReflectDecider {
-  const run = opts.run ?? defaultRunner;
+  // No `stage` tag, unlike every other decider — reflect stays deliberately untagged/background,
+  // sharing the remaining copilotConcurrency pool rather than reserving a named slice.
+  const run = opts.run ?? makeDefaultCopilotRunner({ timeoutMs: COPILOT_TIMEOUT_MS });
   const cwd = opts.vaultPath; // staging worktree → Copilot subprocess cwd (COPILOT-CONTEXT-SCOPE-BUG)
-  let available: boolean | null = opts.available ?? null;
+  const isAvailable = makeAvailabilityGate(opts.available, detectCopilot);
   return async (ctx) => {
-    if (available === null) {
-      try {
-        available = (await detectCopilot()).available;
-      } catch {
-        available = false;
-      }
-    }
-    if (!available) throw new Error('reflect: copilot unavailable');
-    // Model-pin resilience: retry once with `--model auto` if the pinned id is rejected pre-flight
-    // (a job pass should not hard-fail just because a pinned model drifted out of the catalog).
-    // HEAL-1: and self-repair once on a parse/validation failure (re-prompt with the error fed back)
-    // before the job runner sets the slice aside — this was the live `job.failed JSON.parse` (REFLECT-18).
-    const basePrompt = buildReflectPrompt(ctx);
-    const { value } = await runWithSelfRepair(
-      (repair) => runWithModelFallback((m) => run(repair ? appendRepairInstruction(basePrompt, repair) : basePrompt, cwd, m), { agentKey: 'reflect' }),
-      parseReflectResult,
-    );
-    return value;
+    if (!(await isAvailable())) throw new Error('reflect: copilot unavailable');
+    // #528 bug 2 fix: adopting the shared scaffold means an AgentTrace is now built and attached —
+    // Reflect previously returned zero provenance (no model/timing/repair count) on every pass.
+    const { value, agent } = await runDeciderScaffold({
+      agentKey: 'reflect',
+      buildPrompt: () => buildReflectPrompt(ctx),
+      parse: parseReflectResult,
+      run,
+      cwd,
+    });
+    return { ...value, agent };
   };
 }

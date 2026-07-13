@@ -8,7 +8,7 @@ describe('buildAgentViews (PANEL-3)', () => {
 
   it('lists the librarian/stage agents with role + instruction pointer', () => {
     const views = buildAgentViews(AGENT_CATALOG, all('claude-opus-4.8'));
-    expect(views.map((v) => v.key)).toEqual(['archivist', 'decompose', 'connect', 'claims', 'recall', 'reflect']);
+    expect(views.map((v) => v.key)).toEqual(['archivist', 'decompose', 'connect', 'claims', 'compose', 'recall', 'reflect']);
     for (const v of views) {
       expect(v.label.length).toBeGreaterThan(0);
       expect(v.role.length).toBeGreaterThan(0);

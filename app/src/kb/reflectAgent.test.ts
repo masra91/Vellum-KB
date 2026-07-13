@@ -110,7 +110,19 @@ describe('parseReflectResult', () => {
 describe('makeReflectDecider', () => {
   it('runs the injected runner and parses its output (no copilot shell-out in tests)', async () => {
     const decider = makeReflectDecider({ available: true, run: async () => '{"inspected":"ran","findings":[]}' });
-    expect(await decider(ctx)).toEqual({ inspected: 'ran', findings: [] });
+    const result = await decider(ctx);
+    expect(result.inspected).toBe('ran');
+    expect(result.findings).toEqual([]);
+  });
+
+  // #528 bug 2: reflect built no AgentTrace at all — every pass carried zero provenance (no model,
+  // timing, or repair count). FAILS-BEFORE (reverting the deciderScaffold adoption drops `.agent`
+  // back to undefined) / PASSES-AFTER this shared-scaffold rewrite.
+  it('stamps an AgentTrace (via copilot) — #528 bug 2 fix', async () => {
+    const decider = makeReflectDecider({ available: true, run: async () => '{"inspected":"ran","findings":[]}' });
+    const result = await decider(ctx);
+    expect(result.agent?.via).toBe('copilot');
+    expect(result.agent?.ok).toBe(true);
   });
 
   it('throws when copilot is unavailable (no fabrication)', async () => {
