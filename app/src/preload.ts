@@ -49,6 +49,7 @@ const kbApi: KbApi = {
   listJobs: () => ipcRenderer.invoke('kb:listJobs'),
   setJobConfig: (patch) => ipcRenderer.invoke('kb:setJobConfig', patch),
   runJobNow: (id) => ipcRenderer.invoke('kb:runJobNow', id),
+  jobHistory: (id) => ipcRenderer.invoke('kb:jobHistory', id),
   activityFeed: (filter) => ipcRenderer.invoke('kb:activityFeed', filter),
   activityEvents: (filter) => ipcRenderer.invoke('kb:activityEvents', filter),
   activityLineage: (id) => ipcRenderer.invoke('kb:activityLineage', id),

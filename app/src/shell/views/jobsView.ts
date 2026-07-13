@@ -14,9 +14,9 @@
 import { esc } from '../html';
 import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import { schedulePresetLabel, SCHEDULE_OPTIONS, isRiskyJobChange } from '../../kb/jobsPanel';
-import { drillChevronHtml, wireDrillIn, pastRunsPlaceholderHtml, detailRowHtml } from './agentDrillIn';
+import { drillChevronHtml, wireDrillIn, detailRowHtml, runsPendingHtml, runsLoadingHtml, runsTimelineHtml } from './agentDrillIn';
 import type { ViewHandle } from '../viewLifecycle';
-import type { JobView, JobConfigPatch } from '../../kb/types';
+import type { JobView, JobConfigPatch, JobLastRun } from '../../kb/types';
 
 const POSTURE_OPTIONS = ['guarded', 'autonomous'] as const;
 const POSTURE_LABEL: Record<string, string> = { guarded: 'Guarded', autonomous: 'Autonomous' };
@@ -27,8 +27,40 @@ const HEADER = `<p class="job-sub viz-body">Recurring background tasks that keep
 
 export function mountJobs(container: HTMLElement): ViewHandle {
   paintSkeleton(container, HEADER, 'cards');
-  wireDrillIn(container); // VUX-17: delegated on the container (survives re-render) — wire once, not per-render.
+  // VUX-17/#559: delegated on the container (survives re-render) — wire once, not per-render. `onOpen`
+  // lazy-fetches that job's real journal on first reveal, not for every card on every render.
+  wireDrillIn(container, (card) => void loadJobHistory(container, card));
   return { show: () => void render(container) }; // #510: re-read on every activation (no timers here)
+}
+
+/** #559: fetch + render one job's real past-runs timeline into its already-open detail panel. Loads at
+ *  most once per open (guarded by `data-runs-loaded`) — a card the Principal never opens costs nothing;
+ *  a card opened repeatedly across renders re-fetches once per fresh render (the guard lives on the DOM
+ *  node, which `render()` replaces wholesale). */
+async function loadJobHistory(container: HTMLElement, card: HTMLElement): Promise<void> {
+  if (card.dataset.runsLoaded === 'true') return;
+  card.dataset.runsLoaded = 'true';
+  const id = card.dataset.id;
+  if (!id) return;
+  const select = (): HTMLElement | null => container.querySelector<HTMLElement>(`.job[data-id="${id}"] .ag-detail-runs`);
+  const pending = select();
+  if (pending) pending.outerHTML = runsLoadingHtml(); // the fetch is now actually in flight — say so
+  try {
+    const runs = await withTimeout(window.kbApi.jobHistory(id));
+    const slot = select();
+    if (slot) slot.outerHTML = runsTimelineHtml(runs.map(jobRunRowHtml));
+  } catch {
+    card.dataset.runsLoaded = 'false'; // a failed fetch is retryable on the next open
+  }
+}
+
+/** One job-history row (#559) — mirrors the existing single-lastRun line's shape/wording so the
+ *  timeline reads as "more of the same", not a second format the Principal has to learn. */
+function jobRunRowHtml(e: JobLastRun): string {
+  const inspectedLabel = String(e.inspected ?? '').trim() ? esc(String(e.inspected)) : '—';
+  const applied = Number.isFinite(e.applied) ? e.applied : 0;
+  const deferred = Number.isFinite(e.deferred) ? e.deferred : 0;
+  return `${esc(String(e.ts))} — inspected ${inspectedLabel}; ${applied} applied, ${deferred} deferred${e.note ? ` (${esc(String(e.note))})` : ''}`;
 }
 
 async function render(container: HTMLElement): Promise<void> {
@@ -108,10 +140,11 @@ function jobItem(j: JobView): string {
     </li>`;
 }
 
-/** VUX-17 detail panel — identity + current config from JobView's existing fields, plus the single
- *  most-recent run (already computed as `last` above) ahead of the "earlier history" placeholder — an
- *  honest representation of "we have one data point, not a timeline". Everything here is already
- *  editable inline above; this exists for interaction consistency across the hub, not to hide config. */
+/** VUX-17/#559 detail panel — identity + current config from JobView's existing fields, plus the full
+ *  past-runs timeline (lazy-fetched on first open via loadJobHistory — the runs slot starts genuinely
+ *  EMPTY, not "Loading…", since nothing is loading until the Principal actually opens the panel).
+ *  Everything in "current config" is already editable inline above; this exists for interaction
+ *  consistency across the hub, not to hide config. */
 function jobDetailHtml(j: JobView, lastRunLine: string): string {
   return `<div class="ag-detail" hidden>
     <div class="ag-detail-rows">
@@ -120,7 +153,7 @@ function jobDetailHtml(j: JobView, lastRunLine: string): string {
       ${detailRowHtml('State', j.enabled ? 'Enabled' : 'Paused')}
       ${detailRowHtml('Most recent run', lastRunLine)}
     </div>
-    ${pastRunsPlaceholderHtml()}
+    ${runsPendingHtml()}
   </div>`;
 }
 

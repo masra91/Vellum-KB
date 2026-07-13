@@ -1158,6 +1158,10 @@ button:disabled {
 .ag-detail-v { flex: 1; min-width: 0; color: var(--ink); font-family: var(--ui); overflow-wrap: anywhere; }
 .ag-detail-h { margin: 0 0 0.3rem; font-family: var(--ui); font-weight: 600; font-size: 0.72rem; color: var(--stone); }
 .ag-detail-empty { margin: 0; font-size: 0.8rem; color: var(--stone); }
+/* #559 real past-runs timeline (list of prior journal/ledger entries, newest-first). */
+.ag-detail-runlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; max-height: 12rem; overflow-y: auto; }
+.ag-detail-run { font-size: 0.78rem; color: var(--ink); line-height: 1.4; padding: 0.3rem 0; border-top: 1px solid var(--hair); }
+.ag-detail-run:first-child { border-top: 0; padding-top: 0; }
 
 /* Loading + empty (calm, never blank). */
 .ag-loading, .ag-empty { font-family: var(--ui); font-size: 0.86rem; color: var(--stone); padding: 0.6rem 0; }
