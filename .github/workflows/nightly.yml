@@ -1,0 +1,202 @@
+# Nightly / weekly lane (issue #525, ENG-1/ENG-2) — the rot-prone checks that are too slow/costly to
+# gate every PR but were previously covered by NOTHING (`ci.yml`'s own e2e/macOS jobs are label/dispatch
+# -only with zero routine dispatches; the eval scorecard never ran anywhere). This workflow is the backstop:
+#   - `e2e-matrix`      — the packaged-smoke Playwright suite, on the SHIPPED targets (macOS + Windows),
+#                         every night instead of only when a PR happens to carry the `e2e` label.
+#   - `package-macos`   — the macOS-only native-dep build-check (see ci.yml's package-macos comment for
+#                         the cost tradeoff this workflow's cadence is built around), every night.
+#   - `knip`            — unused-file/export/dependency report. REPORT-ONLY (never fails the job) — this
+#                         is a drift signal for a human to triage, not a gate.
+#   - `eval-scorecard`  — WEEKLY (not nightly — real BYOA copilot runs over the full scenario library are
+#                         slow/costly), diffs against the COMMITTED baseline (`eval/baselines-committed/`,
+#                         issue #525 ENG-3) and FAILS on any regression. BYOA-gated: skips gracefully (not
+#                         a failure) when no scoped eval credential is configured.
+#   - `report-red`      — auto-files ONE tracking issue when a scheduled (non-dispatch) run goes red,
+#                         deduped against any already-open tracking issue so a run of red nights doesn't
+#                         spam the tracker.
+#
+# None of these are REQUIRED PR checks (they run on a schedule / manual dispatch, never on `pull_request`)
+# — see `ci.yml` for the per-PR required gate (`typecheck · lint · unit`, `package build-check`,
+# `secret scan`, all pinned in the `main` branch ruleset).
+name: Nightly
+
+on:
+  schedule:
+    # Nightly (every day) — e2e matrix + macOS package + knip. Off the :00/:30 mark deliberately.
+    - cron: '17 6 * * *'
+    # Weekly (Sunday only) — the eval scorecard (BYOA-gated, slow/costly; not worth running nightly).
+    - cron: '42 5 * * 0'
+  workflow_dispatch:
+    inputs:
+      update_eval_baseline:
+        description: 'Promote every scenario × variant scorecard to the COMMITTED baseline (eval/baselines-committed/) instead of diffing against it, and commit the refresh back to this branch. Dispatch-only — never happens on a scheduled run.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: app
+
+# Each job's `if:` repeats its own schedule-match expression directly (github.event.schedule carries the
+# exact cron string that fired) rather than reading a shared workflow-level `env:` — job-level `if:` does
+# NOT reliably see workflow `env:`, and a silently-false gate here would mean every nightly job quietly
+# never runs (exactly the "no silent caps" failure this issue exists to close). A workflow_dispatch always
+# runs every gating job (manual "run it all now").
+
+jobs:
+  e2e-matrix:
+    name: e2e (packaged smoke) — nightly
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '17 6 * * *' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - name: Package the app (TEST-4)
+        run: npm run package
+      - name: Playwright e2e — packaged boot smoke (TEST-4)
+        run: npm run test:e2e
+      - name: Upload live-run walkthrough screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-walkthrough-shots-${{ matrix.os }}
+          path: app/e2e/walkthrough-shots/
+          if-no-files-found: ignore
+
+  package-macos:
+    name: package build-check (macOS — native-dep catch) — nightly
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '17 6 * * *' }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - name: Package the app — build-only (TEST-20)
+        run: npm run package
+      - name: Assert the packaged artifact was produced (TEST-20)
+        shell: bash
+        run: |
+          app=$(ls -d out/Vellum-darwin-*/Vellum.app 2>/dev/null | head -n1)
+          if [ -z "$app" ] || [ ! -x "$app/Contents/MacOS/Vellum" ]; then
+            echo "::error::npm run package produced no launchable macOS .app under out/ (fsevents/native-bundling regression?)"
+            ls -R out || true
+            exit 1
+          fi
+          echo "Packaged artifact OK: $app"
+
+  knip:
+    name: knip (unused files/exports/deps) — report-only, nightly
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '17 6 * * *' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - name: Run knip (report-only — never fails this job; triage manually)
+        run: npm run knip -- --reporter compact | tee "$GITHUB_STEP_SUMMARY" || true
+
+  eval-scorecard:
+    name: eval scorecard vs committed baseline — weekly, BYOA-gated, non-required
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '42 5 * * 0' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # only used when update_eval_baseline commits the refreshed committed baseline back
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - name: Run the eval scorecard (opt-in, live BYOA copilot) — skips gracefully with no scoped eval creds
+        env:
+          KB_EVAL: '1'
+          COPILOT_TOKEN: ${{ secrets.EVAL_COPILOT_TOKEN }}
+          KB_EVAL_UPDATE_BASELINE: ${{ github.event.inputs.update_eval_baseline == 'true' && '1' || '0' }}
+        run: |
+          if [ -z "${COPILOT_TOKEN:-}" ]; then
+            echo "::notice::EVAL_COPILOT_TOKEN is not configured — skipping the eval scorecard (BYOA-gated, non-required)."
+            exit 0
+          fi
+          npm run eval:scorecard
+      - name: Upload scorecard artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-scorecard
+          path: app/eval-scorecard.json
+          if-no-files-found: ignore
+      - name: Commit the refreshed committed baseline (dispatch-triggered promotion only)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.update_eval_baseline == 'true' }}
+        shell: bash
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add eval/baselines-committed
+          if git diff --cached --quiet; then
+            echo "No committed-baseline changes to promote."
+            exit 0
+          fi
+          git commit -m "eval(scorecard): promote committed baseline (dispatch, issue #525)"
+          git push origin "HEAD:${{ github.ref_name }}"
+
+  # Auto-file ONE tracking issue when a SCHEDULED (non-dispatch) run goes red — issue #525's "red nights
+  # file issues" AC. Deduped against any already-open tracking issue (label `nightly-red`) so a streak of
+  # red nights doesn't spam the tracker; the existing issue is the running log until someone closes it.
+  # knip is deliberately excluded (report-only, never fails); eval-scorecard only runs on the weekly cron,
+  # so `needs` results for it are 'skipped' on the nightly cron night — skipped never counts as red.
+  report-red:
+    name: file/update tracking issue on red
+    if: ${{ always() && github.event_name == 'schedule' }}
+    needs: [e2e-matrix, package-macos, eval-scorecard]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Report red jobs as a tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          E2E_RESULT: ${{ needs.e2e-matrix.result }}
+          PACKAGE_MACOS_RESULT: ${{ needs.package-macos.result }}
+          EVAL_SCORECARD_RESULT: ${{ needs.eval-scorecard.result }}
+        run: |
+          red=()
+          [ "$E2E_RESULT" = "failure" ] && red+=("e2e-matrix")
+          [ "$PACKAGE_MACOS_RESULT" = "failure" ] && red+=("package-macos")
+          [ "$EVAL_SCORECARD_RESULT" = "failure" ] && red+=("eval-scorecard")
+          if [ ${#red[@]} -eq 0 ]; then
+            echo "Nightly is green — nothing to report."
+            exit 0
+          fi
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Nightly run went red: ${red[*]}.
+          Run: $run_url ($(date -u +%Y-%m-%dT%H:%MZ))"
+          existing=$(gh issue list --repo "${{ github.repository }}" --label nightly-red --state open --json number --jq '.[0].number' || true)
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            gh issue comment "$existing" --repo "${{ github.repository }}" --body "$body"
+          else
+            gh issue create --repo "${{ github.repository }}" --title "Nightly CI red: ${red[*]} ($(date -u +%Y-%m-%d))" --label nightly-red --body "$body"
+          fi
