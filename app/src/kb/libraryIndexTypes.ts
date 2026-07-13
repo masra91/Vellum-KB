@@ -100,4 +100,22 @@ export interface LibraryIndexStore {
   allEntities(): IndexedEntityRow[];
   allClaims(): IndexedClaimRow[];
   allSourceFiles(): IndexedSourceFileRow[];
+
+  /**
+   * Ranked full-text search over EVERY indexed body — entities, claims, and source files together
+   * (SPEC-0061 T1 follow-up, #538). `ftsQuery` is caller-sanitized (token-quoted so raw user input can't
+   * inject FTS5 query syntax — see `libraryIndexTools.ts`'s `sanitizeFtsQuery`); this method just runs
+   * it. `rank` follows bm25 convention (LOWER = more relevant); the fake store's naive approximation
+   * follows the same convention so callers never branch on which store they're talking to.
+   */
+  searchBodies(ftsQuery: string, limit: number): SearchBodyHit[];
+}
+
+/** One ranked hit from `searchBodies` — a rel-keyed row (entity/claim/source) plus a rendered snippet
+ *  showing the matched text in context. */
+export interface SearchBodyHit {
+  rel: string;
+  sourceKind: 'entity' | 'claim' | 'source';
+  snippet: string;
+  rank: number;
 }

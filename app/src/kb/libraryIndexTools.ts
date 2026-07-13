@@ -1,19 +1,25 @@
 // Serve the read-only `RecallTools` surface PURELY from a `LibraryIndexStore` — zero filesystem access
-// (SPEC-0061 T1, #530 slice 1). Every filter/sort/match rule below is ported VERBATIM from
-// `makeReadOnlyTools` (`recallTools.ts`) — same needle-matching, same "first match in scan order" entity
-// resolution, same self-link exclusion on incoming traversal — so a projection-backed read is provably
-// the SAME computation over the SAME parsed data, just sourced from the index instead of a live walk
-// (the equivalence test in `libraryIndexTools.test.ts` pins this). Deliberately landed as a NEW file
-// rather than a `recallTools.ts` edit: that file is Dev-5's active lane this wave (#513's per-question
-// memo). The production call-site swap (where `recall.ts` builds its tools) is a tracked fast-follow
-// once that lane lands — see the PR description.
+// (SPEC-0061 T1, #530 slice 1). Every filter/sort/match rule for the six granular tools is ported
+// VERBATIM from `makeReadOnlyTools` (`recallTools.ts`) — same needle-matching, same "first match in scan
+// order" entity resolution, same self-link exclusion on incoming traversal — so a projection-backed read
+// is provably the SAME computation over the SAME parsed data, just sourced from the index instead of a
+// live walk (the equivalence test in `libraryIndexTools.test.ts` pins this). Landed as a NEW file rather
+// than a `recallTools.ts` edit (that file was Dev-5's active lane at the time #530 shipped).
+//
+// `search()` (#538, post-#530 follow-up) is genuinely NEW capability, not a ported one — the live vault
+// walker has no equivalent (no FTS5), so there's nothing to port from. It's a composite, index-only
+// capability: `RecallTools.search` is OPTIONAL, and `recall.ts`'s `buildRecallToolDefs` only registers
+// it with the agent when present.
 import path from 'node:path';
-import type { RecallTools, EntityHit, ClaimHit, LinkHit, GrepHit } from './recall';
+import type { RecallTools, EntityHit, ClaimHit, LinkHit, GrepHit, SearchResult, SearchEntityHit, SearchHit } from './recall';
 import type { LibraryIndexStore, IndexedEntityRow, IndexedClaimRow } from './libraryIndexTypes';
 
 const DEFAULT_ENTITY_LIMIT = 10;
 const DEFAULT_CLAIM_LIMIT = 50;
 const DEFAULT_GREP_LIMIT = 50;
+const DEFAULT_SEARCH_LIMIT = 8;
+const SEARCH_CLAIMS_PER_ENTITY = 5;
+const SEARCH_OVERFETCH_FACTOR = 3; // raw FTS hits fetched before entity-grouping/dedup collapses them
 
 function toEntityHit(r: IndexedEntityRow): EntityHit {
   return { rel: r.rel, id: r.id, kind: r.kind, name: r.name, aliases: r.aliases, confidence: r.confidence, tags: r.tags, derivedFrom: r.derivedFrom };
@@ -44,6 +50,21 @@ function resolveEntityRel(store: LibraryIndexStore, entity: string): string | nu
     ents.find((e) => e.name.toLowerCase() === needle || e.aliases.some((a) => a.toLowerCase() === needle)) ??
     ents.find((e) => e.name.toLowerCase().includes(needle));
   return match ? match.rel : null;
+}
+
+/** Turn a raw, untrusted user query into an FTS5-safe MATCH expression: each whitespace-delimited token
+ *  is individually double-quoted (escaping any embedded quote), so FTS5's query syntax (`AND`/`OR`/`NOT`/
+ *  `NEAR`/`-prefix`/`*suffix`/column filters) can never be injected by the query text — the query is
+ *  always treated as literal terms, space-joined (FTS5's implicit AND across bare terms still applies to
+ *  quoted phrase-tokens). Empty/whitespace-only input returns `''` (the caller short-circuits on that,
+ *  matching `grep`'s empty-pattern behavior). Exported for the equivalence tests. */
+export function sanitizeFtsQuery(raw: string): string {
+  return (raw ?? '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((t) => `"${t.replace(/"/g, '""')}"`)
+    .join(' ');
 }
 
 /** Build the read-only recall tool surface PURELY from the library index — zero fs reads. */
@@ -118,6 +139,56 @@ export function makeIndexTools(store: LibraryIndexStore): RecallTools {
         }
       }
       return hits;
+    },
+
+    async search({ query, limit }): Promise<SearchResult> {
+      const ftsQuery = sanitizeFtsQuery(query ?? '');
+      if (ftsQuery.length === 0) return { entities: [], claims: [], sources: [] };
+      const cap = limit ?? DEFAULT_SEARCH_LIMIT;
+      // Overfetch: raw hits collapse when several belong to the same entity (its body match + a claim
+      // match that also gets folded in) or are skipped as stale index rows — fetch a multiple of `cap`
+      // so the FINAL assembled result still has up to `cap` items, not fewer than requested.
+      const raw = store.searchBodies(ftsQuery, cap * SEARCH_OVERFETCH_FACTOR);
+
+      // Every entity the query matched at all (independent of the cap below) — a claim whose SUBJECT is
+      // one of these gets folded into that entity's `.claims` instead of listed standalone, so the same
+      // fact never appears twice in one result.
+      const matchedEntityRels = new Set(raw.filter((h) => h.sourceKind === 'entity').map((h) => h.rel));
+
+      const entities: SearchEntityHit[] = [];
+      const seenEntityRels = new Set<string>();
+      const claims: SearchHit[] = [];
+      const sources: SearchHit[] = [];
+
+      for (const hit of raw) {
+        if (entities.length + claims.length + sources.length >= cap) break;
+        if (hit.sourceKind === 'entity') {
+          if (seenEntityRels.has(hit.rel)) continue;
+          const row = store.getEntity(hit.rel);
+          if (!row) continue; // stale FTS row (deleted since last index maintenance) — skip, don't throw
+          seenEntityRels.add(hit.rel);
+          const entityClaims = store
+            .allClaims()
+            .filter((c) => c.subject === hit.rel)
+            .slice(0, SEARCH_CLAIMS_PER_ENTITY)
+            .map(toClaimHit);
+          const incoming = store
+            .linksTo(hit.rel)
+            .filter((from) => from !== hit.rel)
+            .map((from) => ({ from, to: hit.rel }));
+          entities.push({ entity: toEntityHit(row), snippet: hit.snippet, claims: entityClaims, incoming });
+        } else if (hit.sourceKind === 'claim') {
+          const row = store.getClaim(hit.rel);
+          if (!row) continue;
+          if (matchedEntityRels.has(row.subject)) continue; // already folded into (or covered by) an entity hit
+          claims.push({ kind: 'claim', rel: hit.rel, label: row.statement, snippet: hit.snippet });
+        } else {
+          const row = store.getSourceFile(hit.rel);
+          if (!row) continue;
+          sources.push({ kind: 'source', rel: hit.rel, label: hit.rel, snippet: hit.snippet });
+        }
+      }
+      return { entities, claims, sources };
     },
   };
 }

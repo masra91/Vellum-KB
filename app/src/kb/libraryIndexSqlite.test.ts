@@ -118,3 +118,92 @@ describe('openSqliteLibraryIndexStore', () => {
     }
   });
 });
+
+// SPEC-0061 T1 follow-up (#538) — real bm25 ranking. This is the ONE place ranking QUALITY is actually
+// exercised (the fake store's approximation only needs to prove the ASSEMBLY logic in
+// libraryIndexTools.test.ts, not real relevance ordering).
+describe('openSqliteLibraryIndexStore — searchBodies (bm25 ranking, #538)', () => {
+  let dir: string;
+  afterEach(async () => {
+    if (dir) await rmTempDir(dir);
+  });
+
+  it('ranks a body with more query-term occurrences ABOVE one with fewer, across entities/claims/sources', async () => {
+    dir = await makeTempDir('kb-sqlite-');
+    const store = await openSqliteLibraryIndexStore(path.join(dir, 'library.db'));
+    try {
+      store.upsertEntity({
+        rel: 'entities/lovelace.md',
+        id: '1',
+        kind: 'person',
+        name: 'Ada Lovelace',
+        aliases: [],
+        confidence: 0.9,
+        tags: [],
+        derivedFrom: [],
+        body: 'Ada Lovelace is regarded as the first computer programmer. Lovelace worked with Babbage on the Analytical Engine.',
+      });
+      store.upsertEntity({
+        rel: 'entities/other.md',
+        id: '2',
+        kind: 'person',
+        name: 'Someone Else',
+        aliases: [],
+        confidence: 0.5,
+        tags: [],
+        derivedFrom: [],
+        body: 'This entity mentions Lovelace exactly once, in passing.',
+      });
+      store.upsertClaim({
+        rel: 'claims/c1.md',
+        id: 'c1',
+        subject: 'entities/lovelace.md',
+        status: 'fact',
+        confidence: 0.8,
+        statement: 'Lovelace wrote the first algorithm intended for a machine.',
+        derivedFrom: [],
+        mentions: [],
+        relatesTo: [],
+        body: 'Lovelace wrote the first algorithm intended for a machine.',
+      });
+
+      const hits = store.searchBodies('"lovelace"', 10);
+      const rels = hits.map((h) => h.rel);
+      expect(rels).toContain('entities/lovelace.md');
+      expect(rels).toContain('entities/other.md');
+      expect(rels).toContain('claims/c1.md');
+      // The heavily-repeated body ranks strictly better (lower bm25) than the single-mention one.
+      const denseRank = hits.find((h) => h.rel === 'entities/lovelace.md')!.rank;
+      const sparseRank = hits.find((h) => h.rel === 'entities/other.md')!.rank;
+      expect(denseRank).toBeLessThan(sparseRank);
+      // Snippets carry the highlight markers around the match.
+      expect(hits.find((h) => h.rel === 'entities/lovelace.md')!.snippet).toContain('**');
+    } finally {
+      store.close();
+    }
+  });
+
+  it('a non-matching query returns no hits', async () => {
+    dir = await makeTempDir('kb-sqlite-');
+    const store = await openSqliteLibraryIndexStore(path.join(dir, 'library.db'));
+    try {
+      store.upsertEntity({ rel: 'entities/a.md', id: '1', kind: 'k', name: 'n', aliases: [], confidence: 0, tags: [], derivedFrom: [], body: 'unrelated body text' });
+      expect(store.searchBodies('"zzz_nonexistent_term"', 10)).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it('respects the limit', async () => {
+    dir = await makeTempDir('kb-sqlite-');
+    const store = await openSqliteLibraryIndexStore(path.join(dir, 'library.db'));
+    try {
+      for (let i = 0; i < 5; i++) {
+        store.upsertEntity({ rel: `entities/e${i}.md`, id: String(i), kind: 'k', name: `n${i}`, aliases: [], confidence: 0, tags: [], derivedFrom: [], body: 'shared searchable term' });
+      }
+      expect(store.searchBodies('"searchable"', 2)).toHaveLength(2);
+    } finally {
+      store.close();
+    }
+  });
+});

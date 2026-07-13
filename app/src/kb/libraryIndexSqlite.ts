@@ -20,7 +20,14 @@
 import Database from 'better-sqlite3';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { LIBRARY_INDEX_SCHEMA_VERSION, type IndexedEntityRow, type IndexedClaimRow, type IndexedSourceFileRow, type LibraryIndexStore } from './libraryIndexTypes';
+import {
+  LIBRARY_INDEX_SCHEMA_VERSION,
+  type IndexedEntityRow,
+  type IndexedClaimRow,
+  type IndexedSourceFileRow,
+  type LibraryIndexStore,
+  type SearchBodyHit,
+} from './libraryIndexTypes';
 
 /** Vault-relative cache location (working zone — gitignored, never promoted; mirrors `perfIndex.ts`). */
 export const LIBRARY_INDEX_REL = path.join('.kb', 'cache', 'library.db');
@@ -194,6 +201,19 @@ class SqliteLibraryIndexStore implements LibraryIndexStore {
   }
   allSourceFiles(): IndexedSourceFileRow[] {
     return (this.db.prepare('SELECT * FROM source_files').all() as Record<string, unknown>[]).map(rowToSourceFile);
+  }
+
+  searchBodies(ftsQuery: string, limit: number): SearchBodyHit[] {
+    // Column 2 = `body` (0=rel, 1=source_kind, both UNINDEXED) — the only column FTS5 actually indexes.
+    // bm25() ascending IS "most relevant first" per FTS5's own documented convention; `rank` is stored
+    // as-is so callers (and the fake store's approximation) share one "lower = better" contract.
+    const rows = this.db
+      .prepare(
+        `SELECT rel, source_kind, snippet(fts_bodies, 2, '**', '**', '…', 12) AS snippet, bm25(fts_bodies) AS rank
+         FROM fts_bodies WHERE fts_bodies MATCH ? ORDER BY rank LIMIT ?`,
+      )
+      .all(ftsQuery, limit) as { rel: string; source_kind: 'entity' | 'claim' | 'source'; snippet: string; rank: number }[];
+    return rows.map((r) => ({ rel: r.rel, sourceKind: r.source_kind, snippet: r.snippet, rank: r.rank }));
   }
 }
 

@@ -115,6 +115,33 @@ export interface GrepHit {
   text: string; // the matching line (trimmed)
 }
 
+/** One entity hit from `search` — the entity itself, enriched with its top claims + backlinks so a
+ *  broad first pass doesn't need follow-up `claimsForEntity`/`linkTraversal` calls (SPEC-0061 T1
+ *  follow-up, #538). */
+export interface SearchEntityHit {
+  entity: EntityHit;
+  snippet: string;
+  claims: ClaimHit[];
+  incoming: LinkHit[];
+}
+
+/** A standalone claim or source hit from `search` — the match wasn't (or wasn't only) attributable to
+ *  an entity already returned in `entities`. */
+export interface SearchHit {
+  kind: 'claim' | 'source';
+  rel: string;
+  label: string; // claim statement, or the source rel-path
+  snippet: string;
+}
+
+/** Composite ranked search result: entities (with claims + backlinks folded in), plus standalone claim
+ *  and source hits, all ordered by relevance within their group (#538). */
+export interface SearchResult {
+  entities: SearchEntityHit[];
+  claims: SearchHit[];
+  sources: SearchHit[];
+}
+
 export interface RecallTools {
   /** Find entity nodes by name/alias (case-insensitive substring), optionally filtered by kind. */
   entityLookup(args: { query: string; kind?: string; limit?: number }): Promise<EntityHit[]>;
@@ -128,11 +155,23 @@ export interface RecallTools {
   readSource(args: { dir: string }): Promise<string | null>;
   /** Lexical fallback: case-insensitive line search over sources/entities/claims. */
   grep(args: { pattern: string; limit?: number }): Promise<GrepHit[]>;
+  /**
+   * Composite ranked full-text search: entities (with claims + backlinks attached) + standalone
+   * claim/source hits, in ONE call (SPEC-0061 T1 follow-up, #538) — turns a 10-24-call granular
+   * exploration into 2-4. OPTIONAL: only an index-backed tool surface can implement this (it needs
+   * FTS5 ranking, not a per-call walker scan) — mirrors the tag/property-filter deferral precedent at
+   * the top of `recallTools.ts` (a capability gated in, not a breaking interface change). Callers
+   * (`buildRecallToolDefs`) check for its presence before registering the tool with the agent.
+   */
+  search?(args: { query: string; limit?: number }): Promise<SearchResult>;
 }
 
-/** The read-only retrieval tool names exposed to the agent (kept in sync with RecallTools). */
+/** The ALWAYS-present read-only retrieval tool names (kept in sync with `RecallTools`'s required
+ *  methods). `search` is NOT here — it's conditionally added to a session's tool defs only when the
+ *  injected `tools.search` exists (see `buildRecallToolDefs`), since not every `RecallTools`
+ *  implementation has it. */
 export const TOOL_NAMES = ['entityLookup', 'claimsForEntity', 'linkTraversal', 'readNode', 'readSource', 'grep'] as const;
-export type ToolName = (typeof TOOL_NAMES)[number];
+export type ToolName = (typeof TOOL_NAMES)[number] | 'search';
 
 /** The tool the agent MUST call to finish: its answer + the evidence it rests on (ASK-7). */
 export const SUBMIT_ANSWER_TOOL = 'submitAnswer';
@@ -311,7 +350,7 @@ export async function recall(root: string, q: RecallQuestion | string, opts: Rec
           model,
           systemMessage: { mode: 'append', content: RECALL_SKILL },
           tools: toolDefs,
-          allowedTools: [...TOOL_NAMES, SUBMIT_ANSWER_TOOL],
+          allowedTools: [...TOOL_NAMES, ...(tools.search ? (['search'] as const) : []), SUBMIT_ANSWER_TOOL],
           reasoningEffort: opts.reasoningEffort,
         });
         try {
@@ -502,6 +541,17 @@ export function buildRecallToolDefs(
       },
       { overridesBuiltInTool: true },
     ),
+    // #538: only registered when the injected `tools` implements it (the index-backed surface) — the
+    // live vault-walker surface has no FTS5 to rank against, so this is capability-gated, not always-on.
+    ...(tools.search
+      ? [
+          retrieval('search', 'Composite ranked search: entities (with their top claims + backlinks attached) + standalone claim/source hits, in ONE call. Prefer this for a broad first pass before the single-entity tools.', {
+            type: 'object',
+            properties: { query: { type: 'string' }, limit: { type: 'number' } },
+            required: ['query'],
+          }),
+        ]
+      : []),
     {
       name: SUBMIT_ANSWER_TOOL,
       description: 'Finish: submit the grounded markdown answer and the evidence it cites.',
