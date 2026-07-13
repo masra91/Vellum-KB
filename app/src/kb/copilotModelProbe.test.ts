@@ -174,7 +174,6 @@ describe('INGEST-PERF item 4 — per-stage default model resolution', () => {
       archivist: 'claude-haiku-4.5', // fastest/cheapest — Archive normalizes/stores
       decompose: 'claude-sonnet-4.6', // fast — self-contained parse of one source
       claims: 'claude-sonnet-4.6', // low–medium — bounded source-local extraction
-      'recall-quick': 'claude-haiku-4.5', // #514 — Quick Ask: fast, shallow lookup
     });
     // Strong stages get NO per-stage entry → they fall through to the global default.
     expect(defaults.connect).toBeUndefined();
@@ -185,11 +184,10 @@ describe('INGEST-PERF item 4 — per-stage default model resolution', () => {
     // Catalog has sonnet + opus but NOT haiku → Archive degrades haiku→sonnet-4.6 (next in its list).
     const noHaiku = ['claude-sonnet-4.6', 'claude-sonnet-4.5', 'claude-opus-4.8'];
     expect(resolveStageDefaultModels(noHaiku).archivist).toBe('claude-sonnet-4.6');
-    expect(resolveStageDefaultModels(noHaiku)['recall-quick']).toBe('claude-sonnet-4.6'); // #514: same degrade path
     // Catalog has ONLY opus → every tiered stage degrades down to opus-4.8 (the strong fallback tail).
     const onlyOpus = ['claude-opus-4.8', 'claude-opus-4.7'];
     expect(resolveStageDefaultModels(onlyOpus)).toEqual({
-      archivist: 'claude-opus-4.8', decompose: 'claude-opus-4.8', claims: 'claude-opus-4.8', 'recall-quick': 'claude-opus-4.8',
+      archivist: 'claude-opus-4.8', decompose: 'claude-opus-4.8', claims: 'claude-opus-4.8',
     });
   });
 
@@ -198,7 +196,6 @@ describe('INGEST-PERF item 4 — per-stage default model resolution', () => {
     expect(defaults.archivist).toBe('claude-haiku-4.5');
     expect(defaults.decompose).toBe('claude-sonnet-4.6');
     expect(defaults.claims).toBe('claude-sonnet-4.6');
-    expect(defaults['recall-quick']).toBe('claude-haiku-4.5');
   });
 
   it('initLaunchModel publishes the per-stage defaults so deciders resolve their cheap tier', async () => {
@@ -207,8 +204,6 @@ describe('INGEST-PERF item 4 — per-stage default model resolution', () => {
     expect(resolveCopilotModel({}, 'decompose')).toBe('claude-sonnet-4.6');
     expect(resolveCopilotModel({}, 'claims')).toBe('claude-sonnet-4.6');
     expect(resolveCopilotModel({}, 'connect')).toBe('claude-opus-4.8'); // strong stage → global probed model
-    expect(resolveCopilotModel({}, 'recall-quick')).toBe('claude-haiku-4.5'); // #514
-    expect(resolveCopilotModel({}, 'recall')).toBe('claude-opus-4.8'); // 'recall' (considered) is untiered — global model
   });
 
   it('a user GLOBAL override CLEARS the per-stage defaults — every stage defers to the explicit pick', async () => {
@@ -216,11 +211,10 @@ describe('INGEST-PERF item 4 — per-stage default model resolution', () => {
     expect(resolveCopilotModel({}, 'archivist')).toBe('gpt-5.5'); // not the cheap haiku default
     expect(resolveCopilotModel({}, 'claims')).toBe('gpt-5.5');
     expect(resolveCopilotModel({}, 'connect')).toBe('gpt-5.5');
-    expect(resolveCopilotModel({}, 'recall-quick')).toBe('gpt-5.5'); // #514: a global override wins wholesale too
   });
 
-  it('STAGE_MODEL_PREFERENCES tiers the three cheap stages + recall-quick (#514); each list ends with the strong Opus tail', () => {
-    expect(Object.keys(STAGE_MODEL_PREFERENCES).sort()).toEqual(['archivist', 'claims', 'decompose', 'recall-quick']);
+  it('STAGE_MODEL_PREFERENCES only tiers the three cheap stages; each list ends with the strong Opus tail', () => {
+    expect(Object.keys(STAGE_MODEL_PREFERENCES).sort()).toEqual(['archivist', 'claims', 'decompose']);
     for (const list of Object.values(STAGE_MODEL_PREFERENCES)) {
       expect(list[list.length - 1]).toBe(DEFAULT_MODEL_PREFERENCES[DEFAULT_MODEL_PREFERENCES.length - 1]); // strong fallback tail
     }

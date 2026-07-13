@@ -49,11 +49,6 @@ export const STAGE_MODEL_PREFERENCES: Readonly<Record<string, readonly string[]>
   archivist: ['claude-haiku-4.5', 'claude-sonnet-4.6', 'claude-sonnet-4.5', ...DEFAULT_MODEL_PREFERENCES],
   decompose: ['claude-sonnet-4.6', 'claude-sonnet-4.5', ...DEFAULT_MODEL_PREFERENCES],
   claims: ['claude-sonnet-4.6', 'claude-sonnet-4.5', ...DEFAULT_MODEL_PREFERENCES],
-  // #514 (deep review 2026-07-12, supersedes the VUX-11 depth-only ruling for THIS specific lever): a
-  // Quick Ask is a fast, shallow lookup — a Quick question doesn't need the full-reasoning global model,
-  // and the CLI's own latency is 65-75% of wall-clock (the latency-budget table). Sonnet/haiku-first, same
-  // degrade-to-known-good-then-Opus-floor shape as the other tiers (never bricks on a stale/absent id).
-  'recall-quick': ['claude-haiku-4.5', 'claude-sonnet-4.6', 'claude-sonnet-4.5', ...DEFAULT_MODEL_PREFERENCES],
 };
 
 /**

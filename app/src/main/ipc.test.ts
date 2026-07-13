@@ -103,7 +103,7 @@ vi.mock('./pipeline', () => ({
 vi.mock('../kb/recall', () => ({ recall: mocks.recall }));
 
 import { registerIpc, initPipeline, stopRecallClient } from './ipc';
-import { setStageDefaultModels, setResolvedLaunchModel } from '../kb/copilotModel';
+import { setResolvedLaunchModel } from '../kb/copilotModel';
 import { createKb } from '../kb/vault';
 import { computeGraphProjection } from '../kb/graphProjection';
 import { obsidianOpenUri } from '../kb/citationLink';
@@ -389,38 +389,46 @@ describe('#514 — kb:ask reuses ONE process-wide RecallClient across questions'
   });
 });
 
-// #514: Quick routes to the 'recall-quick' tiered model + reasoningEffort:'low' (honest tier — supersedes
-// VUX-11's depth-only ruling for this specific lever, per the 2026-07-12 deep review). Considered keeps
-// the untiered global model + no reasoningEffort override, unchanged.
-describe('#514 — honest Quick tier: model preference + reasoningEffort', () => {
+// #514: the honest Quick tier is reasoningEffort ONLY — VUX-11 (ratified, PM-confirmed 2026-07-13) rules
+// out a model swap for effort: recall depth (tool-call/time budget, tested elsewhere) + reasoningEffort
+// are the only levers. Quick and Considered resolve the SAME (untiered, global) model.
+describe('#514 — honest Quick tier: reasoningEffort only, model is UNCHANGED by effort (VUX-11)', () => {
   async function configureVault(p: string): Promise<void> {
     await fs.writeFile(path.join(state.userData, 'kb-app.config.json'), JSON.stringify({ activeVaultPath: p }) + '\n');
   }
 
   afterEach(() => {
-    setStageDefaultModels({});
     setResolvedLaunchModel(null);
   });
 
-  it('effort:"quick" resolves the recall-quick tiered model and forwards reasoningEffort:"low"', async () => {
+  it('effort:"quick" forwards reasoningEffort:"low" but resolves the SAME global model as considered', async () => {
     await configureVault(vaultDir);
-    setStageDefaultModels({ 'recall-quick': 'claude-haiku-4.5' });
+    setResolvedLaunchModel('claude-opus-4.8');
     await invoke('kb:ask', { question: 'Who?', history: [], effort: 'quick' });
     const opts = (mocks.recall.mock.calls[0] as unknown[])[2] as { model?: string; reasoningEffort?: string; effort?: string };
-    expect(opts.model).toBe('claude-haiku-4.5');
+    expect(opts.model).toBe('claude-opus-4.8'); // NOT a lighter model — VUX-11: no model swap for effort
     expect(opts.reasoningEffort).toBe('low');
     expect(opts.effort).toBe('quick');
   });
 
-  it('effort:"considered" (or omitted) resolves the untiered global model, no reasoningEffort override', async () => {
+  it('effort:"considered" (or omitted) resolves the same model, no reasoningEffort override', async () => {
     await configureVault(vaultDir);
-    setStageDefaultModels({ 'recall-quick': 'claude-haiku-4.5' }); // present but must NOT be picked
     setResolvedLaunchModel('claude-opus-4.8');
     await invoke('kb:ask', { question: 'Who?', history: [], effort: 'considered' });
     const opts = (mocks.recall.mock.calls[0] as unknown[])[2] as { model?: string; reasoningEffort?: string; effort?: string };
-    expect(opts.model).toBe('claude-opus-4.8'); // the global model, NOT the quick tier
+    expect(opts.model).toBe('claude-opus-4.8');
     expect(opts.reasoningEffort).toBeUndefined();
     expect(opts.effort).toBe('considered');
+  });
+
+  it('quick and considered resolve to the IDENTICAL model — effort never changes which model runs', async () => {
+    await configureVault(vaultDir);
+    setResolvedLaunchModel('claude-sonnet-4.6');
+    await invoke('kb:ask', { question: 'Q1', history: [], effort: 'quick' });
+    await invoke('kb:ask', { question: 'Q2', history: [], effort: 'considered' });
+    const quickOpts = (mocks.recall.mock.calls[0] as unknown[])[2] as { model?: string };
+    const consideredOpts = (mocks.recall.mock.calls[1] as unknown[])[2] as { model?: string };
+    expect(quickOpts.model).toBe(consideredOpts.model);
   });
 });
 

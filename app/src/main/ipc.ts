@@ -482,15 +482,16 @@ export function registerIpc(): void {
     // forward the optional retrieval tool-call override (`undefined` ⇒ recall's graph-size-scaled
     // default applies — see `recallBudget`; a set value wins as `opts.maxToolCalls`).
     const { recallBudgetMs, recallMaxToolCalls } = await getActiveInstanceSettings();
-    // SPEC-0060 VUX-11: the Ask "Quick vs Considered" toggle modulates recall DEPTH honestly — Quick
-    // forces the floor hop + 60s time budget for a fast shallow lookup; Considered (the default when no
-    // effort is sent) keeps the Principal-configured / graph-scaled depth. No fake model swap (the CLI
-    // tiers by `--model` only, and no recall-quick/-considered model exists) — see recallEffortLevers.
+    // SPEC-0060 VUX-11 (ratified, PM-confirmed 2026-07-13 — stands, NOT superseded by #514's suggested
+    // approach): effort is expressed ONLY through recall's depth levers (tool-call budget + time budget),
+    // never a model swap — no recall-quick/-considered model exists in the catalog. `reasoningEffort` is
+    // a depth/effort lever on the SAME model (Copilot SDK's gated param), so it doesn't conflict with
+    // VUX-11 and is the honest part of #514's "Quick tier" fix.
     const { maxToolCalls, sessionBudgetMs } = recallEffortLevers(req.effort, { maxToolCalls: recallMaxToolCalls ?? undefined, sessionBudgetMs: recallBudgetMs ?? DEFAULT_RECALL_BUDGET_MS });
     const quick = req.effort === 'quick';
     // ORCH-16: pin the model recall's SDK session runs on, same as the enrich deciders — prod
     // otherwise passed no model and the SDK inherited `~/.copilot/settings.json` (model-pin gap).
-    const model = resolveCopilotModel(undefined, quick ? 'recall-quick' : 'recall');
+    const model = resolveCopilotModel(undefined, 'recall');
     return recall(
       path.resolve(cfg.activeVaultPath),
       { question: req.question, history: req.history },
