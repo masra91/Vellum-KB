@@ -8,9 +8,9 @@
 // goes through the SHARED canonical-writer lock so it never races a stage's ff-advance (§5).
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import simpleGit from 'simple-git';
 import { dateShard } from './ulid';
 import { ensureGitIdentity } from './vault';
+import { boundedGit } from './canonicalAdvance';
 import { captureToInbox } from './ingest';
 import { validReviewAnswerInput, type Review } from './reviews';
 import { recordDisambiguationDecision, verdictToDisambiguation } from './disambiguationDecisions';
@@ -36,6 +36,17 @@ async function readReviewFile(file: string): Promise<Review | null> {
     return JSON.parse(await fs.readFile(file, 'utf8')) as Review;
   } catch {
     return null;
+  }
+}
+
+/** `git add <pathspec>` hard-fails (not a no-op) when a pathspec matches nothing on disk — so an
+ *  optional/conditional path must be checked before it's added to a commit's pathspec list. */
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fs.stat(p);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -103,7 +114,7 @@ async function nodeBlockIdentity(root: string, rel: string): Promise<string | nu
  *  4. commit. Idempotent: answering an already-answered review is a no-op.
  * The caller (pipeline) pokes `result.stage` so the item resumes promptly.
  */
-export async function answerReview(root: string, lock: Mutex, id: string, answerInput: unknown): Promise<AnswerReviewResult> {
+export async function answerReview(root: string, lock: Mutex, id: string, answerInput: unknown, timeoutMs?: number): Promise<AnswerReviewResult> {
   root = path.resolve(root);
   const { verdict, note } = validReviewAnswerInput(answerInput);
   return lock.run(async () => {
@@ -222,9 +233,16 @@ export async function answerReview(root: string, lock: Mutex, id: string, answer
     }
 
     // 4. Commit on the canonical tree (serialized by the lock, so no race with stage ff-advances).
-    const git = simpleGit(root);
+    // #163/#515: bounded — an unbounded git op here would wedge the shared lock forever. Pathspec-scoped
+    // to what this transaction can touch (reviews/, the parked item's audit FILE, directives/ if this
+    // answer wrote one) — not `-A`, so a concurrent writer's leftover staged state never gets swept into
+    // this commit. `directives/` is conditional: a plain confirm/reject with no pair/block/identity key
+    // never creates it, and `git add` hard-fails (not a no-op) on a pathspec matching nothing.
+    const git = boundedGit(root, timeoutMs);
     await ensureGitIdentity(git);
-    await git.raw('add', '-A');
+    const pathspecs = ['reviews', review.raisedBy.auditRel];
+    if (await pathExists(path.join(root, 'directives'))) pathspecs.push('directives');
+    await git.raw('add', ...pathspecs);
     await git.commit(`review answered: ${id} (${verdict})`);
     return { ok: true, message: 'answered', stage: review.raisedBy.stage, review };
   }, 'review:answer');

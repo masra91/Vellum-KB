@@ -56,28 +56,35 @@ export async function withCanonicalIndexLock<T>(root: string, op: string, timeou
 export const GATE3_STALE_AGE_MS = 120_000;
 
 /**
- * Resolve the canonical `index.lock` path for `root`, correct for BOTH a plain repo and a linked git
- * worktree. The canonical writer advances run in the `staging` worktree, whose `.git` is a FILE
- * (`gitdir: <main>/.git/worktrees/staging`) and whose index.lock lives in that gitdir — NOT at
- * `<root>/.git/index.lock`. Cheap fs reads (no git spawn): stat `.git`; a dir → `<root>/.git/index.lock`;
- * a file → parse `gitdir:` → `<gitdir>/index.lock`. Falls back to the plain layout on any read error.
+ * Resolve the real GIT DIR for `root`, correct for BOTH a plain repo and a linked git worktree — the
+ * canonical writer advances run in the `staging` worktree, whose `.git` is a FILE
+ * (`gitdir: <main>/.git/worktrees/staging`), not a directory. Cheap fs reads (no git spawn): stat
+ * `.git`; a dir → that IS the gitdir; a file → parse `gitdir:` → the target. Falls back to the plain
+ * `<root>/.git` layout on any read error. Shared by `resolveIndexLockPath` (below) and the
+ * CHERRY_PICK_HEAD sequencer reconcile (#515) — both need to find the SAME real gitdir a linked
+ * worktree's sequencer/lock state actually lives in.
  */
-export async function resolveIndexLockPath(root: string): Promise<string> {
+export async function resolveGitDir(root: string): Promise<string> {
   const r = path.resolve(root);
   const dotGit = path.join(r, '.git');
   try {
     const st = await fs.stat(dotGit);
-    if (st.isDirectory()) return path.join(dotGit, 'index.lock');
+    if (st.isDirectory()) return dotGit;
     const content = await fs.readFile(dotGit, 'utf8'); // linked worktree → `.git` is a file
     const m = content.match(/^gitdir:\s*(.+?)\s*$/m);
-    if (m) {
-      const gitdir = path.isAbsolute(m[1]) ? m[1] : path.resolve(r, m[1]);
-      return path.join(gitdir, 'index.lock');
-    }
+    if (m) return path.isAbsolute(m[1]) ? m[1] : path.resolve(r, m[1]);
   } catch {
     /* fall through to the plain layout */
   }
-  return path.join(dotGit, 'index.lock');
+  return dotGit;
+}
+
+/**
+ * Resolve the canonical `index.lock` path for `root`, correct for BOTH a plain repo and a linked git
+ * worktree — see `resolveGitDir`.
+ */
+export async function resolveIndexLockPath(root: string): Promise<string> {
+  return path.join(await resolveGitDir(root), 'index.lock');
 }
 
 /** Best-effort answer to "is a live git process touching this repo?" for the no-sidecar gate-3. */
@@ -263,4 +270,85 @@ export async function reconcileStaleIndexLock(root: string, deps: ReconcileDeps)
     log.warn('orch.lock.held', { lock: lockPath, reason: verdict.reason });
   }
   return verdict;
+}
+
+// ── #515 BUG-2 — startup CHERRY_PICK_HEAD / sequencer heal ──────────────────────────────────────
+//
+// A SIGKILL (crash, or a force-quit before the #515 `before-quit` fix) mid `advanceOrCollide` cherry-
+// pick — after the pick itself starts but before its `catch`'s `cherry-pick --abort` runs, or when that
+// abort itself times out — leaves the canonical worktree's gitdir in a CHERRY_PICK_HEAD/sequencer state.
+// Nothing detects this today: the NEXT capture's plain `add inbox` + commit silently CONCLUDES the
+// stale cherry-pick with a half-applied (possibly conflict-markered) tree under a "capture:" message —
+// silent vault corruption — or every future `merge --ff-only`/cherry-pick fails until manual git surgery.
+//
+// Unlike `index.lock` there is no sidecar recording WHO holds a sequencer state, so gate-1/gate-2 from
+// the triple-gate above don't apply — the only signal available is gate-3's external-git-process scan.
+// Called at startup, before any stage drains: no advance from THIS process can be in flight yet, so
+// "live" can only mean "some OTHER process is genuinely mid-pick on this repo" — fail safe (`keep`) on
+// `present`/`inconclusive`, heal only when the scan proves no live git process is touching the repo.
+
+export type CherryPickVerdict = 'absent' | 'cleared' | 'kept';
+
+export interface CherryPickReconcileDeps {
+  /** Override the external-git scan (tests) — see `scanExternalGitProcess`. */
+  scanExternalGit?: (root: string) => Promise<ExternalGitScan>;
+  /** Override the `git` invocation used to abort/reset (tests drive a fake that never actually shells out). */
+  runGit?: (root: string, args: string[]) => Promise<void>;
+  /** Audit sink for a heal (mirrors `reconcileStaleIndexLock`'s `audit`). */
+  audit?: (event: { root: string }) => void | Promise<void>;
+  log?: DevLog;
+}
+
+async function defaultRunGit(root: string, args: string[]): Promise<void> {
+  await execFileP('git', ['-C', root, ...args], { timeout: 10_000 });
+}
+
+/**
+ * Detect + (if provably safe) heal a stuck `CHERRY_PICK_HEAD`/sequencer state in `root`'s gitdir before
+ * the first stage drain. Safe to call unconditionally at startup — a no-op (`absent`) in the overwhelming
+ * common case where no cherry-pick is in progress.
+ */
+export async function reconcileCherryPickSequencer(root: string, deps: CherryPickReconcileDeps = {}): Promise<CherryPickVerdict> {
+  const log = deps.log ?? noopDevLog;
+  const gitDir = await resolveGitDir(root);
+  const cherryPickHeadPath = path.join(gitDir, 'CHERRY_PICK_HEAD');
+
+  try {
+    await fs.stat(cherryPickHeadPath);
+  } catch {
+    return 'absent'; // no sequencer state → nothing to do (the common, healthy case)
+  }
+
+  const externalGitScan = await (deps.scanExternalGit ?? scanExternalGitProcess)(root);
+  if (externalGitScan !== 'none') {
+    log.warn('orch.cherry-pick.held', { root, scan: externalGitScan });
+    return 'kept'; // fail-safe: a live or inconclusive-live external git process could be the one mid-pick
+  }
+
+  const runGit = deps.runGit ?? defaultRunGit;
+  try {
+    await runGit(root, ['cherry-pick', '--abort']);
+  } catch {
+    // `--abort` can itself fail on a corrupt sequencer (e.g. killed mid-abort). Startup means no advance
+    // from THIS process is in flight yet — committed staging state is the durable truth by design (a
+    // half-applied cherry-pick tree was never promoted) — so a hard reset to HEAD is safe here
+    // specifically because we're pre-drain, unlike the mid-advance abort in `advanceOrCollide`.
+    try {
+      await runGit(root, ['reset', '--hard', 'HEAD']);
+      await fs.rm(cherryPickHeadPath, { force: true });
+      await fs.rm(path.join(gitDir, 'sequencer'), { recursive: true, force: true });
+    } catch (err) {
+      log.error('orch.cherry-pick.heal-failed', { root, err });
+      return 'kept';
+    }
+  }
+
+  log.warn('orch.cherry-pick.healed', { root });
+  const auditFn = deps.audit ?? ((e) => appendAuditEvent(root, { actor: 'maintenance', subjects: {}, eventType: 'cherry-pick-healed', payload: { root: e.root } }));
+  try {
+    await auditFn({ root });
+  } catch {
+    /* audit best-effort — the sequencer is already healed; a logging failure must not re-wedge */
+  }
+  return 'cleared';
 }

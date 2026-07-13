@@ -18,7 +18,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import simpleGit from 'simple-git';
+import { boundedGit } from './canonicalAdvance';
 import { normalizeAuditLine, CONTROL_AUDIT_REL, type AuditEvent, type AuditActor, type NormalizeContext } from './audit';
 
 /** Bump when the cached shape changes so a stale cache from an older build is discarded. */
@@ -185,10 +185,11 @@ function byTsDescending(a: AuditEvent, b: AuditEvent): number {
   return b.provenance.line - a.provenance.line;
 }
 
-/** Read the current git HEAD of `root` for the freshness key; null when not a git repo / no commits. */
+/** Read the current git HEAD of `root` for the freshness key; null when not a git repo / no commits.
+ *  #515: bounded — an off-lock, unbounded read against a wedged repo would silently hang the feed. */
 async function readHead(root: string): Promise<string | null> {
   try {
-    return (await simpleGit(root).revparse(['HEAD'])).trim();
+    return (await boundedGit(root).revparse(['HEAD'])).trim();
   } catch {
     return null;
   }

@@ -55,7 +55,7 @@ import { reapEphemeralWorktrees, boundedGit } from '../kb/canonicalAdvance';
 import { fastHeadSha, fastHeadBranch } from '../kb/gitHeadFast';
 import { CanonicalQueueCache } from '../kb/queueCache';
 import type { CandidateSet } from '../kb/connectAgent';
-import { reconcileStaleIndexLock, hasLiveIndexHolder } from '../kb/canonicalLockHeal';
+import { reconcileStaleIndexLock, hasLiveIndexHolder, reconcileCherryPickSequencer } from '../kb/canonicalLockHeal';
 import { promote } from '../kb/staging';
 import {
   remediateHealthFindingInVault,
@@ -362,9 +362,27 @@ export async function startPipeline(vaultPath: string): Promise<Orchestrator> {
     isLiveInProcHolder: () => hasLiveIndexHolder(stagingWt),
     log: log.child({ scope: 'lock' }),
   }).catch((err) => log.child({ scope: 'lock' }).error('startup.lock-reconcile-failed', { itemId: vaultPath, err }));
+  // #515 BUG-2: heal a stuck CHERRY_PICK_HEAD/sequencer left by a crash/kill mid-advance — BEFORE any
+  // stage drains, so the first capture's plain `add inbox` + commit never silently concludes a stale,
+  // possibly half-applied cherry-pick under a "capture:" message.
+  await reconcileCherryPickSequencer(stagingWt, { log: log.child({ scope: 'lock' }) }).catch((err) =>
+    log.child({ scope: 'lock' }).error('startup.cherry-pick-reconcile-failed', { itemId: vaultPath, err }),
+  );
   // The shared serialized canonical writer for this vault (§5). The watchdog logs a loud `lock.stuck`
   // (scope `lock`) + flips the OBS-7 `stuck` flag if any section is held past the threshold — so a
   // deadlocked/hung critical section surfaces (named by its label) instead of silently wedging (#163).
+  // #515: `Mutex.sectionTimeoutMs`/`RunOptions.timeoutMs` (stageLock.ts) give any FUTURE section a hard
+  // reject-and-release backstop, but deliberately NOT wired here as a blanket default (KB-QD review):
+  // this ONE lock is shared by every stage's heterogeneous sections (connect's linkOne/linkOrphansOnce,
+  // claims, compose, decompose, orchestrator…), each chaining a different number of `boundedGit` calls —
+  // there's no single constant that's provably ABOVE every section's git-call budget yet BELOW "actually
+  // wedged", and a timeout firing WHILE a git call is still in flight would let the next waiter start a
+  // concurrent write on the same working tree/index — the exact single-writer violation this issue
+  // fixes, not a mitigation of it. The safe, already-proven mechanism is `boundedGit`'s own per-call
+  // timeout: every git op in a `lock.run` section now goes through it, so a blocked call rejects on its
+  // OWN bound and the chain's `finally` releases normally — no orphaned in-flight write is possible. A
+  // per-section timeout is legitimate future work IF paired with a derived (not guessed) budget per
+  // section; until then this stays off.
   const lock = new Mutex({ log: log.child({ scope: 'lock' }) });
   // SPEC-0028 RESEARCH-1 / WS-B: seed a default Web researcher on a virgin (or pre-feature) vault so
   // the research pipeline isn't INERT — an empty registry means nothing dispatches even once a
@@ -2064,6 +2082,28 @@ export function stopPipeline(): void {
     void promoter.flushNow();
   }
   active = null;
+}
+
+/**
+ * #515 BUG-2: stop the pipeline for an actual app quit, AWAITING the pending coalesced promote flush —
+ * bounded by `timeoutMs` — before returning, so `main.ts`'s `before-quit` handler can hold the quit open
+ * just long enough for an in-flight commit/promote to land cleanly instead of being SIGKILLed mid-write.
+ * Best-effort past the deadline: staging is the durable source of truth, so an abandoned flush is simply
+ * re-promoted (idempotent + additive) on the next session's first drain — never a correctness gap, only
+ * a missed opportunity to publish a moment sooner.
+ */
+export async function stopPipelineForQuit(timeoutMs = 2000): Promise<void> {
+  if (!active) return;
+  const { promoter } = active;
+  stopAllStages(active);
+  active = null;
+  await Promise.race([
+    promoter.flushNow().catch(() => {}),
+    new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, timeoutMs);
+      if (typeof t.unref === 'function') t.unref();
+    }),
+  ]);
 }
 
 let replaying = false;

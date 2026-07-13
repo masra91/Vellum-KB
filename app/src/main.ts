@@ -3,7 +3,7 @@ import path from 'node:path';
 import v8 from 'node:v8';
 import started from 'electron-squirrel-startup';
 import { registerIpc, initPipeline, stopRecallClient } from './main/ipc';
-import { stopPipeline, getActiveInstanceSettings, activeSnapshotDir, pipelineStatusForActive, quiesceActive, resumeActive, isActiveQuiescing } from './main/pipeline';
+import { stopPipelineForQuit, getActiveInstanceSettings, activeSnapshotDir, pipelineStatusForActive, quiesceActive, resumeActive, isActiveQuiescing } from './main/pipeline';
 import { quiesceTrayItems } from './main/quiesceTray';
 import { startTelemetry, stopTelemetry } from './main/telemetry';
 import { ensurePath } from './main/resolvePath';
@@ -135,14 +135,34 @@ app.on('will-quit', () => {
   void stopRecallClient().catch(() => {}); // best-effort — quitting must never hang on this
 });
 
+// #515 BUG-2: `before-quit` is the ONE event that fires on every quit path — including Cmd-Q / Dock
+// "Quit" on macOS, where `window-all-closed` never fires (the app stays alive with no window, QCAP-8
+// below) — so it's the only place a quit can reliably be held open long enough to stop the pipeline and
+// flush a pending promote before the process (and its git children) are killed. Previously only
+// `window-all-closed` called `stopPipeline()`, which meant a macOS quit killed an in-flight
+// advance/cherry-pick mid-write with no cleanup at all.
+let quitInProgress = false;
+app.on('before-quit', (event) => {
+  if (quitInProgress) return; // this is our own re-quit below — let it proceed to actually exit
+  quitInProgress = true;
+  event.preventDefault();
+  void (async () => {
+    try {
+      await stopPipelineForQuit(); // bounded best-effort flush (STAGING-12 — staging is durable either way)
+    } finally {
+      stopTelemetry(); // stop the memory sampler's interval on shutdown (OBS-20)
+      app.quit();
+    }
+  })();
+});
+
 // QCAP-8 dual-model (also CAPTURE-12 / ORCH-1): on macOS the app stays alive with no window open — a
 // persistent Dock + menubar/tray agent, the orchestrator draining the queue headlessly + the global
 // hotkey live; the tray "Show Vellum" (QCAP-11) / hotkey / Dock-icon reopen the window. Other
-// platforms quit as usual. Policy is the pure, unit-tested `shouldQuitOnWindowAllClosed`.
+// platforms quit as usual. Policy is the pure, unit-tested `shouldQuitOnWindowAllClosed`. The actual
+// pipeline stop + flush happens in `before-quit` above, which `app.quit()` always triggers first.
 app.on('window-all-closed', () => {
   if (shouldQuitOnWindowAllClosed(process.platform)) {
-    stopPipeline();
-    stopTelemetry(); // stop the memory sampler's interval on shutdown (OBS-20)
     app.quit();
   }
 });
