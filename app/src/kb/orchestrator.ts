@@ -33,7 +33,76 @@ export interface PipelineStatusData {
   updatedAt: string | null;
 }
 
-/** The inbox queue: sorted ULID directories (ULIDs sort by capture time). ORCH-4. */
+// ── Archive poison quarantine (#516 BUG-3) ─────────────────────────────────────────────────────
+//
+// archiveOne previously had no try/catch at all: any throw (a torn audit.jsonl, an unreadable/
+// oversized file, a decider throw, …) propagated straight out of the batch, and the poison unit
+// stayed in the inbox forever — every poke/sweep re-hit the SAME failure, and at cap=1 this wedged
+// archiving (and therefore the whole pipeline) permanently. Mirrors claims'/connect's own
+// audit-log-derived set-aside convention exactly (no directory move — the unit stays in place; an
+// append-only marker on its OWN `audit.jsonl` is what stops it being redrained), rather than
+// inventing a new quarantine mechanism.
+
+/** Default attempts before a poison inbox unit is set aside (#516 BUG-3). Each stage owns its own
+ *  constant (mirrors claims'/connect's independent `DEFAULT_MAX_ATTEMPTS`), not a shared import. */
+export const DEFAULT_ARCHIVE_MAX_ATTEMPTS = 3;
+
+type ArchiveTerminalReason = 'archive-setaside' | 'archive-dismissed';
+const ARCHIVE_TERMINAL_ACTIONS: ReadonlySet<string> = new Set<ArchiveTerminalReason>(['archive-setaside', 'archive-dismissed']);
+
+export interface ArchiveUnitState {
+  /** Left the queue for good: set aside (poison, recoverable) or dismissed (user-retired). */
+  terminal: boolean;
+  terminalReason?: ArchiveTerminalReason;
+  /** Failed attempts recorded on this unit's own audit trail (#516 BUG-3). */
+  failures: number;
+}
+
+interface ArchiveAuditLine {
+  action?: string;
+}
+
+/** Read one inbox unit's archive-attempt state from its own append-only `audit.jsonl` (#516 BUG-3) —
+ *  the SAME reducer both the drain queue ({@link readQueue}) and the Status-view recovery surface
+ *  (OBS-17) read through, mirroring claims'/connect's `readClaimsState`/equivalent. A unit with no
+ *  (or an unreadable) audit.jsonl is simply not-yet-attempted — never a hard error here. */
+export async function readArchiveUnitState(unitDir: string): Promise<ArchiveUnitState> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(path.join(unitDir, 'audit.jsonl'), 'utf8');
+  } catch {
+    return { terminal: false, failures: 0 };
+  }
+  let terminal = false;
+  let terminalReason: ArchiveTerminalReason | undefined;
+  let failures = 0;
+  for (const line of raw.split('\n')) {
+    if (line.trim().length === 0) continue;
+    let obj: ArchiveAuditLine;
+    try {
+      obj = JSON.parse(line) as ArchiveAuditLine;
+    } catch {
+      continue; // a torn/corrupt line is skipped, not fatal — the reducer stays best-effort
+    }
+    if (obj.action === 'archive-reopened') {
+      // OBS-17 retry (#516): supersedes ALL prior failure/terminal state for this unit — it re-enters
+      // the queue fresh, mirroring claims'/connect's `reopened` marker semantics.
+      terminal = false;
+      terminalReason = undefined;
+      failures = 0;
+    } else if (obj.action && ARCHIVE_TERMINAL_ACTIONS.has(obj.action)) {
+      terminal = true;
+      terminalReason = obj.action as ArchiveTerminalReason;
+    } else if (obj.action === 'archive-failed') {
+      failures += 1;
+    }
+  }
+  return { terminal, terminalReason, failures };
+}
+
+/** The inbox queue: sorted ULID directories (ULIDs sort by capture time, ORCH-4), EXCLUDING any unit
+ *  set aside or dismissed (#516 BUG-3) — mirrors claims'/connect's queue functions, which filter
+ *  terminal items the same way, so the drain loop and the Status "N in queue" readout always agree. */
 export async function readQueue(root: string): Promise<string[]> {
   const inbox = path.join(path.resolve(root), 'inbox');
   let entries: string[];
@@ -44,13 +113,96 @@ export async function readQueue(root: string): Promise<string[]> {
   }
   const dirs: string[] = [];
   for (const e of entries) {
+    if (e.startsWith('.')) continue; // hidden/system entries are never a queue item
     try {
       if ((await fs.stat(path.join(inbox, e))).isDirectory()) dirs.push(e);
     } catch {
       /* vanished mid-scan — skip */
     }
   }
-  return dirs.sort();
+  dirs.sort();
+  const out: string[] = [];
+  for (const id of dirs) {
+    if (!(await readArchiveUnitState(path.join(inbox, id))).terminal) out.push(id);
+  }
+  return out;
+}
+
+/** Every set-aside (poison, recoverable) inbox unit (#516 / OBS-17) — the Status-view recovery
+ *  surface reads this the same way claims'/connect's `listSetAsideItems` work. Best-effort display
+ *  metadata: a unit whose OWN meta is unreadable (the very failure that set it aside, e.g. a torn
+ *  `audit.jsonl`) still lists with its id as the label — never dropped from the list. */
+export interface ArchiveSetAsideItem {
+  id: string;
+  name: string;
+  failures: number;
+}
+
+export async function listArchiveSetAsideItems(root: string): Promise<ArchiveSetAsideItem[]> {
+  root = path.resolve(root);
+  const inbox = path.join(root, 'inbox');
+  let entries: string[];
+  try {
+    entries = await fs.readdir(inbox);
+  } catch {
+    return [];
+  }
+  const out: ArchiveSetAsideItem[] = [];
+  for (const id of entries.filter((e) => !e.startsWith('.')).sort()) {
+    const unitDir = path.join(inbox, id);
+    try {
+      if (!(await fs.stat(unitDir)).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    const state = await readArchiveUnitState(unitDir);
+    if (!state.terminal || state.terminalReason !== 'archive-setaside') continue;
+    let name = id;
+    try {
+      const meta = await readCapturedMeta(unitDir);
+      name = meta.originalName ?? (meta.kind === 'text' ? 'note' : meta.raw);
+    } catch {
+      /* meta unreadable — the id is still a usable label */
+    }
+    out.push({ id, name, failures: state.failures });
+  }
+  return out;
+}
+
+/** Append a durable marker to a unit's own `audit.jsonl` under the same optimistic-concurrency
+ *  ceremony {@link archiveOne} uses, so retry/dismiss are real, git-committed vault state changes
+ *  (#516 / OBS-17) — never a silent local-only side effect. A unit that's vanished (already archived
+ *  by a race, or never existed) is a clean no-op. */
+async function markArchiveUnit(root: string, id: string, lock: Mutex, action: 'archive-reopened' | 'archive-dismissed', commitVerb: string): Promise<void> {
+  root = path.resolve(root);
+  const prepare = async ({ wt }: PrepareContext): Promise<boolean> => {
+    const unitDir = path.join(wt, 'inbox', id);
+    try {
+      await fs.access(unitDir);
+    } catch {
+      return false; // gone — nothing to mark
+    }
+    await fs.appendFile(path.join(unitDir, 'audit.jsonl'), JSON.stringify({ action, id, at: new Date().toISOString() }) + '\n', 'utf8');
+    const wtGit = simpleGit(wt);
+    await wtGit.raw('add', '-A');
+    await wtGit.commit(`archive: ${commitVerb} ${id}`);
+    return true;
+  };
+  const onExhausted = async (): Promise<void> => {
+    throw new Error(`archive: ${commitVerb} ${id} exhausted optimistic-advance retries (unexpected same-path collision)`);
+  };
+  await withConcurrentAdvance({ root, lock, stage: 'archive' }, prepare, onExhausted);
+}
+
+/** Retry a set-aside inbox unit (#516 / OBS-17): the NEXT drain re-attempts it fresh. */
+export function retryArchiveItem(root: string, id: string, lock: Mutex = new Mutex()): Promise<void> {
+  return markArchiveUnit(root, id, lock, 'archive-reopened', 'reopened');
+}
+
+/** Permanently retire a set-aside inbox unit (#516 / OBS-17). The unit itself is never destroyed
+ *  (DATA-2) — only marked; it just leaves the queue for good. */
+export function dismissArchiveItem(root: string, id: string, lock: Mutex = new Mutex()): Promise<void> {
+  return markArchiveUnit(root, id, lock, 'archive-dismissed', 'dismissed');
 }
 
 /**
@@ -70,15 +222,23 @@ export async function archiveOne(
   span: ActiveSpan = noopActiveSpan,
   classify?: SensitivityClassifier,
   mediaExtract?: MediaExtractOptions,
+  maxAttempts: number = DEFAULT_ARCHIVE_MAX_ATTEMPTS,
 ): Promise<string> {
   root = path.resolve(root);
   const destRel = path.join('sources', dateShard(id), id);
+  // #516 BUG-3: set when the catch branch below recorded a failure (whether or not it crossed the
+  // set-aside threshold) — read AFTER withConcurrentAdvance resolves to decide whether to still throw
+  // (preserving archiveOne's existing throw-on-failure contract for its one caller, drainOnce) even
+  // though the underlying advance itself succeeded (it committed a failure-recording marker, not a
+  // no-op — see the catch branch). A boxed object (not a bare `let`) so reading it after the closure
+  // runs isn't subject to TS's closure narrowing.
+  const failureBox: { current: { attempt: number; setAside: boolean } | null } = { current: null };
 
-  const prepare = async ({ wt }: PrepareContext): Promise<boolean> => {
+  const prepare = async ({ wt, base }: PrepareContext): Promise<boolean> => {
     const wtGit = simpleGit(wt); // the ephemeral per-item worktree, fresh off the checkpoint
-
     const unitDir = path.join(wt, 'inbox', id);
-    const meta = await readCapturedMeta(unitDir);
+    try {
+      const meta = await readCapturedMeta(unitDir);
     const baseDecision = await decider(meta, { span });
     // The source body, read once at the ingest boundary (before the rename) — used both for the classifier
     // (SENSE-4, content in hand) and as the rendered source.md body, so we never read the bytes twice.
@@ -145,9 +305,34 @@ export async function archiveOne(
       'utf8',
     );
 
-    await wtGit.raw('add', '-A');
-    await wtGit.commit(`archive: ${id}`);
-    return true;
+      await wtGit.raw('add', '-A');
+      await wtGit.commit(`archive: ${id}`);
+      return true;
+    } catch (err) {
+      // #516 BUG-3: never let a poison unit (a torn/missing audit.jsonl, an unreadable or oversized raw
+      // file, a decider throw, …) wedge the WHOLE archive drain forever. Discard any partial worktree
+      // writes (mirrors claims' CLAIMS-12 reset-then-record pattern), then durably record the failed
+      // attempt on the unit's OWN audit.jsonl — and set it aside after `maxAttempts` — so a later
+      // poke/sweep (readQueue) naturally stops redraining it instead of retrying it every 30s forever
+      // (the "ingestion halts entirely" failure mode this bug produced at cap=1).
+      await wtGit.raw('reset', '--hard', base);
+      const error = err instanceof Error ? err.message : String(err);
+      const priorFailures = (await readArchiveUnitState(unitDir)).failures;
+      const attempt = priorFailures + 1;
+      const setAside = attempt >= maxAttempts;
+      failureBox.current = { attempt, setAside };
+      const at = new Date().toISOString();
+      let audit = JSON.stringify({ action: 'archive-failed', id, attempt, error, at }) + '\n';
+      if (setAside) audit += JSON.stringify({ action: 'archive-setaside', id, attempts: attempt, at }) + '\n';
+      // The unit dir may not exist at all yet if the failure happened before any write (e.g. a
+      // missing/torn audit.jsonl on readCapturedMeta) — mkdir-safe, mirrors claims' BUG #135 fix so the
+      // durable failure record always lands instead of the unit retrying forever.
+      await fs.mkdir(unitDir, { recursive: true });
+      await fs.appendFile(path.join(unitDir, 'audit.jsonl'), audit, 'utf8');
+      await wtGit.raw('add', '-A');
+      await wtGit.commit(`archive: failed ${id} (attempt ${attempt}${setAside ? ', set aside' : ''})`);
+      return true; // the FAILURE-RECORDING advance itself succeeds — the drain is never wedged by it
+    }
   };
 
   const onExhausted = async (): Promise<void> => {
@@ -160,8 +345,13 @@ export async function archiveOne(
   // one inbox unit being archived, its fixed destination (a pure function of `id`), and the fixed
   // sensitivity-overrides file. Sparse-checkout to just those instead of materializing the whole
   // checkpoint tree (on a large vault, thousands of unrelated `sources/`/`entities/`/`claims/` files).
+  // #516 BUG-3's failure-recording branch writes into the SAME `inbox/<id>` path already covered here.
   const sparsePaths = [path.join('inbox', id), destRel, path.join('.kb', 'sensitivity')];
   await withConcurrentAdvance({ root, lock, stage: 'archive', sparsePaths }, prepare, onExhausted);
+  const outcome = failureBox.current;
+  if (outcome) {
+    throw new Error(`archive: ${id} ${outcome.setAside ? `set aside after ${outcome.attempt} failed attempt(s)` : `failed (attempt ${outcome.attempt})`}`);
+  }
   return destRel;
 }
 
@@ -341,37 +531,54 @@ export class Orchestrator {
     }
     while (queue.length > 0) {
       // ORCH-17/18/20: archive up to `cap` items concurrently — each prepares OFF the lock in its own
-      // ephemeral worktree, advances UNDER the shared lock (cap=1 ⇒ serial). A failing item throws and
-      // stays in the inbox (ORCH-12); the batch's other items still land, and a later sweep retries.
+      // ephemeral worktree, advances UNDER the shared lock (cap=1 ⇒ serial).
+      //
+      // #516 BUG-7: this used to be a plain `Promise.all` — ONE item's rejection aborted the whole
+      // batch while its siblings kept running UNAWAITED (a leaked promise per sibling: re-dispatch
+      // races on the next pass, duplicate copilot spend, add/add cherry-pick conflicts, `busy()`
+      // under-reporting once the leaked promise finally settled outside this function's view).
+      // `Promise.allSettled` awaits every sibling to completion before this pass considers itself
+      // done, and a failure is isolated to just that one item — never a batch-wide abort, exactly one
+      // attempt per id this pass. A failed-but-not-yet-set-aside item stays in the inbox (ORCH-12) and
+      // `readQueue` naturally re-offers it on the next iteration/sweep; #516 BUG-3's per-item
+      // attempt-counter (in archiveOne) is what eventually excludes a truly poison one.
       const batch = queue.slice(0, this.cap);
       await this.updateStatus(queue.length, batch[0]);
-      try {
-        // OBS-12: each item gets a `stage.run` span (wraps the archivist's copilot child once Phase B
-        // lands; v1's deterministic decider emits no child, so this just times the archive op).
-        await Promise.all(
-          batch.map((id) => {
-            const span = this.tracer.start(STAGE_RUN_OP, { stage: 'archive', itemId: id });
-            return archiveOne(this.root, id, this.decider, this.lock, span, this.classify, this.mediaExtract).then(
-              () => {
-                span.end('ok');
-                this.lastArchived = id;
-              },
-              (err) => {
-                // Surface the cause on the span (robustness batch), then propagate to stop this pass.
-                span.end('error', err instanceof Error ? err.message : String(err));
-                throw err;
-              },
-            );
-          }),
-        );
-      } catch (err) {
-        // OBS-4: archive failed — the item stays in the inbox (ORCH-12). Surface the cause so this is
-        // never a silent "N in queue, nothing happened" stall (the bug that motivated SPEC-0030).
-        this.log.error('archive.drain-error', { itemId: batch[0], err });
-        await this.updateStatus(queue.length, null);
-        return;
+      // OBS-12: each item gets a `stage.run` span (wraps the archivist's copilot child once Phase B
+      // lands; v1's deterministic decider emits no child, so this just times the archive op).
+      const results = await Promise.allSettled(
+        batch.map((id) => {
+          const span = this.tracer.start(STAGE_RUN_OP, { stage: 'archive', itemId: id });
+          return archiveOne(this.root, id, this.decider, this.lock, span, this.classify, this.mediaExtract).then(
+            () => {
+              span.end('ok');
+              this.lastArchived = id;
+            },
+            (err) => {
+              // Surface the cause on the span (robustness batch); rethrow so allSettled records THIS
+              // item as rejected without affecting any sibling's own promise.
+              span.end('error', err instanceof Error ? err.message : String(err));
+              throw err;
+            },
+          );
+        }),
+      );
+      // OBS-4: a failed item is never a silent "N in queue, nothing happened" stall (the bug that
+      // motivated SPEC-0030) — log each rejection with its own id, not just the batch's first item.
+      const failedThisPass = new Set<string>();
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        if (r.status === 'rejected') {
+          failedThisPass.add(batch[i]);
+          this.log.error('archive.item-failed', { itemId: batch[i], err: r.reason });
+        }
       }
-      queue = await readQueue(this.root);
+      // #516 BUG-3: an item that just failed (but isn't yet set aside) stays in the inbox and WILL be
+      // retried — but on the NEXT poke/sweep, not immediately again within this SAME pass. Without this
+      // exclusion the while-loop would re-offer the same still-queued failing id every iteration and
+      // burn through `maxAttempts` in one poke() instead of across separate drain passes (ORCH-12: a
+      // single failing decider must still leave the item queued, not silently escalate to set-aside).
+      queue = (await readQueue(this.root)).filter((id) => !failedThisPass.has(id));
     }
     await this.updateStatus(0, null);
     // SPEC-0021: publish freshly-archived evergreen sources from `staging` to `main`,

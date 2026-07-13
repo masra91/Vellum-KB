@@ -27,7 +27,7 @@ import { readContradictionDirectives } from '../kb/directives';
 import { loadActivityIndex } from '../kb/activityIndex';
 import { buildFeed, type ActivityFeedEntry } from '../kb/activityDigest';
 import { createCoalescingPromoter, type CoalescingPromoter } from '../kb/coalescingPromoter';
-import { Orchestrator, readQueue } from '../kb/orchestrator';
+import { Orchestrator, readQueue, listArchiveSetAsideItems, retryArchiveItem, dismissArchiveItem, type ArchiveSetAsideItem } from '../kb/orchestrator';
 import { makeCopilotDecider } from '../kb/copilotAgent';
 import { makeSensitivityClassifier } from '../kb/sensitivityClassifier';
 import { DecomposeStage, readDecomposeQueue } from '../kb/decomposeStage';
@@ -156,6 +156,7 @@ interface ActivePipeline {
     conversion: CanonicalQueueCache<ConversionCounts>;
     claimsSetAside: CanonicalQueueCache<SetAsideItem[]>;
     connectSetAside: CanonicalQueueCache<ConnectSetAsideItem[]>;
+    archiveSetAside: CanonicalQueueCache<ArchiveSetAsideItem[]>;
   };
 }
 
@@ -560,6 +561,7 @@ export async function startPipeline(vaultPath: string): Promise<Orchestrator> {
       conversion: new CanonicalQueueCache(async () => `${await fastHeadSha(stagingWt)}:${await fastHeadSha(vaultPath)}`),
       claimsSetAside: new CanonicalQueueCache(fastHeadSha),
       connectSetAside: new CanonicalQueueCache(fastHeadSha),
+      archiveSetAside: new CanonicalQueueCache(fastHeadSha),
     },
   };
   const readyMs = Date.now() - startedAt; // when the Jobs/read IPC went live — independent of the reap
@@ -654,7 +656,7 @@ async function listWorktrees(vaultPath: string): Promise<WorktreeInfo[]> {
 async function computePipelineStatus(): Promise<PipelineStatusView | null> {
   if (!active) return null;
   const { vaultPath, stagingWt, lock, orch, decompose, connect, claims, statusCache } = active;
-  const [archiveQ, decompQ, connectQ, claimsQ, archiveStatus, recentRaw, perf, worktrees, claimsSetAside, connectSetAside, conversion] = await Promise.all([
+  const [archiveQ, decompQ, connectQ, claimsQ, archiveStatus, recentRaw, perf, worktrees, claimsSetAside, connectSetAside, archiveSetAside, conversion] = await Promise.all([
     readQueue(stagingWt),
     // #506: these three raw readers each re-walk their whole tree; HEAD-key them so an idle tick (no
     // canonical commit since the last one) is a spawn-free sha read instead of a full re-walk.
@@ -670,13 +672,16 @@ async function computePipelineStatus(): Promise<PipelineStatusView | null> {
     listWorktrees(vaultPath),
     statusCache.claimsSetAside.read(stagingWt, () => listSetAsideItems(stagingWt)), // OBS-17: claims poison items (canonical claims-path reader, CLAIMS-20)
     statusCache.connectSetAside.read(stagingWt, () => listConnectSetAsideItems(stagingWt)), // OBS-17: connect poison blocks (CLAIMS-20 connect twin, #157)
+    statusCache.archiveSetAside.read(stagingWt, () => listArchiveSetAsideItems(stagingWt)), // #516 BUG-3 / OBS-17: archive poison units
     statusCache.conversion.read(stagingWt, () => readConversionCounts(stagingWt, vaultPath)), // SPEC-0032 VIZ-3: funnel counts (staging state + promoted on main)
   ]);
-  // Union every stage's set-aside items into the view (claims + connect; future stages append here).
-  // Each stage maps its item to the generic {itemId, name, failures, rounds} source shape.
+  // Union every stage's set-aside items into the view (claims + connect + archive; future stages
+  // append here). Each stage maps its item to the generic {itemId, name, failures, rounds} source shape
+  // (archive has no review-cascade `rounds` concept, so it's always 0).
   const setAsideItems = [
     ...toSetAsideViews(claimsSetAside.map((i) => ({ itemId: i.entityId, name: i.name, failures: i.failures, rounds: i.rounds })), 'claims'),
     ...toSetAsideViews(connectSetAside.map((i) => ({ itemId: i.blockKey, name: i.name, failures: i.failures, rounds: i.rounds })), 'connect'),
+    ...toSetAsideViews(archiveSetAside.map((i) => ({ itemId: i.id, name: i.name, failures: i.failures, rounds: 0 })), 'archive'),
   ];
 
   const recentErrors: RecentError[] = recentRaw.map((e) => ({
@@ -1081,6 +1086,13 @@ export async function pipelineControlForActive(req: PipelineControlRequest): Pro
       doRetry = (h) => retryConnectItem(a.stagingWt, h, a.lock);
       doDismiss = (h) => dismissConnectItem(a.stagingWt, h, a.lock);
       pokeAfterRetry = () => void a.connect.poke();
+    } else if (req.stage === 'archive') {
+      // #516 BUG-3 / OBS-17: archive's set-aside handle IS the inbox ULID itself (no separate repo-
+      // relative path like claims'/connect's node/block identity — the unit never moves).
+      targets = (await listArchiveSetAsideItems(a.stagingWt)).map((i) => ({ id: i.id, handle: i.id, label: i.name || i.id }));
+      doRetry = (h) => retryArchiveItem(a.stagingWt, h, a.lock);
+      doDismiss = (h) => dismissArchiveItem(a.stagingWt, h, a.lock);
+      pokeAfterRetry = () => void a.orch.poke();
     } else {
       return { ok: false, message: `Recovery for the “${req.stage}” stage isn’t supported yet.` };
     }

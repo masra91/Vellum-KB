@@ -24,6 +24,14 @@ function gitInstalledSync(): boolean {
 }
 const gitAvailable = gitInstalledSync();
 const T = () => '2025-06-03T12:00:00.000Z';
+// #516 BUG-6: the stability gate skips a file whose mtime is within the last 2s (see watchRun.ts). These
+// tests write a file and immediately reconcile — report every file as already 10s-settled instead.
+const STABLE = {
+  stat: async (p: string) => {
+    const s = await fs.stat(p);
+    return { mtimeMs: s.mtimeMs - 10_000, size: s.size };
+  },
+};
 
 async function trySymlink(target: string, link: string, type: 'file' | 'dir'): Promise<boolean> {
   try {
@@ -126,10 +134,10 @@ describe.skipIf(!gitAvailable)('reconcileWatchFolder recursive (WATCH-12)', () =
     await fs.writeFile(path.join(watched, 'top.md'), 'top');
     await fs.writeFile(path.join(watched, 'reports', 'q1.md'), 'q1');
 
-    const flat = await reconcileWatchFolder(vault, cfg(), { vaultRoot: vault, now: T });
+    const flat = await reconcileWatchFolder(vault, cfg(), { vaultRoot: vault, now: T, ...STABLE });
     expect(flat.ingested).toBe(1); // only top.md — subdir not descended
 
-    const rec = await reconcileWatchFolder(vault, cfg({ recursive: true, maxDepth: 5 }), { vaultRoot: vault, now: T });
+    const rec = await reconcileWatchFolder(vault, cfg({ recursive: true, maxDepth: 5 }), { vaultRoot: vault, now: T, ...STABLE });
     expect(rec.ingested).toBe(1); // reports/q1.md picked up now (top.md already deduped)
     expect(rec.sourceIds.length).toBe(1);
   });
@@ -139,11 +147,11 @@ describe.skipIf(!gitAvailable)('reconcileWatchFolder recursive (WATCH-12)', () =
     await fs.mkdir(path.join(watched, 'b'), { recursive: true });
     await fs.writeFile(path.join(watched, 'a', 'notes.md'), 'A notes');
     await fs.writeFile(path.join(watched, 'b', 'notes.md'), 'B notes');
-    const res = await reconcileWatchFolder(vault, cfg({ recursive: true, maxDepth: 3 }), { vaultRoot: vault, now: T });
+    const res = await reconcileWatchFolder(vault, cfg({ recursive: true, maxDepth: 3 }), { vaultRoot: vault, now: T, ...STABLE });
     expect(res.ingested).toBe(2); // distinct content at distinct paths → two sources
 
     // Re-run unchanged → no-op (each path's content is unchanged in its relpath ledger).
-    const again = await reconcileWatchFolder(vault, cfg({ recursive: true, maxDepth: 3 }), { vaultRoot: vault, now: T });
+    const again = await reconcileWatchFolder(vault, cfg({ recursive: true, maxDepth: 3 }), { vaultRoot: vault, now: T, ...STABLE });
     expect(again.ingested).toBe(0);
     // The ingested provenance carries the relative path, not a bare basename.
     const ingested = (await readEvents(vault, {})).filter((e) => e.actor === 'watch' && e.eventType === 'watch-ingested');
@@ -158,7 +166,7 @@ describe.skipIf(!gitAvailable)('reconcileWatchFolder recursive (WATCH-12)', () =
     // Byte-identical content at two distinct relative paths.
     await fs.writeFile(path.join(watched, 'a', 'dup.md'), 'IDENTICAL BYTES');
     await fs.writeFile(path.join(watched, 'b', 'dup.md'), 'IDENTICAL BYTES');
-    const res = await reconcileWatchFolder(vault, cfg({ recursive: true, maxDepth: 3 }), { vaultRoot: vault, now: T });
+    const res = await reconcileWatchFolder(vault, cfg({ recursive: true, maxDepth: 3 }), { vaultRoot: vault, now: T, ...STABLE });
     expect(res.ingested).toBe(1); // ONE source for the shared content…
     expect(res.sourceIds.length).toBe(1);
     expect(res.skipped).toBeGreaterThanOrEqual(1); // …the second path deduped to it (no second source)

@@ -8,7 +8,18 @@ import path from 'node:path';
 import simpleGit from 'simple-git';
 import { createKb } from './vault';
 import { captureToInbox, readCapturedMeta } from './ingest';
-import { Orchestrator, archiveOne, readQueue, readStatus } from './orchestrator';
+import {
+  Orchestrator,
+  archiveOne,
+  readQueue,
+  readStatus,
+  readArchiveUnitState,
+  listArchiveSetAsideItems,
+  retryArchiveItem,
+  dismissArchiveItem,
+  DEFAULT_ARCHIVE_MAX_ATTEMPTS,
+} from './orchestrator';
+import { deterministicDecide, type ArchivistDecider } from './archivist';
 import { Mutex } from './stageLock';
 import { makeCopilotDecider } from './copilotAgent';
 import { DEFAULT_COPILOT_MODEL } from './copilotModel';
@@ -431,5 +442,167 @@ describe.skipIf(!gitAvailable)('#506 — an idle sweep on an empty inbox skips t
     const labels = runSpy.mock.calls.map((c) => c[1]);
     expect(labels).toContain('normalize'); // adopted, not skipped
     expect(await readQueue(vault)).toEqual([]); // normalized + archived in the same pass
+  });
+});
+
+// #516 BUG-3/BUG-7 — archive poison quarantine + batch isolation (deep review 2026-07-12).
+describe.skipIf(!gitAvailable)('#516 BUG-3 — archive poison quarantine (never wedges the drain)', () => {
+  let dir: string;
+  let vault: string;
+  beforeEach(async () => {
+    dir = await makeTempDir();
+    vault = path.join(dir, 'vault');
+    await createKb({ path: vault, initGitIfNeeded: true });
+  });
+  afterEach(async () => {
+    await rmTempDir(dir);
+  });
+
+  const alwaysFails: ArchivistDecider = () => {
+    throw new Error('poison: this item can never decide');
+  };
+
+  it('records a durable failed attempt on the unit\'s own audit.jsonl (survives independently of in-memory state)', async () => {
+    const { ids } = await captureToInbox(vault, 'in-app-panel', [{ kind: 'text', text: 'poison' }]);
+    const orch = new Orchestrator(vault, alwaysFails);
+    await orch.poke();
+    const state = await readArchiveUnitState(path.join(vault, 'inbox', ids[0]));
+    expect(state.failures).toBe(1);
+    expect(state.terminal).toBe(false); // below DEFAULT_ARCHIVE_MAX_ATTEMPTS (3) — still queued
+    expect(await readQueue(vault)).toEqual(ids);
+  });
+
+  it('after maxAttempts SEPARATE pokes, the unit is set aside and readQueue excludes it — the drain is never wedged', async () => {
+    const { ids } = await captureToInbox(vault, 'in-app-panel', [{ kind: 'text', text: 'poison' }]);
+    const orch = new Orchestrator(vault, alwaysFails);
+    for (let i = 0; i < DEFAULT_ARCHIVE_MAX_ATTEMPTS; i++) await orch.poke();
+    const state = await readArchiveUnitState(path.join(vault, 'inbox', ids[0]));
+    expect(state.terminal).toBe(true);
+    expect(state.terminalReason).toBe('archive-setaside');
+    expect(state.failures).toBe(DEFAULT_ARCHIVE_MAX_ATTEMPTS);
+    expect(await readQueue(vault)).toEqual([]); // excluded — the queue is genuinely empty, not "stuck full"
+    // one more poke (a later sweep) must be a clean no-op, not a re-throw / re-attempt.
+    await expect(orch.poke()).resolves.toBeUndefined();
+    expect((await readArchiveUnitState(path.join(vault, 'inbox', ids[0]))).failures).toBe(DEFAULT_ARCHIVE_MAX_ATTEMPTS);
+  });
+
+  it('a set-aside poison unit does NOT block healthy siblings from archiving (AC: rest of queue drains, promotion resumes)', async () => {
+    const { ids: poisonIds } = await captureToInbox(vault, 'in-app-panel', [{ kind: 'text', text: 'poison' }]);
+    const { ids: healthyIds } = await captureToInbox(vault, 'in-app-panel', [{ kind: 'text', text: 'a fine note' }]);
+    const decider: ArchivistDecider = (meta) => {
+      if (meta.id === poisonIds[0]) throw new Error('poison');
+      return deterministicDecide(meta);
+    };
+    const orch = new Orchestrator(vault, decider, undefined, undefined, 2); // cap=2 → both in one batch
+    for (let i = 0; i < DEFAULT_ARCHIVE_MAX_ATTEMPTS; i++) await orch.poke();
+    expect(await readQueue(vault)).toEqual([]); // poison set aside, healthy one archived — queue empty either way
+    expect(await pathExists(path.join(vault, 'inbox', healthyIds[0]))).toBe(false); // healthy item LEFT the inbox
+    expect(await pathExists(path.join(vault, 'inbox', poisonIds[0]))).toBe(true); // poison stays in place (no directory move)
+    const sourceDirs = await fs.readdir(path.join(vault, 'sources'), { recursive: true } as never).catch(() => [] as string[]);
+    expect((sourceDirs as string[]).some((p) => String(p).includes('source.md'))).toBe(true);
+  });
+
+  it('listArchiveSetAsideItems / retryArchiveItem / dismissArchiveItem round-trip (OBS-17 recovery surface)', async () => {
+    const { ids } = await captureToInbox(vault, 'in-app-panel', [{ kind: 'text', text: 'poison' }]);
+    const orch = new Orchestrator(vault, alwaysFails);
+    for (let i = 0; i < DEFAULT_ARCHIVE_MAX_ATTEMPTS; i++) await orch.poke();
+
+    const listed = await listArchiveSetAsideItems(vault);
+    expect(listed).toHaveLength(1);
+    expect(listed[0].id).toBe(ids[0]);
+    expect(listed[0].failures).toBe(DEFAULT_ARCHIVE_MAX_ATTEMPTS);
+
+    // Retry: a durable `archive-reopened` marker resets state — the unit re-enters the queue.
+    await retryArchiveItem(vault, ids[0]);
+    expect(await listArchiveSetAsideItems(vault)).toEqual([]);
+    expect(await readQueue(vault)).toEqual(ids);
+    expect((await readArchiveUnitState(path.join(vault, 'inbox', ids[0]))).failures).toBe(0);
+
+    // Now succeed: a healthy decider drains the reopened item cleanly.
+    const healthyOrch = new Orchestrator(vault);
+    await healthyOrch.poke();
+    expect(await readQueue(vault)).toEqual([]);
+    expect(await pathExists(path.join(vault, 'inbox', ids[0]))).toBe(false);
+  });
+
+  it('dismissArchiveItem permanently retires a set-aside unit — never re-drained, never deleted (DATA-2)', async () => {
+    const { ids } = await captureToInbox(vault, 'in-app-panel', [{ kind: 'text', text: 'poison' }]);
+    const orch = new Orchestrator(vault, alwaysFails);
+    for (let i = 0; i < DEFAULT_ARCHIVE_MAX_ATTEMPTS; i++) await orch.poke();
+
+    await dismissArchiveItem(vault, ids[0]);
+    expect(await listArchiveSetAsideItems(vault)).toEqual([]); // no longer listed as RECOVERABLE
+    expect(await readQueue(vault)).toEqual([]); // never redrained
+    expect(await pathExists(path.join(vault, 'inbox', ids[0]))).toBe(true); // but never destroyed
+    const state = await readArchiveUnitState(path.join(vault, 'inbox', ids[0]));
+    expect(state.terminal).toBe(true);
+    expect(state.terminalReason).toBe('archive-dismissed');
+
+    // A later poke is a clean no-op — dismissed stays dismissed.
+    await expect(orch.poke()).resolves.toBeUndefined();
+    expect(await readQueue(vault)).toEqual([]);
+  });
+
+  it('readArchiveUnitState treats a genuinely torn/corrupt audit.jsonl line as best-effort (skips it, never throws) — the same reducer archiveOne\'s catch branch relies on', async () => {
+    // #516 BUG-3's named concrete failure mode (a crash-torn first line) — pinned as a direct reducer
+    // unit test rather than round-tripped through a real git commit (timing-fragile in a test harness);
+    // the "alwaysFails decider" tests above already exercise the identical archiveOne catch/quarantine
+    // path end-to-end for a synchronous throw, whatever its source.
+    const dir2 = path.join(vault, 'inbox', 'FAKE01');
+    await fs.mkdir(dir2, { recursive: true });
+    await fs.writeFile(path.join(dir2, 'audit.jsonl'), '{"action":"captured"', 'utf8'); // truncated JSON, no trailing newline
+    const state = await readArchiveUnitState(dir2);
+    expect(state).toEqual({ terminal: false, failures: 0 }); // corrupt line skipped, not fatal
+  });
+});
+
+describe.skipIf(!gitAvailable)('#516 BUG-7 — Promise.allSettled: one item never aborts the batch', () => {
+  let dir: string;
+  let vault: string;
+  beforeEach(async () => {
+    dir = await makeTempDir();
+    vault = path.join(dir, 'vault');
+    await createKb({ path: vault, initGitIfNeeded: true });
+  });
+  afterEach(async () => {
+    await rmTempDir(dir);
+  });
+
+  it('a batch with one failing item archives ALL other items in that pass — exactly one attempt per id', async () => {
+    const { ids: badIds } = await captureToInbox(vault, 'in-app-panel', [{ kind: 'text', text: 'bad' }]);
+    const { ids: goodIds } = await captureToInbox(vault, 'in-app-panel', [
+      { kind: 'text', text: 'good 1' },
+      { kind: 'text', text: 'good 2' },
+      { kind: 'text', text: 'good 3' },
+    ]);
+    const attempts: Record<string, number> = {};
+    const decider: ArchivistDecider = (meta) => {
+      attempts[meta.id] = (attempts[meta.id] ?? 0) + 1;
+      if (meta.id === badIds[0]) throw new Error('boom');
+      return deterministicDecide(meta);
+    };
+    // cap=4 → all 4 items land in ONE concurrent batch — the exact "one rejection aborts Promise.all" shape.
+    const orch = new Orchestrator(vault, decider, undefined, undefined, 4);
+    await orch.poke();
+
+    for (const id of goodIds) expect(await pathExists(path.join(vault, 'inbox', id))).toBe(false); // all 3 archived
+    expect(await pathExists(path.join(vault, 'inbox', badIds[0]))).toBe(true); // the bad one stays (not yet set aside)
+    // FAILS-BEFORE (plain Promise.all): a sibling could be attempted twice by a re-dispatched retry
+    // racing an unawaited leaked promise. Exactly one attempt per id this pass, for every id.
+    expect(Object.values(attempts).every((n) => n === 1)).toBe(true);
+    expect(attempts[badIds[0]]).toBe(1);
+  });
+
+  it('busy() reports idle once the batch settles — no leaked unawaited promise keeping it falsely busy', async () => {
+    const { ids: badIds } = await captureToInbox(vault, 'in-app-panel', [{ kind: 'text', text: 'bad' }]);
+    const { ids: goodIds } = await captureToInbox(vault, 'in-app-panel', [{ kind: 'text', text: 'good' }]);
+    const decider: ArchivistDecider = (meta) => {
+      if (meta.id === badIds[0]) throw new Error('boom');
+      return deterministicDecide(meta);
+    };
+    const orch = new Orchestrator(vault, decider, undefined, undefined, 2);
+    await orch.poke();
+    expect(orch.busy()).toBe(false); // FAILS-BEFORE: a leaked sibling promise could still be settling here
+    expect(await pathExists(path.join(vault, 'inbox', goodIds[0]))).toBe(false);
   });
 });
