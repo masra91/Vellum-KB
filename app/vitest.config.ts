@@ -9,8 +9,10 @@ export default defineConfig({
     environment: 'node',
     // src domain suite + the EVAL harness's PURE/deterministic unit tests (SPEC-0042 Slice-1: schema,
     // validators, scorecard, loader). The opt-in scenario e2e (`eval/**/*.eval.ts`, real copilot) stays
-    // under the separate eval config, not here.
-    include: ['src/**/*.test.ts', 'eval/runner/**/*.test.ts'],
+    // under the separate eval config, not here. `scripts/**` (SPEC-0055 #529): the release workflow's
+    // pure logic (tag/version matching, required-check evaluation) — CI-only tooling, not app source,
+    // but held to the same "test everything" bar as the rest of the domain suite.
+    include: ['src/**/*.test.ts', 'eval/runner/**/*.test.ts', 'scripts/**/*.test.ts'],
     exclude: ['e2e/**', 'node_modules/**', '.vite/**', 'dist/**', 'out/**'],
     // The domain suite is heavy on real FS + git + worktrees (TEST-18). Individual ops are fast,
     // but under full-suite parallelism they can spike past Vitest's 5s default → flaky timeouts.
