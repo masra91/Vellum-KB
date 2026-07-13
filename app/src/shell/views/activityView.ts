@@ -140,10 +140,7 @@ function wire(container: HTMLElement): void {
     if (!el) return;
     const act = el.dataset.act;
     if (act === 'toggle') {
-      const id = el.dataset.id!;
-      if (expanded.has(id)) expanded.delete(id);
-      else expanded.add(id);
-      renderBody(container);
+      toggleEntry(el, el.dataset.id!);
     } else if (act === 'lineage') {
       void traceLineage(container, el.dataset.id!);
     } else if (act === 'trace-lookup') {
@@ -203,11 +200,54 @@ function renderControls(container: HTMLElement): void {
   const el = container.querySelector<HTMLElement>('#activityControls');
   if (el) el.innerHTML = controlsHtml(knownActors, filter);
 }
+/** #511: the feed's last-rendered signature (ids + loading/error/filter state) — `renderBody` skips the
+ *  DOM write entirely when a reload's result is identical to what's already painted (AC: "identical-data
+ *  reload performs no DOM writes"). Doesn't include `expanded` — toggling now bypasses `renderBody`
+ *  entirely (see `toggleEntry`), so an expand/collapse can never invalidate this signature. */
+let renderedBodySig = '';
+function bodySigFor(): string {
+  return JSON.stringify({ loading, errorMsg, total, truncated, filterActive: hasActiveFilter(), searchTerm: filter.text ?? '', ids: entries.map((e) => e?.id) });
+}
+
 function renderBody(container: HTMLElement): void {
   const el = container.querySelector<HTMLElement>('#activityBody');
   if (!el) return;
   el.setAttribute('aria-busy', String(loading));
+  // #511: a reload used to blank the WHOLE feed to a 3-row skeleton before repainting — collapsing
+  // hundreds of rows' worth of height and jumping the scroll to the top for every search keystroke /
+  // actor change. Once something has rendered once, keep the stale feed VISIBLE (aria-busy already
+  // signals the in-flight state) through a reload instead of re-showing the skeleton; only a genuine
+  // first-ever load (nothing painted yet) gets the skeleton.
+  const firstLoad = el.childElementCount === 0;
+  if (loading && !firstLoad) return;
+  const sig = bodySigFor();
+  if (!loading && sig === renderedBodySig) return; // identical-data reload → no DOM write (#511 AC)
+  renderedBodySig = sig;
   el.innerHTML = bodyHtml({ entries, total, truncated, expanded, loading, errorMsg, filterActive: hasActiveFilter(), searchTerm: filter.text ?? '' });
+}
+
+/**
+ * #511: expand/collapse used to call the full `renderBody` (rebuilding all ≤1000 rows for a one-entry
+ * state flip), which also destroyed the just-clicked toggle button — keyboard focus fell to `<body>`.
+ * Now mutates ONLY this entry's `<li>` subtree directly: toggle its `.open` class + `aria-expanded`, and
+ * lazily insert/remove its raw-events drill-down (computed once, on open — never re-stringified on
+ * collapse). The toggle `<button>` itself is never touched, so it keeps focus.
+ */
+function toggleEntry(toggleBtn: HTMLElement, id: string): void {
+  if (expanded.has(id)) expanded.delete(id);
+  else expanded.add(id);
+  const open = expanded.has(id);
+  const li = toggleBtn.closest<HTMLElement>('.activity-entry');
+  if (!li) return;
+  li.classList.toggle('open', open);
+  toggleBtn.setAttribute('aria-expanded', String(open));
+  const existingRaw = li.querySelector('.activity-raw');
+  if (open && !existingRaw) {
+    const entry = entries.find((e) => e?.id === id);
+    if (entry) li.insertAdjacentHTML('beforeend', `<div class="activity-raw">${(entry.events ?? []).map(rawEventHtml).join('')}</div>`);
+  } else if (!open && existingRaw) {
+    existingRaw.remove();
+  }
 }
 function renderLineage(container: HTMLElement): void {
   const el = container.querySelector<HTMLElement>('#activityLineage');
