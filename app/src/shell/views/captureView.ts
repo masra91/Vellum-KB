@@ -12,6 +12,7 @@ import { mountPermissionGate } from '../permissionGate';
 import { interpretPaste } from '../../kb/richText';
 import { createVisibilityPoll, type VisibilityPoll } from '../visibilityPoll';
 import type { CaptureInput } from '../../kb/types';
+import type { ViewHandle } from '../viewLifecycle';
 
 // Soft thresholds (RICHIN-11): warn, never block. Preservation stays in-vault at any size.
 const LARGE_TEXT_BYTES = 1 * 1024 * 1024; // ~1 MB pasted text
@@ -252,7 +253,7 @@ async function onCapture(container: HTMLElement): Promise<void> {
   void refreshStatus(container);
 }
 
-export function mountCapture(container: HTMLElement, vaultPathArg: string, name: string): void {
+export function mountCapture(container: HTMLElement, vaultPathArg: string, name: string): ViewHandle {
   vaultPath = vaultPathArg;
   vaultName = name;
   lastStatusSig = ''; // a fresh mount replaces the DOM below — the next refreshStatus must always paint it
@@ -315,8 +316,20 @@ export function mountCapture(container: HTMLElement, vaultPathArg: string, name:
   }
 
   renderStagedFiles(container);
-  void refreshStatus(container);
-  // #509: was a bare `setInterval` with no visibility gate — ran even minimized, and Capture's own
-  // container is the `.view` the shell toggles, so the shared helper's `.view` check applies directly.
-  if (statusPoll == null) statusPoll = createVisibilityPoll(container, 1500, () => refreshStatus(container));
+
+  // #509 gave the queue readout a self-gating visibility poll (`createVisibilityPoll` — pauses the IPC
+  // while hidden/backgrounded, backs off on error). #510 layers the explicit shell-driven lifecycle on
+  // top: `hide()` fully `stop()`s it (not just self-gating) so it matches every other view's contract
+  // (zero live timers once hidden — the fake-timer sweep in shell.test.ts), and `show()` re-creates it
+  // + does one immediate refresh so the queue reads fresh the instant Capture becomes visible again.
+  return {
+    show: () => {
+      void refreshStatus(container);
+      if (statusPoll == null) statusPoll = createVisibilityPoll(container, 1500, () => refreshStatus(container));
+    },
+    hide: () => {
+      statusPoll?.stop();
+      statusPoll = null;
+    },
+  };
 }

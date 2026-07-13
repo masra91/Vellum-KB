@@ -3,7 +3,16 @@ import path from 'node:path';
 import v8 from 'node:v8';
 import started from 'electron-squirrel-startup';
 import { registerIpc, initPipeline, stopRecallClient } from './main/ipc';
-import { stopPipelineForQuit, getActiveInstanceSettings, activeSnapshotDir, pipelineStatusForActive, quiesceActive, resumeActive, isActiveQuiescing } from './main/pipeline';
+import {
+  stopPipelineForQuit,
+  getActiveInstanceSettings,
+  activeSnapshotDir,
+  pipelineStatusForActive,
+  quiesceActive,
+  resumeActive,
+  isActiveQuiescing,
+  setProjectionPushSink,
+} from './main/pipeline';
 import { quiesceTrayItems } from './main/quiesceTray';
 import { startTelemetry, stopTelemetry } from './main/telemetry';
 import { ensurePath } from './main/resolvePath';
@@ -91,6 +100,18 @@ function startQuickCapture(): void {
   qcapAgent.start();
 }
 
+// SPEC-0058 STATE-8 (#510): broadcast a maintained-projection change to EVERY open window's renderer, so
+// a visible view re-reads instantly instead of waiting on its poll interval. Reads the live `mainWindow`
+// at CALL time (not a snapshot) — registered once, before any store can possibly push, so wiring order
+// vs. `createWindow()`/`initPipeline()` doesn't matter. Guards a null/destroyed window (no window yet, or
+// closed mid-push) the same way `showMainWindow()` does; a dropped push is never load-bearing (STATE-8
+// push is a nudge, not the render path's data source).
+function broadcastProjectionChanged(event: { store: string; builtAt: string }): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('kb:projection-changed', event);
+  }
+}
+
 app.on('ready', async () => {
   // GUI launches (Finder/Dock/launchd) inherit a stripped PATH; recover the user's real
   // login-shell PATH first so spawned CLIs (Copilot, git) resolve like they do in a
@@ -100,6 +121,7 @@ app.on('ready', async () => {
   } catch {
     // Best-effort: a PATH-resolution failure must never block startup.
   }
+  setProjectionPushSink(broadcastProjectionChanged);
   registerIpc();
   // QCAP-3/4: bring up the menubar agent + global hotkey first, so quick capture is available even
   // headless (and even before a KB resumes — capture then reports "no active KB" honestly).

@@ -17,13 +17,17 @@ import { navIcon } from '../icons';
 import { isDanglingFinding, type HealthProjection, type HealthDimension, type ProjectedHealthFinding, type HealthSeverity } from '../../kb/healthProjection';
 import type { HealthFinding, DanglingLink } from '../../kb/healthPanel';
 import type { HealthFindingClass } from '../../kb/healthFindingKey';
+import type { ViewHandle } from '../viewLifecycle';
 
 const HEADER = `<h1 class="health-title viz-voice">Health</h1><p class="health-sub viz-body">Structural lint of your knowledge graph — orphans, dead links, and thin pages. Scanned without AI; fix or dismiss each one inline.</p>`;
 
-export async function mountHealth(container: HTMLElement): Promise<void> {
+export function mountHealth(container: HTMLElement): ViewHandle {
   container.innerHTML = `<div class="health viz-surface">${HEADER}<p class="health-scanning viz-body">Scanning…</p></div>`;
   wireTopctxRescan(container);
-  await render(container);
+  // #510: re-scan on every activation (STATE-8 AC1) — Health has no live/push-eligible store yet
+  // (`kb:healthReport` is still a per-read scan, not projection-backed; see the STATE-3 note above), so
+  // switching back is the freshness signal, same as before this change just without the freeze.
+  return { show: () => void render(container) };
 }
 
 /**

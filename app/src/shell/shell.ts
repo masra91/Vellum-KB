@@ -35,6 +35,7 @@ import { mountHealth } from './views/healthView';
 import { mountAgentsHub } from './views/agentsHubView';
 import { mountSources } from './views/sourcesView';
 import { mountSettings } from './views/settingsView';
+import type { MountFn, ViewHandle } from './viewLifecycle';
 
 // The Vellum crystalline mark as the v3 MOTION brand-diamond (SPEC-0060 §5): `.dmk` with `.is-working`
 // (the inner core looms — the "always working" signature) + the shell adds `.is-thinking` (the mid frame
@@ -89,9 +90,6 @@ function railHtml(views: readonly NavView[]): string {
   }
   return html;
 }
-
-/** Mount a view's content into its (freshly created) container. */
-type MountFn = (container: HTMLElement) => void | Promise<void>;
 
 /** The active shell's document-level handlers — module-scoped so a vault switch (re-mount) removes the
  *  prior shell's handlers before binding the new model, never leaking listeners / firing a stale model.
@@ -170,19 +168,42 @@ export function mountShell(root: HTMLElement, vaultPath: string, name: string): 
   // each view handed to setTopbarContext, keyed by view id, and restoring it on every activation (not just
   // first mount) fixes this centrally, for every current AND future filler-view, no per-view code needed.
   const lastTopctxByView = new Map<string, string>();
+  // SPEC-0058 STATE-8 (#510): each mounted view's lifecycle hooks, keyed by view id. A view with no
+  // live behavior returns no handle (or omits show/hide) — hide()/show() are no-ops for it.
+  const handles = new Map<string, ViewHandle>();
+  // The view id `hide()` was last called for lacking a matching `show()` yet — tracks which view to
+  // deactivate on the NEXT render (the shell must hide the PREVIOUSLY active view, not the new one).
+  let previousActiveId: string | null = null;
 
   function render(): void {
     const activeId = model.activeId;
 
-    // Lazily create + mount the active view's container on first activation.
+    // Lazily create + mount the active view's container on first activation. `show()` fires once the
+    // (possibly async) mount resolves — but only if this view is STILL the active one by then (a rapid
+    // navigate-away-before-mount-finishes race must not paint/subscribe a view nobody's looking at).
     if (!containers.has(activeId)) {
       const el = document.createElement('div');
       el.className = 'view';
       el.dataset.view = activeId;
       host.appendChild(el);
       containers.set(activeId, el);
-      void mounts[activeId]?.(el);
+      void Promise.resolve(mounts[activeId]?.(el)).then((handle) => {
+        if (handle) handles.set(activeId, handle);
+        if (model.activeId === activeId) handle?.show?.();
+      });
+    } else {
+      // Already mounted — reactivating. `show()` re-reads the (instant, possibly push-updated)
+      // projection and resumes any live subscription (STATE-8 AC1: switching back repaints fresh data
+      // without a poll having run while hidden).
+      handles.get(activeId)?.show?.();
     }
+
+    // The PREVIOUSLY active view (if any, and if it actually changed) stops its live behavior within
+    // this tick (STATE-8 AC1) — `hide()` must clear every timer/subscription it started.
+    if (previousActiveId !== null && previousActiveId !== activeId) {
+      handles.get(previousActiveId)?.hide?.();
+    }
+    previousActiveId = activeId;
 
     for (const [id, el] of containers) el.classList.toggle('hidden', id !== activeId);
     for (const b of buttons) {

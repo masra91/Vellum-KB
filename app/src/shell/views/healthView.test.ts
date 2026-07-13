@@ -60,7 +60,9 @@ afterEach(() => {
 async function mount(): Promise<HTMLElement> {
   const c = document.createElement('div');
   document.body.appendChild(c);
-  await mountHealth(c);
+  // #510: mountHealth() now only builds the skeleton + returns lifecycle hooks; show() (which the
+  // shell calls right after mount) is what actually scans + paints — mirror that here.
+  mountHealth(c).show?.();
   await flush();
   return c;
 }

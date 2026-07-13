@@ -22,6 +22,11 @@ export interface StatusSnapshotDeps {
   save?: (view: PipelineStatusView) => void;
   /** Report a background compute failure (the last-known-good snapshot is retained). */
   onError?: (err: unknown) => void;
+  /** PUSH hook (SHELL-12 (c), issue #510) — fired after each refresh that changes the snapshot, mirroring
+   *  `ProjectionStoreDeps.onUpdate`. Unwrapped to the view (not the `Projection<T>` envelope) to match this
+   *  adapter's existing unwrapped-envelope convention; callers that only need the freshness stamp read
+   *  `view.builtAt` (every `PipelineStatusView` carries its own `builtAt`, per the adapter's doc comment). */
+  onUpdate?: (view: PipelineStatusView) => void;
   /** Injectable timer (tests). */
   scheduler?: { setInterval: (fn: () => void, ms: number) => unknown; clearInterval: (handle: unknown) => void };
 }

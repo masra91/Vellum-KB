@@ -17,6 +17,8 @@ import { renderLoadError, renderWarming, reportLoadFailure, paintSkeleton } from
 import { NAVIGATE_EVENT, consumePendingFocus, setTopbarContext, type NavigateDetail } from '../nav';
 import { navIcon } from '../icons';
 import { VIEW_EXPLORE } from '../views';
+import { subscribeProjectionChanged } from '../projectionPush';
+import type { ViewHandle } from '../viewLifecycle';
 import type { ExploreClaim, ExploreContradiction, ExploreEntityRef, ExploreNeighbor, ExploreNeighborhood, ExploreProjection } from '../../kb/explorePanel';
 
 const HEADER = `<h1 class="explore-title viz-signage">Explore</h1><p class="explore-sub viz-body">Walk your knowledge graph — start at an entity and follow its relationships. Read-only.</p>`;
@@ -63,7 +65,7 @@ function kindKeyOf(n: ExploreNeighbor): string {
  *  the prior one first — mirrors shell.ts's navHandler pattern; never leaks / drives a stale closure). */
 let focusNavHandler: ((e: Event) => void) | null = null;
 
-export async function mountExplore(container: HTMLElement): Promise<void> {
+export function mountExplore(container: HTMLElement): ViewHandle {
   const state: ExploreState = { trail: [], filters: freshFilters(), expanded: new Set(), subCache: new Map() };
   paintSkeleton(container, HEADER, 'rows');
 
@@ -84,9 +86,26 @@ export async function mountExplore(container: HTMLElement): Promise<void> {
   };
   document.addEventListener(NAVIGATE_EVENT, focusNavHandler);
 
+  // The pending-focus race (this mount IS the synchronous side effect of the navigateTo() that carried
+  // it) — set BEFORE any load, cheaply, at mount time; the actual fetch is deferred to show() (#510).
   const initialFocus = consumePendingFocus(VIEW_EXPLORE);
   if (initialFocus) state.focus = initialFocus;
-  await load(container, state);
+
+  let unsubscribe: (() => void) | null = null;
+  return {
+    // #510: re-read the maintained graph projection at the CURRENT focus on every activation (STATE-8
+    // AC1) and subscribe to the 'graph' push topic (the same store Explore already reads) so a canonical
+    // advance repaints within ~1s while Explore stays visible (AC2).
+    show: () => {
+      void load(container, state);
+      unsubscribe ??= subscribeProjectionChanged('graph', () => void load(container, state));
+    },
+    hide: () => {
+      clearTimeout(state.warmTimer);
+      unsubscribe?.();
+      unsubscribe = null;
+    },
+  };
 }
 
 /** Read the maintained graph projection (SPEC-0058 STATE-2) and paint. ONE read serves the whole view —
