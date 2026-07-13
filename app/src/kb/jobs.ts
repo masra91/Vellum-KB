@@ -5,6 +5,7 @@
 // (`jobRegistry` / `jobScheduler` / `jobStage`) and any job *behavior* share — it owns no I/O
 // beyond the per-job journal. Behavior of a specific job lives in its own module + spec.
 import type { WorkDepthConfig } from './workDepth';
+import type { AgentTrace } from './archivist';
 
 /** Named schedule presets (JOBS-2). Raw cron / event-driven are later extensions the registry
  *  must not preclude — `schedule` is an open string at the storage layer, validated to a preset. */
@@ -100,6 +101,9 @@ export interface JobPassResult {
   inspected: string; // what the pass looked at this run (bounded; for audit + journal)
   findings: JobFinding[];
   cursor?: Record<string, unknown>; // opaque continuity state persisted to the journal
+  /** ORCH-16 provenance for an agent-backed behavior's pass (model/timing/repairs) — absent for a
+   *  deterministic behavior. Persisted onto the JournalEntry by the runner (jobStage.ts). */
+  agent?: AgentTrace;
 }
 
 /** The context a bounded pass reads (JOBS-4/7): the synced worktree root + prior journal entries. */
@@ -135,6 +139,9 @@ export interface JournalEntry {
   findings?: AuditedFinding[]; // per-finding audit detail (JOBS-8)
   cursor?: Record<string, unknown>; // continuity state for the next run
   note?: string; // e.g. 'collision-exhausted' set-aside
+  /** ORCH-16 provenance carried over from the pass result (model/timing/repairs) — absent for a
+   *  deterministic behavior or a pass that skipped/failed before the agent ran. */
+  agent?: AgentTrace;
 }
 
 /**
@@ -157,6 +164,7 @@ export function normalizeJournalEntry(raw: unknown): JournalEntry {
     ...(Array.isArray(e.findings) ? { findings: e.findings as AuditedFinding[] } : {}),
     ...(e.cursor && typeof e.cursor === 'object' ? { cursor: e.cursor as Record<string, unknown> } : {}),
     ...(typeof e.note === 'string' ? { note: e.note } : {}),
+    ...(e.agent && typeof e.agent === 'object' ? { agent: e.agent as AgentTrace } : {}),
   };
 }
 
