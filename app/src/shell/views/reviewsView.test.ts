@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { mountReviews } from './reviewsView';
 import { LOAD_TIMEOUT_MS } from '../loadGuard';
-import type { KbApi, ReviewSummary } from '../../kb/types';
+import type { KbApi, ReviewSummary, PipelineStatusView, SetAsideView } from '../../kb/types';
 
 /** #510: mountReviews() now only builds the skeleton + returns lifecycle hooks; show() (which the shell
  *  calls right after mount) is what actually loads + paints. `advanceTimersByTimeAsync(0)` flushes the
@@ -45,16 +45,21 @@ function setApi(
   answerReview?: KbApi['answerReview'],
   openCitation?: KbApi['openCitation'],
   reviewProjection?: KbApi['reviewProjection'],
+  pipelineStatusView?: KbApi['pipelineStatusView'],
+  pipelineControl?: KbApi['pipelineControl'],
 ): void {
   // The view reads the warming-aware ENVELOPE (`reviewProjection`), not the flattened `listReviews`
   // (SPEC-0060 VUX-13). By default derive the envelope from the same `list` mock so existing tests
   // (which return a ReviewSummary[]) keep working; the warming/error tests pass an explicit override.
   const derived: KbApi['reviewProjection'] = async () => ({ data: await list(), builtAt: '2026-06-02T12:00:00.000Z', stale: false });
-  (window as unknown as { kbApi: Pick<KbApi, 'listReviews' | 'answerReview' | 'openCitation' | 'reviewProjection'> }).kbApi = {
+  (window as unknown as { kbApi: Pick<KbApi, 'listReviews' | 'answerReview' | 'openCitation' | 'reviewProjection' | 'pipelineStatusView' | 'pipelineControl'> }).kbApi = {
     listReviews: list,
     reviewProjection: reviewProjection ?? derived,
     answerReview: answerReview ?? vi.fn(async () => ({ ok: true, message: 'answered' })),
     openCitation: openCitation ?? vi.fn(async () => ({ ok: true as const })),
+    // #192: no active set-aside items by default — the dedicated describe block below overrides this.
+    pipelineStatusView: pipelineStatusView ?? vi.fn(async () => null),
+    pipelineControl: pipelineControl ?? vi.fn(async () => ({ ok: true, message: 'done' })),
   };
 }
 
@@ -513,6 +518,144 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
       ); // sibling's in-progress note preserved (no full repaint)
       await vi.advanceTimersByTimeAsync(0);
     });
+  });
+});
+
+// #192/VIZ-7 — set-aside recovery. The pipeline's poison-item queue (OBS-17, `kb:pipelineStatusView`'s
+// `setAsideItems`) surfaces here as its own oxide-toned section, distinct from the ember review cards —
+// NOT counted in the "N question(s) for you" subheading (DL-2's IA call, VIZ-7 §9's anti-#110 invariant:
+// two different queues must never share one count). Retry/Dismiss wire to `kb:pipelineControl`.
+describe('#192 set-aside recovery section', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '<div id="host"></div>';
+    root = document.createElement('div');
+    document.getElementById('host')!.appendChild(root);
+  });
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  /** A minimal `PipelineStatusView` fixture — only `setAsideItems` matters to this view; the rest of
+   *  the (large) interface is cast, mirroring the precedent in `main/statusSnapshot.test.ts`. */
+  function statusView(setAsideItems: SetAsideView[]): PipelineStatusView {
+    return { setAsideItems } as unknown as PipelineStatusView;
+  }
+
+  const CLAIMS_ITEM: SetAsideView = { stage: 'claims', itemId: 'E1', name: 'Ada Lovelace', reason: 'set aside after 3 failed attempts' };
+  const CONNECT_ITEM: SetAsideView = { stage: 'connect', itemId: 'person|ada', name: 'Ada', reason: 'set aside after 2 review rounds (cascade cap)' };
+
+  it('renders a set-aside item as its own oxide section — name, reason, and stage label', async () => {
+    setApi(vi.fn(async () => []), undefined, undefined, undefined, vi.fn(async () => statusView([CLAIMS_ITEM])));
+    await mount(root);
+    const section = root.querySelector('.setaside-section');
+    expect(section).not.toBeNull();
+    expect(section?.textContent).toContain('1 item needs recovery');
+    const card = root.querySelector('.setaside-card')!;
+    expect(card.textContent).toContain('Ada Lovelace');
+    expect(card.textContent).toContain('set aside after 3 failed attempts');
+    expect(card.textContent).toContain('Claim extraction'); // stageDisplayName('claims')
+    expect(card.querySelector('.setaside-retry')).not.toBeNull();
+    expect(card.querySelector('.setaside-dismiss')).not.toBeNull();
+  });
+
+  it('set-aside items are NOT counted in the reviews "question(s) for you" subheading (separate queues)', async () => {
+    setApi(vi.fn(async () => [CLAIM_REVIEW]), undefined, undefined, undefined, vi.fn(async () => statusView([CLAIMS_ITEM, CONNECT_ITEM])));
+    await mount(root);
+    expect(root.querySelector('.reviews-sub')?.textContent).toContain('1 question for you'); // reviews count only
+    expect(root.querySelectorAll('.setaside-card')).toHaveLength(2);
+    expect(root.querySelector('.setaside-kicker')?.textContent).toContain('2 items need recovery');
+  });
+
+  it('a non-empty set-aside list with ZERO open reviews is not the calm "Nothing needs you" empty state', async () => {
+    setApi(vi.fn(async () => []), undefined, undefined, undefined, vi.fn(async () => statusView([CLAIMS_ITEM])));
+    await mount(root);
+    expect(root.textContent).not.toContain('Nothing needs you');
+    expect(root.querySelector('.reviews-sub')?.textContent).toContain('No open questions right now.');
+    expect(root.querySelector('.setaside-card')).not.toBeNull();
+  });
+
+  it('both queues empty → the fully-calm empty state (unchanged behaviour)', async () => {
+    setApi(vi.fn(async () => []), undefined, undefined, undefined, vi.fn(async () => statusView([])));
+    await mount(root);
+    expect(root.textContent).toContain('Nothing needs you');
+    expect(root.querySelector('.setaside-section')).toBeNull();
+  });
+
+  it('Retry sends {action:"retry", stage, itemId} to pipelineControl and removes the card optimistically', async () => {
+    const pipelineControl = vi.fn(async () => ({ ok: true, message: 'Retrying Ada Lovelace.' }));
+    setApi(vi.fn(async () => []), undefined, undefined, undefined, vi.fn(async () => statusView([CLAIMS_ITEM])), pipelineControl);
+    await mount(root);
+    root.querySelector<HTMLButtonElement>('.setaside-retry')!.click();
+    expect(root.querySelector('.setaside-card')?.classList.contains('is-leaving')).toBe(true); // optimistic, before the IPC settles
+    expect(pipelineControl).toHaveBeenCalledWith({ action: 'retry', stage: 'claims', itemId: 'E1' });
+    await vi.advanceTimersByTimeAsync(340);
+    expect(root.querySelector('.setaside-card')).toBeNull();
+  });
+
+  it('Dismiss sends {action:"dismiss", stage, itemId} and removes the card', async () => {
+    const pipelineControl = vi.fn(async () => ({ ok: true, message: 'Dismissed Ada.' }));
+    setApi(vi.fn(async () => []), undefined, undefined, undefined, vi.fn(async () => statusView([CONNECT_ITEM])), pipelineControl);
+    await mount(root);
+    root.querySelector<HTMLButtonElement>('.setaside-dismiss')!.click();
+    await vi.advanceTimersByTimeAsync(340);
+    expect(pipelineControl).toHaveBeenCalledWith({ action: 'dismiss', stage: 'connect', itemId: 'person|ada' });
+    expect(root.querySelector('.setaside-card')).toBeNull();
+  });
+
+  it('a failed (ok:false) retry restores the card with a retryable error affordance', async () => {
+    const pipelineControl = vi.fn(async () => ({ ok: false, message: 'canonical lock busy' }));
+    setApi(vi.fn(async () => []), undefined, undefined, undefined, vi.fn(async () => statusView([CLAIMS_ITEM])), pipelineControl);
+    await mount(root);
+    root.querySelector<HTMLButtonElement>('.setaside-retry')!.click();
+    expect(root.querySelector('.setaside-card')?.classList.contains('is-leaving')).toBe(true);
+    await vi.advanceTimersByTimeAsync(0); // flush the failed IPC + the reconcile refresh
+    const card = root.querySelector('.setaside-card');
+    expect(card).not.toBeNull(); // restored
+    const err = card!.querySelector('.setaside-error');
+    expect(err?.getAttribute('role')).toBe('alert');
+    expect(err?.textContent).toContain('canonical lock busy');
+    expect(card!.querySelector('.setaside-retry')).not.toBeNull(); // stays actionable
+  });
+
+  it('a THROWN pipelineControl call also restores the card (honest rollback, not a silent drop)', async () => {
+    const pipelineControl = vi.fn(async () => { throw new Error('ipc channel died'); });
+    setApi(vi.fn(async () => []), undefined, undefined, undefined, vi.fn(async () => statusView([CLAIMS_ITEM])), pipelineControl);
+    await mount(root);
+    root.querySelector<HTMLButtonElement>('.setaside-retry')!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(root.querySelector('.setaside-card')).not.toBeNull();
+    expect(root.querySelector('.setaside-error')).not.toBeNull();
+  });
+
+  it('dismissing the LAST set-aside item while reviews remain leaves the review queue intact (no stale section)', async () => {
+    const pipelineControl = vi.fn(async () => ({ ok: true, message: 'Dismissed.' }));
+    setApi(vi.fn(async () => [CLAIM_REVIEW]), undefined, undefined, undefined, vi.fn(async () => statusView([CLAIMS_ITEM])), pipelineControl);
+    await mount(root);
+    root.querySelector<HTMLButtonElement>('.setaside-dismiss')!.click();
+    await vi.advanceTimersByTimeAsync(340);
+    expect(root.querySelector('.setaside-section')).toBeNull(); // whole section reconciled away, not a stale shell
+    expect(root.querySelector('.review[data-id="R1"]')).not.toBeNull(); // the review queue is untouched
+    expect(root.textContent).not.toContain('Nothing needs you'); // a review is still open
+  });
+
+  it('a transient pipelineStatusView failure degrades gracefully — the review queue still renders', async () => {
+    const badStatus = vi.fn(async () => { throw new Error('status read failed'); });
+    setApi(vi.fn(async () => [CLAIM_REVIEW]), undefined, undefined, undefined, badStatus);
+    await mount(root);
+    expect(root.querySelector('.review-q')?.textContent).toContain('Ada Lovelace'); // reviews unaffected
+    expect(root.querySelector('.setaside-section')).toBeNull(); // no set-aside data — simply absent, not an error state
+  });
+
+  it('ENG-16: one malformed set-aside item degrades its OWN card — the sibling stays actionable', async () => {
+    const malformed = [CLAIMS_ITEM, null as unknown as SetAsideView];
+    setApi(vi.fn(async () => []), undefined, undefined, undefined, vi.fn(async () => statusView(malformed)));
+    await mount(root);
+    expect(root.querySelectorAll('.setaside-card')).toHaveLength(2); // good card + a safe fallback
+    expect(root.textContent).toContain('Ada Lovelace'); // the good item survived
+    expect(root.querySelectorAll('.setaside-retry').length).toBeGreaterThanOrEqual(1);
   });
 });
 

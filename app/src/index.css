@@ -656,6 +656,21 @@ ul.review-candidates { list-style: none; padding: 0; margin: 0.85rem 0 0; displa
 .review-candidate-name { flex: 1 1 auto; min-width: 0; font-family: var(--ui); font-size: 0.66rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--stone); }
 .review-candidate-gloss { flex: 1 1 12rem; font-family: var(--ui); font-size: 0.9rem; color: var(--ink); }
 .review-candidate-open { flex: 0 0 auto; font-size: 0.82rem; white-space: nowrap; }
+
+/* #192/VIZ-7 — set-aside recovery: the pipeline's poison-item queue (OBS-17), its own oxide-toned
+   section distinct from the ember review cards above (VIZ-7 baseline: oxide siding + Retry/Dismiss, NOT
+   a brass relabel merged into the counted "needs your decision" queue — that unification stays deferred,
+   VIZ-7 §9). Hue rides the kicker glyph + card left-rule only (design-system §2/§3: oxide never colors
+   normal-size body text); the card itself reads calm linen, not an alarm block. */
+.setaside-section { margin-top: 2.2rem; padding-top: 1.4rem; border-top: 1px solid var(--hair); }
+.setaside-kicker { display: flex; align-items: center; gap: 0.45rem; font-family: var(--ui); font-weight: 600; font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--oxide); }
+.setaside-sub { margin: 0.3rem 0 0; }
+ul.setaside-list { list-style: none; padding: 0; margin: 1rem 0 0; display: flex; flex-direction: column; gap: 0.75rem; }
+.setaside-card { background: var(--linen); border: 1px solid var(--hair); border-left: 2px solid var(--oxide); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 0.95rem 1.1rem; }
+.setaside-name { font-family: var(--voice); font-weight: 500; font-size: 1rem; color: var(--ink); margin: 0 0 0.2rem; }
+.setaside-reason { font-size: 0.82rem; }
+.setaside-error { margin: 0 0 0.5rem; font-family: var(--ui); font-size: 0.82rem; color: var(--ink); }
+.setaside-actions { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.75rem; }
 button:disabled {
   opacity: 0.5;
   cursor: default;
