@@ -47,8 +47,8 @@ import { commitControlFile } from './commitControlFile';
 import * as jobsControlPanel from './registries/jobsControlPanel';
 import { readJournal } from '../kb/jobStage';
 import * as watchControlPanel from './registries/watchControlPanel';
+import * as researchersControlPanel from './registries/researchersControlPanel';
 import { researchDepsOptions, intakeDepsOptions, mediaExtractOptions } from './researchWiring';
-import { selectResearchFn } from '../kb/researchInline';
 import { createVaultTracer } from '../kb/tracing';
 import { loadPerfIndex } from '../kb/perfIndex';
 import { assemblePipelineStatus, toSetAsideViews, deriveStageError, buildInFlightRoster, type PipelineStatusView, type StageInput, type RecentError, type WorktreeInfo } from '../kb/pipelineStatusView';
@@ -89,10 +89,8 @@ import { resolveCopilotModel, setResolvedLaunchModel, setAgentModelOverrides } f
 import { initLaunchModel, probeAcceptedModels, validateModel } from '../kb/copilotModelProbe';
 import { appendAuditEvent } from '../kb/audit';
 import { readEvents } from '../kb/activityIndex';
-import { readResearcherRegistry, upsertResearcher, patchResearcher, deleteResearcher, researcherRegistryPath } from '../kb/researcherRegistry';
+import { researcherRegistryPath } from '../kb/researcherRegistry';
 import { seedDefaultResearcherIfAbsent } from '../kb/researcherSeed';
-import { buildResearcherViews, isEgressTier, isResearcherTemplate, defaultEgressFor, researcherConfigAuditEvents } from '../kb/researchersPanel';
-import { runResearcher } from '../kb/researchRun';
 import { ResearcherScheduler } from '../kb/researcherScheduler';
 import { IntakeScheduler, selectIntakeFn } from '../kb/intakeScheduler';
 import { WatchScheduler } from '../kb/watchScheduler';
@@ -101,20 +99,17 @@ import { runIntakeConnector } from '../kb/intakeRun';
 import { DEFAULT_INTAKE_SCOPE, DEFAULT_INTAKE_SENSITIVITY, isSafeConnectorId, type IntakeConnectorConfig } from '../kb/intakeConnectors';
 import { buildIntakeConnectorViews, isIntakeConnectorType, clampMaxItems, intakeConfigAuditEvents } from '../kb/intakeSourcingPanel';
 import type { WatchFolderView, WatchFolderPatch, IntakeConnectorView, IntakeConnectorConfigPatch, RunIntakeConnectorResult } from '../kb/types';
-import { isSafeGhRepo } from '../kb/ghRead';
-import { DEFAULT_RESEARCHER_BUDGET, dedupKeyFor, researchWhatFor, clampToolCalls, clampTimeoutMs, clampMaxDepth, clampOrientBudget, isSafeResearcherId, type ResearchRequest, type ResearcherConfig } from '../kb/researchers';
 import { ulid, dateShard, isUlid } from '../kb/ulid';
 import { setSensitivityOverride, sensitivityOverridesPath } from '../kb/sensitivityOverride';
 import { readSourceSensitivities, type SourceSensitivity } from '../kb/sensitivityRead';
 import { applySensitivityOverrideToSourceMd } from '../kb/sourceDoc';
 import { buildRecallOutput } from '../kb/outputDoc';
-import { DEFAULT_POSTURE, type JobBehavior } from '../kb/jobs';
+import type { JobBehavior } from '../kb/jobs';
 import type { Review } from '../kb/reviews';
 import { reviewToSummary } from '../kb/reviewSummary';
 import type { AuditEvent } from '../kb/audit';
 import type { AskResult } from '../kb/recall';
 import type { FullReplayResult, ComposeBacklogResult, JobView, JobConfigPatch, JobLastRun, RunJobResult, InstanceSettings, AgentView, ModelCatalogView, SetModelResult, ResearcherView, ResearcherConfigPatch, ResearcherLastRun, RunResearcherResult, SaveRecallOutputResult, PipelineControlRequest, PipelineControlResult, QuiesceStatus, ReviewSummary } from '../kb/types';
-import { lastRunFromEvent } from '../kb/researchersPanel';
 
 /** Factory to create a job behavior resolver with scoped vaultPath (SPEC-0023, Copilot context scope).
  *  v1 ships the deterministic example job and **Reflect** (SPEC-0024, the first real job);
@@ -1569,212 +1564,35 @@ export async function removeActiveWatchFolder(id: string): Promise<WatchFolderVi
 }
 
 // --- Control Panel · Researchers (SPEC-0028 RESEARCH-15; over the researcher registry) ---
+// Full implementation lives in registries/researchersControlPanel.ts (#528 ENG-7).
 
-/** List the active KB's researchers with each one's last-run (from its newest `researcher` audit
- *  event). Reads `staging` (registry + audit live there). No active KB → empty (PANEL-9 degrade). */
+function researchersCtx(a: ActivePipeline): researchersControlPanel.ResearchersCtx {
+  return { root: a.stagingWt, lock: a.lock, log: a.log };
+}
+
 export async function listResearchersForActive(): Promise<ResearcherView[]> {
   if (!active) return [];
-  const root = active.stagingWt;
-  const registry = await readResearcherRegistry(root);
-  const events = await readEvents(root, { actors: ['researcher'] }); // newest-first
-  const lastByResearcher: Record<string, AuditEvent | undefined> = {};
-  for (const r of registry) lastByResearcher[r.id] = events.find((e) => e.subjects.researcherId === r.id);
-  return buildResearcherViews(registry, lastByResearcher);
+  return researchersControlPanel.listResearchers(active.stagingWt);
 }
 
-/**
- * Apply a Researchers-view config change (RESEARCH-15) + return the refreshed list. Untrusted IPC
- * input is validated at this boundary (template/egress/schedule/posture dropped unless known enums;
- * an unsafe `id` is rejected by the registry guard). The write + git commit run under the shared
- * lock (durability); then a conforming `panel` audit event records the change (PANEL-7-style).
- */
 export async function setActiveResearcherConfig(patch: ResearcherConfigPatch): Promise<ResearcherView[]> {
   if (!active) return [];
-  const root = active.stagingWt;
-  if (typeof patch.id !== 'string' || patch.id.length === 0) return listResearchersForActive();
-
-  // Validate untrusted IPC input into a `clean` patch (drop unknown enums; the rest is fail-safe).
-  // apply + audit both use `clean`, so a dropped-invalid field is never recorded as applied
-  // (QA-2 #81 follow-up — audit accuracy matters for the egress-relevant fields).
-  const clean: ResearcherConfigPatch = { id: patch.id };
-  if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
-  if (isSchedulePreset(patch.schedule)) clean.schedule = patch.schedule;
-  if (isAutonomyPosture(patch.posture)) clean.posture = patch.posture;
-  if (isEgressTier(patch.egressTier)) clean.egressTier = patch.egressTier;
-  if (isResearcherTemplate(patch.template)) clean.template = patch.template;
-  if (typeof patch.label === 'string') clean.label = patch.label;
-  if (typeof patch.prompt === 'string' && patch.prompt.trim()) clean.prompt = patch.prompt;
-  if (typeof patch.scope === 'string' && patch.scope.trim()) clean.scope = patch.scope;
-  if (typeof patch.repoPath === 'string' && patch.repoPath.trim()) clean.repoPath = patch.repoPath.trim();
-  if (typeof patch.tenantId === 'string' && patch.tenantId.trim()) clean.tenantId = patch.tenantId.trim();
-  // prRepo is owner/name — validated at the boundary (drop a flag-like/garbage value, never store it).
-  if (typeof patch.prRepo === 'string' && isSafeGhRepo(patch.prRepo.trim())) clean.prRepo = patch.prRepo.trim();
-  if (Array.isArray(patch.topics)) clean.topics = patch.topics;
-  // Editable budget/timeout (RESEARCH-15/18, WS3): clamp valid numbers to the sane range; reject garbage
-  // (non-numeric / ≤0 / non-integer calls) by dropping it (field unchanged). The allowlist is NOT editable.
-  const cleanMaxCalls = clampToolCalls(patch.maxToolCalls);
-  if (cleanMaxCalls !== undefined) clean.maxToolCalls = cleanMaxCalls;
-  const cleanTimeout = clampTimeoutMs(patch.timeoutMs);
-  if (cleanTimeout !== undefined) clean.timeoutMs = cleanTimeout;
-  const cleanMaxDepth = clampMaxDepth(patch.maxDepth); // WS3 Slice-2: the chain-depth safety bound (RESEARCH-11)
-  if (cleanMaxDepth !== undefined) clean.maxDepth = cleanMaxDepth;
-  const cleanOrient = clampOrientBudget(patch.orientBudget); // RESEARCH-22 warm-start: non-egress awareness cap
-  if (cleanOrient !== undefined) clean.orientBudget = cleanOrient;
-
-  let prior: ResearcherConfig | undefined;
-  let applied = false;
-  await active.lock.run(async () => {
-    const registry = await readResearcherRegistry(root);
-    prior = registry.find((r) => r.id === clean.id);
-    if (prior) {
-      await patchResearcher(root, clean.id, {
-        ...(clean.enabled !== undefined ? { enabled: clean.enabled } : {}),
-        ...(clean.schedule !== undefined ? { schedule: clean.schedule } : {}),
-        ...(clean.posture !== undefined ? { posture: clean.posture } : {}),
-        ...(clean.egressTier !== undefined ? { egressTier: clean.egressTier } : {}),
-        ...(clean.prompt !== undefined ? { prompt: clean.prompt } : {}),
-        ...(clean.scope !== undefined ? { scope: clean.scope } : {}),
-        ...(clean.topics !== undefined ? { topics: clean.topics } : {}),
-        // WS3: maxToolCalls + maxDepth (Slice-2) merge into the existing budget (each preserved if unset);
-        // timeoutMs is top-level.
-        ...(clean.maxToolCalls !== undefined || clean.maxDepth !== undefined
-          ? {
-              budget: {
-                ...prior.budget,
-                ...(clean.maxToolCalls !== undefined ? { maxToolCalls: clean.maxToolCalls } : {}),
-                ...(clean.maxDepth !== undefined ? { maxDepth: clean.maxDepth } : {}),
-              },
-            }
-          : {}),
-        ...(clean.timeoutMs !== undefined ? { timeoutMs: clean.timeoutMs } : {}),
-        ...(clean.orientBudget !== undefined ? { orientBudget: clean.orientBudget } : {}), // RESEARCH-22 warm-start (top-level)
-        // Template config: merge repoPath (Code) / tenantId (M365) into the existing config,
-        // preserving other config keys.
-        ...(clean.repoPath !== undefined || clean.tenantId !== undefined || clean.prRepo !== undefined
-          ? {
-              config: {
-                ...(prior.config ?? {}),
-                ...(clean.repoPath !== undefined ? { repoPath: clean.repoPath } : {}),
-                ...(clean.tenantId !== undefined ? { tenantId: clean.tenantId } : {}),
-                ...(clean.prRepo !== undefined ? { prRepo: clean.prRepo } : {}),
-              },
-            }
-          : {}),
-      });
-    } else {
-      // New researcher: derive a safe config from the (validated) template + defaults.
-      const template = clean.template ?? 'custom';
-      const egressTier = clean.egressTier ?? defaultEgressFor(template);
-      clean.egressTier = egressTier; // record the actual created egress in the audit (from local-only)
-      await upsertResearcher(root, {
-        id: clean.id,
-        template,
-        label: clean.label,
-        prompt: clean.prompt ?? `Research ${template} sources relevant to the request.`,
-        egressTier,
-        scope: clean.scope ?? 'global',
-        budget: {
-          ...DEFAULT_RESEARCHER_BUDGET,
-          ...(clean.maxToolCalls !== undefined ? { maxToolCalls: clean.maxToolCalls } : {}),
-          ...(clean.maxDepth !== undefined ? { maxDepth: clean.maxDepth } : {}),
-        },
-        ...(clean.timeoutMs !== undefined ? { timeoutMs: clean.timeoutMs } : {}),
-        ...(clean.orientBudget !== undefined ? { orientBudget: clean.orientBudget } : {}),
-        schedule: clean.schedule ?? 'off',
-        posture: clean.posture ?? DEFAULT_POSTURE,
-        enabled: clean.enabled ?? false,
-        ...(clean.topics ? { topics: clean.topics } : {}),
-        ...(clean.repoPath || clean.tenantId || clean.prRepo
-          ? { config: { ...(clean.repoPath ? { repoPath: clean.repoPath } : {}), ...(clean.tenantId ? { tenantId: clean.tenantId } : {}), ...(clean.prRepo ? { prRepo: clean.prRepo } : {}) } }
-          : {}),
-      });
-    }
-    applied = true;
-    await commitControlFile(root, researcherRegistryPath(root), `researcher ${clean.id} config change`);
-  }, 'researcher-config:write');
-  if (applied) {
-    // Conforming `panel` audit: one event per changed behavior-relevant field (from→to), validated
-    // values only — never a dropped-invalid field, never a no-op re-assert (QA-2 #81 follow-up).
-    for (const event of researcherConfigAuditEvents(prior, clean)) await appendAuditEvent(root, event);
-  }
-  return listResearchersForActive();
+  return researchersControlPanel.setResearcherConfig(patch, researchersCtx(active));
 }
 
-/**
- * Delete a researcher (PANEL-11 lifecycle delete): PURGE its config row from the registry, audit the
- * removal (`panel` actor, `removed: true`), and let the scheduler tear its standing pass down naturally
- * (it re-reads the registry each tick — PANEL-6 — so a removed researcher is simply never scheduled
- * again; no live handle to stop, unlike a watched folder's fs watcher). Already-produced sources +
- * findings + the full audit trail are RETAINED — ground truth is sacred (PANEL-11); only the config/
- * registration is purged. An unsafe id is a no-op (the registry guard rejects it anyway). Mirrors
- * `removeActiveWatchFolder`.
- */
 export async function removeActiveResearcher(id: string): Promise<ResearcherView[]> {
   if (!active) return [];
-  if (!isSafeResearcherId(id)) return listResearchersForActive();
-  const root = active.stagingWt;
-  let removed = false;
-  await active.lock.run(async () => {
-    const registry = await readResearcherRegistry(root);
-    if (!registry.some((r) => r.id === id)) return;
-    await deleteResearcher(root, id);
-    removed = true;
-    await commitControlFile(root, researcherRegistryPath(root), `researcher ${id} removed`);
-  }, 'researcher-config:remove');
-  if (removed) {
-    await appendAuditEvent(root, { actor: 'panel', eventType: 'researcher-config-change', subjects: { researcherId: id }, payload: { removed: true, why: 'Principal removed a researcher via Control Panel (config purged; sources + audit retained)' } });
-  }
-  return listResearchersForActive();
+  return researchersControlPanel.removeResearcher(id, researchersCtx(active));
 }
 
-/**
- * Manual "Run now" for a researcher (RESEARCH-15, "run-now to test") — a single on-demand pass via
- * the run-pass against a synthetic request derived from the researcher's config. It runs the REAL
- * cognition (`makeWebResearchFn` — egress-gated + SSRF-safe), the same adapter the scheduler uses, so
- * "Run now" can never ingest synthetic scaffolding into the Principal's vault. Until the live SDK
- * web-fetch session is wired (gated separately), the gated adapter yields a graceful no-finding rather
- * than fabricate a source. The Principal's trigger is audited as a `panel` event; the run's own work
- * is audited by the run-pass (actor `researcher`).
- */
 export async function runActiveResearcherNow(id: string): Promise<RunResearcherResult> {
   if (!active) return { ran: false, reason: 'no-kb' };
-  const root = active.stagingWt;
-  const r = (await readResearcherRegistry(root)).find((x) => x.id === id);
-  if (!r) return { ran: false, reason: 'not-found' };
-  const what = researchWhatFor(r); // WS1 #6: the researcher's real name, never the generic template word ("code")
-  const req: ResearchRequest = {
-    id: ulid(),
-    ts: new Date().toISOString(),
-    by: { stage: 'panel' },
-    what,
-    why: 'on-demand test run via Control Panel',
-    context: '',
-    dedupKey: dedupKeyFor({ what, by: {} }),
-  };
-  // Same cliPath+dev-log wiring + per-template cognition as the scheduler (one seam, #160) — so Run-now
-  // can't silently no-op in the packaged app, and a code/m365 researcher tests its OWN adapter.
-  const opts = researchDepsOptions(active.log);
-  const res = await runResearcher(root, r, req, { research: selectResearchFn(root, r, opts), lock: active.lock });
-  await appendAuditEvent(root, {
-    actor: 'panel',
-    eventType: 'researcher-run-now',
-    subjects: { researcherId: id },
-    payload: { outcome: res.failed ? 'failed' : res.ceilingReached ? 'ceiling-reached' : res.sourceIds.length > 0 ? 'researched' : 'no-finding', why: 'Principal manual run via Control Panel' },
-  });
-  return {
-    ran: true,
-    sourceIds: res.sourceIds,
-    note: res.note,
-    ...(res.failed ? { failed: true, ...(res.error ? { error: res.error } : {}) } : {}),
-    ...(res.ceilingReached ? { ceilingReached: true } : {}),
-  };
+  return researchersControlPanel.runResearcherNow(id, researchersCtx(active));
 }
 
-/** Recent runs for a researcher (RESEARCH-15) — its `researcher` audit events, newest-first. */
 export async function listResearcherRunsForActive(id: string): Promise<ResearcherLastRun[]> {
   if (!active) return [];
-  const events = await readEvents(active.stagingWt, { actors: ['researcher'], subjectId: id });
-  return events.map((e) => lastRunFromEvent(e)).filter((x): x is ResearcherLastRun => x !== null);
+  return researchersControlPanel.listResearcherRuns(active.stagingWt, id);
 }
 
 // --- Control Panel · Sources — INTAKE feed connectors (SPEC-0027 PANEL-4 / INTAKE-14) ---

@@ -48,8 +48,9 @@ export interface RunRegistryRemoveOptions<TItem> {
   read: (root: string) => Promise<TItem[]>;
   findId: string;
   /** Delete the row for `findId`. Passed the registry array already read this pass (avoids a
-   *  redundant re-read — the caller typically filters it and writes the result back). */
-  remove: (root: string, id: string, registry: TItem[]) => Promise<void>;
+   *  redundant re-read — the caller typically filters it and writes the result back). Return
+   *  value ignored (some registry `delete*` helpers return the updated list). */
+  remove: (root: string, id: string, registry: TItem[]) => Promise<unknown>;
 }
 
 /** Run one registry removal under the shared lock: no-op if the id isn't present, else delete + commit. */
