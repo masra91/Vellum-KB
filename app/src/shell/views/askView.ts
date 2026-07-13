@@ -315,7 +315,12 @@ function scrollToEnd(container: HTMLElement): void {
 function updateHead(container: HTMLElement): void {
   const title = container.querySelector<HTMLElement>('#askTitle');
   const sub = container.querySelector<HTMLElement>('#askSub');
-  if (title) title.textContent = turns.length ? turns[0].question : 'New conversation';
+  if (title) {
+    const text = turns.length ? turns[0].question : 'New conversation';
+    title.textContent = text;
+    // VUX-CLIP #522 C4: ellipsis is already applied (index.css:595); only the title reveal was missing.
+    title.title = text;
+  }
   if (sub) {
     if (!turns.length) {
       sub.innerHTML = `<span>Grounded recall over your library</span>`;
@@ -448,7 +453,7 @@ function pastRow(c: ConversationSummary): string {
   // A row = an open-button (loads the thread) + the delete affordance. Two buttons, not nested (a11y).
   return `<div class="ask-pastrow${pendingDeleteId === c.id ? ' is-confirming' : ''}">
     <button type="button" class="ask-pastopen" role="menuitem" data-id="${esc(c.id)}">
-      <span class="ask-pasttitle">${esc(title)}</span>
+      <span class="ask-pasttitle" title="${esc(title)}">${esc(title)}</span>
       <span class="ask-pastmeta">${esc(meta)}</span>
       ${c.preview ? `<span class="ask-pastprev">${esc(c.preview)}</span>` : ''}
     </button>
@@ -514,7 +519,9 @@ function renderReferences(citations: Citation[], turnIndex: number): string {
       const n = i + 1;
       const kind = CITATION_KIND_LABEL[c.kind] ?? c.kind;
       const kclass = CITATION_KIND_CLASS[c.kind] ?? '';
-      return `<button type="button" class="ask-ref" role="link" tabindex="0" aria-label="Citation ${n}: ${esc(refDisplayName(c))}" data-turn="${turnIndex}" data-cite="${n}" title="${esc(c.ref)} — open in Obsidian"><span class="num">${n}</span><span class="rbody"><span class="rtitle">${esc(refDisplayName(c))}</span><span class="rkind ${kclass}">${esc(kind)}</span></span><span class="rgo" aria-hidden="true">→</span></button>`;
+      // VUX-CLIP #522 C6: the title reveal must show the display name, not the raw ref — a raw ref in a
+      // tooltip is exactly the kind of internal-id leak the terminology glossary exists to prevent.
+      return `<button type="button" class="ask-ref" role="link" tabindex="0" aria-label="Citation ${n}: ${esc(refDisplayName(c))}" data-turn="${turnIndex}" data-cite="${n}" title="${esc(refDisplayName(c))} — open in Obsidian"><span class="num">${n}</span><span class="rbody"><span class="rtitle">${esc(refDisplayName(c))}</span><span class="rkind ${kclass}">${esc(kind)}</span></span><span class="rgo" aria-hidden="true">→</span></button>`;
     })
     .join('');
   return `<div class="ask-refs"><div class="ask-refs-h"><span>References</span><span class="line"></span></div>${items}</div>`;

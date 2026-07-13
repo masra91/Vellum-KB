@@ -21,10 +21,14 @@
   border-top: 2px solid var(--sprout); /* the live line — capture is powered + listening (active → sprout) */
 }
 
+/* VUX-CLIP #522 C11: qcap is a frameless narrow window — a long permission-steer note pushing the head
+   WIDER is a layout bug (the sheet has no room to give), not a text-overflow one. flex-wrap lets the
+   head's own `auto` grid row grow TALLER to fit a wrapped note instead of forcing the sheet wider. */
 .qcap-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -39,6 +43,8 @@
 .qcap-head__meta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
   gap: 8px;
 }
 

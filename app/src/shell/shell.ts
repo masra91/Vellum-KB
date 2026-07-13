@@ -133,7 +133,7 @@ export function mountShell(root: HTMLElement, vaultPath: string, name: string): 
           ${SIDEBAR_WMARK}
           <div class="user" title="You — your library identity">
             <span class="user-ini" aria-hidden="true">${navIcon('person')}</span>
-            <div class="user-id"><b>You</b><span>${esc(baseName(vaultPath))}</span></div>
+            <div class="user-id"><b>You</b><span title="${esc(baseName(vaultPath))}">${esc(baseName(vaultPath))}</span></div>
           </div>
         </nav>
         <main class="content" id="viewHost"></main>

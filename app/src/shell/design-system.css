@@ -162,6 +162,13 @@
    The standard clip-rect recipe (not `display:none`, which strips it from the a11y tree too). */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
+/* Dynamic-text overflow contract, "ellipsis + reveal" treatment (VUX-CLIP #522 §2/§3, C2-C8): a single-
+   line label where the full value is useful but not required to keep working. `min-width: 0` overrides
+   the flex default of `min-width: auto`, which is what silently defeats ellipsis in a flex row — the
+   root cause behind most of #522's clip sites. Pair with a native `title` attribute carrying the
+   untruncated value at the call site (no custom tooltip component needed). */
+.v3-clip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Select primitive (SPEC-0048) — a native <select> in the viz idiom for a DYNAMIC many-option list
    (the model catalog); .viz-seg stays for small bounded enums. Flat, ruled, mono, custom caret, accent
    focus — never the default OS chrome (the "generic AI app" tell §6 guards against). */

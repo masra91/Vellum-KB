@@ -26,6 +26,10 @@ const createWindow = () => {
   mainWindow = new BrowserWindow({
     width: 880,
     height: 660,
+    // VUX-CLIP #522 §4: the floor below which the 13.25rem rail + a comfortable reading column can no
+    // longer coexist. Rail auto-collapse below this is a scoped-out follow-up (issue's own C12 note).
+    minWidth: 760,
+    minHeight: 560,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },
