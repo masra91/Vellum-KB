@@ -42,8 +42,17 @@ import { Mutex } from '../kb/stageLock';
 import { createVaultDevLog, readRecentDevLogEntries, type DevLog } from '../kb/devlog';
 import { breadcrumbObserver } from '../kb/activityBreadcrumb';
 import { telemetryHealth } from './telemetry';
+export { commitControlFile } from './commitControlFile';
+import { commitControlFile } from './commitControlFile';
+import * as jobsControlPanel from './registries/jobsControlPanel';
+import { readJournal } from '../kb/jobStage';
+import * as watchControlPanel from './registries/watchControlPanel';
+import * as researchersControlPanel from './registries/researchersControlPanel';
+import * as intakeControlPanel from './registries/intakeControlPanel';
+import * as sourceSensitivityControlPanel from './registries/sourceSensitivityControlPanel';
+import * as instanceSettingsControlPanel from './registries/instanceSettingsControlPanel';
+import * as modelsControlPanel from './registries/modelsControlPanel';
 import { researchDepsOptions, intakeDepsOptions, mediaExtractOptions } from './researchWiring';
-import { selectResearchFn } from '../kb/researchInline';
 import { createVaultTracer } from '../kb/tracing';
 import { loadPerfIndex } from '../kb/perfIndex';
 import { assemblePipelineStatus, toSetAsideViews, deriveStageError, buildInFlightRoster, type PipelineStatusView, type StageInput, type RecentError, type WorktreeInfo } from '../kb/pipelineStatusView';
@@ -75,48 +84,25 @@ import { JobScheduler } from '../kb/jobScheduler';
 import { exampleJobBehavior, EXAMPLE_JOB_TYPE } from '../kb/exampleJob';
 import { makeReflectJobBehavior, REFLECT_JOB_TYPE } from '../kb/reflectJob';
 import { makeReflectDecider } from '../kb/reflectAgent';
-import { readJobRegistry, patchJob, upsertJob, jobRegistryPath } from '../kb/jobRegistry';
-import { readJournal } from '../kb/jobStage';
-import { JOB_CATALOG, catalogEntry, facingForType } from '../kb/jobCatalog';
-import { buildJobViews, isSchedulePreset, isAutonomyPosture, jobConfigAuditEvents } from '../kb/jobsPanel';
-import { readInstanceConfig, writeInstanceConfig, instanceConfigPath, resolveJobPosture, defaultInstanceConfig, clampRecallBudgetMs, resolveRecallMaxToolCallsWrite, resolveStageCaps, clampStageCap, resolveCeilingWrite, SCALE_STAGES, DEV_LOG_LEVELS, DEFAULT_DEV_LOG_LEVEL, DEFAULT_QUICK_CAPTURE_ACCELERATOR, DEFAULT_RECALL_BUDGET_MS, type DevLogLevel, type ScaleStage, type InstanceConfig } from '../kb/instanceConfig';
+import { readInstanceConfig, defaultInstanceConfig, resolveStageCaps } from '../kb/instanceConfig';
 import { applyCopilotCeiling } from '../kb/copilotConcurrency';
-import { getQuickCaptureAgent } from './quickCaptureService';
-import { AGENT_CATALOG, buildAgentViews } from '../kb/agentCatalog';
-import { resolveCopilotModel, setResolvedLaunchModel, setAgentModelOverrides } from '../kb/copilotModel';
-import { initLaunchModel, probeAcceptedModels, validateModel } from '../kb/copilotModelProbe';
+import { resolveCopilotModel, setAgentModelOverrides } from '../kb/copilotModel';
+import { initLaunchModel } from '../kb/copilotModelProbe';
 import { appendAuditEvent } from '../kb/audit';
-import { readEvents } from '../kb/activityIndex';
-import { readResearcherRegistry, upsertResearcher, patchResearcher, deleteResearcher, researcherRegistryPath } from '../kb/researcherRegistry';
+import { researcherRegistryPath } from '../kb/researcherRegistry';
 import { seedDefaultResearcherIfAbsent } from '../kb/researcherSeed';
-import { buildResearcherViews, isEgressTier, isResearcherTemplate, defaultEgressFor, researcherConfigAuditEvents } from '../kb/researchersPanel';
-import { runResearcher } from '../kb/researchRun';
 import { ResearcherScheduler } from '../kb/researcherScheduler';
-import { IntakeScheduler, selectIntakeFn } from '../kb/intakeScheduler';
+import { IntakeScheduler } from '../kb/intakeScheduler';
 import { WatchScheduler } from '../kb/watchScheduler';
-import { readWatchRegistry, writeWatchRegistry, upsertWatchFolder, patchWatchFolder, watchRegistryPath } from '../kb/watchRegistry';
-import { checkWatchLoopSafe, isSafeWatchId, DEFAULT_WATCH_SCOPE, DEFAULT_WATCH_SENSITIVITY, WATCH_MAX_DEPTH_CAP } from '../kb/watchConnectors';
-import { buildWatchFolderViews } from '../kb/watchPanel';
-import { readIntakeRegistry, upsertIntakeConnector, patchIntakeConnector, deleteIntakeConnector, intakeRegistryPath } from '../kb/intakeRegistry';
-import { runIntakeConnector } from '../kb/intakeRun';
-import { DEFAULT_INTAKE_SCOPE, DEFAULT_INTAKE_SENSITIVITY, isSafeConnectorId, type IntakeConnectorConfig } from '../kb/intakeConnectors';
-import { buildIntakeConnectorViews, isIntakeConnectorType, clampMaxItems, intakeConfigAuditEvents } from '../kb/intakeSourcingPanel';
 import type { WatchFolderView, WatchFolderPatch, IntakeConnectorView, IntakeConnectorConfigPatch, RunIntakeConnectorResult } from '../kb/types';
-import { isSafeGhRepo } from '../kb/ghRead';
-import { DEFAULT_RESEARCHER_BUDGET, dedupKeyFor, researchWhatFor, clampToolCalls, clampTimeoutMs, clampMaxDepth, clampOrientBudget, isSafeResearcherId, type ResearchRequest, type ResearcherConfig } from '../kb/researchers';
-import { ulid, dateShard, isUlid } from '../kb/ulid';
-import { setSensitivityOverride, sensitivityOverridesPath } from '../kb/sensitivityOverride';
-import { readSourceSensitivities, type SourceSensitivity } from '../kb/sensitivityRead';
-import { applySensitivityOverrideToSourceMd } from '../kb/sourceDoc';
+import { ulid } from '../kb/ulid';
+import type { SourceSensitivity } from '../kb/sensitivityRead';
 import { buildRecallOutput } from '../kb/outputDoc';
-import { DEFAULT_POSTURE, type JobBehavior, type JobConfig, type JournalEntry } from '../kb/jobs';
-import { asWorkDepthConfig } from '../kb/workDepth';
+import type { JobBehavior } from '../kb/jobs';
 import type { Review } from '../kb/reviews';
 import { reviewToSummary } from '../kb/reviewSummary';
-import type { AuditEvent } from '../kb/audit';
 import type { AskResult } from '../kb/recall';
 import type { FullReplayResult, ComposeBacklogResult, JobView, JobConfigPatch, JobLastRun, RunJobResult, InstanceSettings, AgentView, ModelCatalogView, SetModelResult, ResearcherView, ResearcherConfigPatch, ResearcherLastRun, RunResearcherResult, SaveRecallOutputResult, PipelineControlRequest, PipelineControlResult, QuiesceStatus, ReviewSummary } from '../kb/types';
-import { lastRunFromEvent } from '../kb/researchersPanel';
 
 /** Factory to create a job behavior resolver with scoped vaultPath (SPEC-0023, Copilot context scope).
  *  v1 ships the deterministic example job and **Reflect** (SPEC-0024, the first real job);
@@ -1294,130 +1280,22 @@ export async function saveRecallOutput(result: AskResult): Promise<SaveRecallOut
 }
 
 // --- Control Panel · Jobs (SPEC-0027 PANEL-2/6/7) — read/manage the per-vault job registry ---
+// Full implementation lives in registries/jobsControlPanel.ts (#528 ENG-7); these are thin
+// active-KB-guarded wrappers so the module above never needs the `active` singleton itself.
 
-/**
- * List the manageable jobs for the active KB (PANEL-2): the known-job catalog merged with the
- * registry, each row carrying its last-run summary from the journal. Reads `staging` (where the
- * registry + journals live). No active KB → empty list (the view degrades gracefully, PANEL-9).
- */
 export async function listJobsForActive(): Promise<JobView[]> {
   if (!active) return [];
-  const root = active.stagingWt;
-  const registry = await readJobRegistry(root);
-  const instance = await readInstanceConfig(root); // a catalog-only job displays its inherited posture
-  // Gather the newest journal entry for every job we will show (catalog types ∪ registered ids).
-  const ids = new Set<string>([...JOB_CATALOG.map((c) => c.type), ...registry.map((j) => j.id)]);
-  const lastEntryByJobId: Record<string, JournalEntry | undefined> = {};
-  for (const id of ids) {
-    const journal = await readJournal(root, id);
-    lastEntryByJobId[id] = journal[journal.length - 1];
-  }
-  return buildJobViews(JOB_CATALOG, registry, lastEntryByJobId, instance.autonomyDefault);
+  return jobsControlPanel.listJobs(active.stagingWt);
 }
 
-/**
- * Apply a Jobs-view config change (PANEL-2/6) and return the refreshed list. A catalog-only job is
- * seeded into the registry on first edit. The registry write + git commit run under the shared
- * canonical-writer lock so they never race a stage's ff-advance — the commit is the durable record
- * that survives a staging reset. After the write, a **conforming `panel` audit event** is emitted per
- * changed field (PANEL-7 / AUDIT-2/11 — carries field/from/to + the why, via the SPEC-0029 writer
- * which enforces actor registration at emit). The scheduler reads the registry fresh each tick and
- * rebuilds a job's runner when its config signature changes, so the edit takes effect with no
- * restart (PANEL-6).
- *
- * Untrusted IPC input is validated at this trust boundary: id/type required, `schedule`/`posture`
- * are dropped unless they are known enum values (the existing `isSchedulePreset`/`isAutonomyPosture`
- * validators), and an unknown job (not in the catalog and not already registered) is refused — never
- * create a job for an arbitrary/unresolvable type.
- */
 export async function setActiveJobConfig(patch: JobConfigPatch): Promise<JobView[]> {
   if (!active) return [];
-  const root = active.stagingWt;
-  if (typeof patch.id !== 'string' || patch.id.length === 0 || typeof patch.type !== 'string' || patch.type.length === 0) {
-    return listJobsForActive();
-  }
-  // Sanitize: keep only valid enum fields (fail-safe — drop anything unrecognized).
-  const clean: JobConfigPatch = { id: patch.id, type: patch.type };
-  if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
-  if (isSchedulePreset(patch.schedule)) clean.schedule = patch.schedule;
-  if (isAutonomyPosture(patch.posture)) clean.posture = patch.posture;
-  // JOBS-17: the editable per-item work-depth (sanitized — drops junk). Absent leaves the prior/default.
-  if (patch.workDepth !== undefined) {
-    const wd = asWorkDepthConfig(patch.workDepth);
-    if (wd) clean.workDepth = wd;
-  }
-
-  let prior: JobConfig | undefined;
-  let applied = false;
-  await active.lock.run(async () => {
-    const registry = await readJobRegistry(root);
-    prior = registry.find((j) => j.id === clean.id);
-    // Refuse an unknown job (not in the catalog and not already registered) from untrusted input.
-    if (!prior && catalogEntry(clean.type) === undefined) return;
-    applied = true;
-    if (prior) {
-      await patchJob(root, clean.id, {
-        ...(clean.enabled !== undefined ? { enabled: clean.enabled } : {}),
-        ...(clean.schedule !== undefined ? { schedule: clean.schedule } : {}),
-        ...(clean.posture !== undefined ? { posture: clean.posture } : {}),
-        ...(clean.workDepth !== undefined ? { workDepth: clean.workDepth } : {}),
-      });
-    } else {
-      // New job: an explicit per-job posture wins; otherwise inherit the Instance default (AUTO-12
-      // cascade — `resolveJobPosture` is the single swap point if the ruling lands differently).
-      // JOBS-16: facing comes from the catalog (the built-in's fixed facing; `internal` default).
-      const instanceCfg = await readInstanceConfig(root);
-      await upsertJob(root, {
-        id: clean.id,
-        type: clean.type,
-        enabled: clean.enabled ?? false,
-        schedule: clean.schedule ?? 'off',
-        posture: resolveJobPosture(instanceCfg.autonomyDefault, clean.posture),
-        facing: facingForType(clean.type),
-        ...(clean.workDepth !== undefined ? { workDepth: clean.workDepth } : {}),
-      });
-    }
-    await commitRegistryChange(root, summarizeJobChange(clean));
-  }, 'job-config:write');
-  if (applied) {
-    // Conforming audit (PANEL-7 / AUDIT-2/11): one `panel` event per changed field, carrying the why.
-    // Appends to the gitignored `.kb/audit.jsonl` (not canonical) — fine outside the lock.
-    for (const event of jobConfigAuditEvents(prior, clean)) await appendAuditEvent(root, event);
-  }
-  return listJobsForActive();
+  return jobsControlPanel.setJobConfig(patch, { root: active.stagingWt, lock: active.lock, runNow: (id) => active!.jobs.runNow(id) });
 }
 
-/**
- * Manual "Run now" for one job (PANEL-2; JOBS-11) — one bounded pass on demand, respecting
- * single-flight. Run-now is independent of enable/schedule, so a catalog-only job is seeded
- * (off/guarded) and committed before running, letting the Principal test a job without turning it on.
- * The Principal's trigger is itself audited as a `panel` event (PANEL-7); the run's own work is
- * audited by the job journal (actor `job`).
- */
 export async function runActiveJobNow(id: string): Promise<RunJobResult> {
   if (!active) return { ran: false, reason: 'no-kb' };
-  const root = active.stagingWt;
-  const registry = await readJobRegistry(root);
-  if (!registry.some((j) => j.id === id)) {
-    const entry = catalogEntry(id); // v1: catalog id === type
-    if (!entry) return { ran: false, reason: 'not-found' };
-    await active.lock.run(async () => {
-      const instanceCfg = await readInstanceConfig(root);
-      await upsertJob(root, { id, type: entry.type, enabled: false, schedule: 'off', posture: resolveJobPosture(instanceCfg.autonomyDefault, undefined), facing: facingForType(entry.type) });
-      await commitRegistryChange(root, `seed job ${id} for run-now`);
-    }, 'job:seed-for-run-now');
-  }
-  const res = await active.jobs.runNow(id);
-  const outcome = res === 'skipped' || res === 'not-found' || res === 'unknown-type' ? res : res.outcome;
-  // Audit the Principal-initiated trigger (PANEL-7) — the trigger happened regardless of outcome.
-  await appendAuditEvent(root, {
-    actor: 'panel',
-    eventType: 'job-run-now',
-    subjects: { jobId: id },
-    payload: { outcome, why: 'Principal manual run via Control Panel' },
-  });
-  if (res === 'skipped' || res === 'not-found' || res === 'unknown-type') return { ran: false, reason: res };
-  return { ran: true, outcome: res.outcome, applied: res.applied, deferred: res.deferred };
+  return jobsControlPanel.runJobNow(id, { root: active.stagingWt, lock: active.lock, runNow: (jobId) => active!.jobs.runNow(jobId) });
 }
 
 /** VUX-17 (#524 §5 / #559): the Agents drill-in's past-runs timeline — a job's full journal
@@ -1432,777 +1310,132 @@ export async function jobHistoryForActive(id: string): Promise<JobLastRun[]> {
     .map((e) => ({ ts: e.ts, inspected: e.inspected, applied: e.applied, deferred: e.deferred, ...(e.note ? { note: e.note } : {}) }));
 }
 
-/** A short, human commit summary of a job-config change (the conforming audit event carries from/to). */
-function summarizeJobChange(patch: JobConfigPatch): string {
-  const parts: string[] = [];
-  if (patch.enabled !== undefined) parts.push(`enabled=${patch.enabled}`);
-  if (patch.schedule !== undefined) parts.push(`schedule=${patch.schedule}`);
-  if (patch.posture !== undefined) parts.push(`posture=${patch.posture}`);
-  return `job ${patch.id}${parts.length ? ` set ${parts.join(', ')}` : ' config change'}`;
-}
-
 // --- Control Panel · Settings + Agents (SPEC-0027 PANEL-3/5) ---
+// Full implementation lives in registries/instanceSettingsControlPanel.ts + registries/modelsControlPanel.ts (#528 ENG-7).
 
-/** The per-Instance settings for the active KB (PANEL-5). No active KB → safe defaults. */
 export async function getActiveInstanceSettings(): Promise<InstanceSettings> {
-  if (!active) return defaultInstanceConfig();
-  return readInstanceConfig(active.stagingWt);
+  return instanceSettingsControlPanel.getInstanceSettings(active?.stagingWt ?? null);
 }
 
-/**
- * Persist the per-Instance settings (PANEL-5/6): write `.kb/instance.json` + git-commit on `staging`
- * under the lock (durability), then emit a conforming `panel` audit event when the autonomy default
- * changed (PANEL-7 / AUDIT-2/11 — `→ Autonomous` is a risky, audited change). An invalid posture is
- * refused (fail-safe). Takes effect immediately (new jobs inherit it via `resolveJobPosture`).
- */
 export async function setActiveInstanceSettings(settings: InstanceSettings): Promise<InstanceSettings> {
   if (!active) return defaultInstanceConfig();
-  const root = active.stagingWt;
-  if (!isAutonomyPosture(settings.autonomyDefault)) return readInstanceConfig(root); // reject invalid
-  let prior: InstanceConfig = defaultInstanceConfig();
-  let devLogLevel: DevLogLevel = DEFAULT_DEV_LOG_LEVEL;
-  let quickCaptureAccelerator: string = DEFAULT_QUICK_CAPTURE_ACCELERATOR;
-  let recallBudgetMs: number = DEFAULT_RECALL_BUDGET_MS;
-  let recallMaxToolCalls: number | undefined;
-  let stageCaps: Partial<Record<ScaleStage, number>> | undefined;
-  let copilotCeiling: number | undefined;
-  let priorCfg = defaultInstanceConfig();
-  await active.lock.run(async () => {
-    prior = await readInstanceConfig(root);
-    priorCfg = prior as typeof priorCfg;
-    // OBS-10: keep a valid level. Server-side merge (QA-2 hardening / the #102 lesson): an
-    // omitted/invalid level PRESERVES the prior — no caller can clobber a field by omission.
-    devLogLevel = (DEV_LOG_LEVELS as readonly string[]).includes(settings.devLogLevel) ? settings.devLogLevel : prior.devLogLevel;
-    // QCAP-6: preserve-on-omission (the #102 merge lesson) — an empty/omitted accelerator keeps prior.
-    quickCaptureAccelerator =
-      typeof settings.quickCaptureAccelerator === 'string' && settings.quickCaptureAccelerator.trim().length > 0
-        ? settings.quickCaptureAccelerator
-        : prior.quickCaptureAccelerator;
-    // ASK-17: preserve-on-omission — an omitted recall budget keeps prior; a provided one is clamped to
-    // the sane bounds. (prior.recallBudgetMs is always set: readInstanceConfig fills it.)
-    recallBudgetMs = settings.recallBudgetMs === undefined ? (prior.recallBudgetMs ?? DEFAULT_RECALL_BUDGET_MS) : clampRecallBudgetMs(settings.recallBudgetMs);
-    // ASK-19: the retrieval tool-call override — `undefined` preserves prior (#102), `null` CLEARS it
-    // back to the graph-size-scaled default ("scale to KB size"), a number is clamped (pure +
-    // unit-tested in recallConstants). Omitted from the write below ⇒ no override key persisted.
-    recallMaxToolCalls = resolveRecallMaxToolCallsWrite(priorCfg.recallMaxToolCalls, settings.recallMaxToolCalls);
-    // SCALE-1/2 preserve-on-omission (#102): a wholly-omitted `stageCaps`/`copilotCeiling` keeps prior;
-    // a provided one is merged key-by-key + clamped (Connect pinned to 1, SCALE-5). The model override
-    // + preference list (#345) are likewise preserved on the write below — InstanceSettings carries
-    // them but an omitted value must keep prior, never wipe the Principal's pick.
-    if (settings.stageCaps === undefined) {
-      stageCaps = priorCfg.stageCaps;
-    } else {
-      const merged: Partial<Record<ScaleStage, number>> = { ...(priorCfg.stageCaps ?? {}) };
-      for (const stage of SCALE_STAGES) {
-        if (settings.stageCaps[stage] !== undefined) merged[stage] = clampStageCap(stage, settings.stageCaps[stage]);
-      }
-      stageCaps = Object.keys(merged).length > 0 ? merged : undefined;
-    }
-    // `undefined` preserves prior (#102); `null` is the Auto toggle's explicit CLEAR (→ cores-derived);
-    // a number is clamped (see resolveCeilingWrite — pure + unit-tested in scaleConstants).
-    copilotCeiling = resolveCeilingWrite(priorCfg.copilotCeiling, settings.copilotCeiling);
-    await writeInstanceConfig(root, {
-      autonomyDefault: settings.autonomyDefault,
-      devLogLevel,
-      quickCaptureAccelerator,
-      recallBudgetMs,
-      ...(recallMaxToolCalls !== undefined ? { recallMaxToolCalls } : {}), // ASK-19: omitted ⇒ scaled default
-      ...(priorCfg.modelPreferences ? { modelPreferences: priorCfg.modelPreferences } : {}), // preserve MODEL (#345)
-      ...(priorCfg.model ? { model: priorCfg.model } : {}),
-      ...(priorCfg.agentModels ? { agentModels: priorCfg.agentModels } : {}), // preserve per-agent picks (SPEC-0048)
-      ...(stageCaps ? { stageCaps } : {}),
-      ...(copilotCeiling !== undefined ? { copilotCeiling } : {}),
-    });
-    await commitControlFile(root, instanceConfigPath(root), `instance autonomyDefault=${settings.autonomyDefault} devLogLevel=${devLogLevel} quickCaptureAccelerator=${quickCaptureAccelerator} recallBudgetMs=${recallBudgetMs} recallMaxToolCalls=${recallMaxToolCalls ?? 'scaled'} ceiling=${copilotCeiling ?? 'default'} caps=${JSON.stringify(stageCaps ?? {})}`);
-  }, 'instance-settings:write');
-  // QCAP-6: apply a changed hotkey live (no restart) — conflict-aware via the agent; degrades to the
-  // menubar if the new accelerator clashes (QCAP-9). No-op when running headless without an agent.
-  if (prior.quickCaptureAccelerator !== quickCaptureAccelerator) {
-    getQuickCaptureAgent()?.setAccelerator(quickCaptureAccelerator);
-    await appendAuditEvent(root, {
-      actor: 'panel',
-      eventType: 'instance-config-change',
-      subjects: {},
-      payload: { field: 'quickCaptureAccelerator', from: prior.quickCaptureAccelerator, to: quickCaptureAccelerator, why: 'Principal change via Control Panel' },
-    });
-  }
-  if (prior.autonomyDefault !== settings.autonomyDefault) {
-    await appendAuditEvent(root, {
-      actor: 'panel',
-      eventType: 'instance-config-change',
-      subjects: {},
-      payload: { field: 'autonomyDefault', from: prior.autonomyDefault, to: settings.autonomyDefault, why: 'Principal change via Control Panel' },
-    });
-  }
-  // OBS-10 + AUDIT-2: audit a verbosity change too — `→ debug` is security-relevant (it logs
-  // redaction-protected `sensitive` fields verbatim), so it's never silent (QA-2 #2).
-  if (prior.devLogLevel !== devLogLevel) {
-    await appendAuditEvent(root, {
-      actor: 'panel',
-      eventType: 'instance-config-change',
-      subjects: {},
-      payload: { field: 'devLogLevel', from: prior.devLogLevel, to: devLogLevel, why: 'Principal change via Control Panel' },
-    });
-  }
-  // SPEC-0048 SCALE-4: apply scale changes LIVE (no restart). Resize the global ceiling (env still
-  // wins) and live-set each stage's cap — the new cap is read on the stage's NEXT batch (`setCap`),
-  // so a "run harder/softer" change takes effect within a sweep without rebuilding the pipeline.
-  const effectiveCeiling = applyCopilotCeiling(copilotCeiling);
-  const liveCaps = resolveStageCaps({ stageCaps });
-  active.orch.setCap(liveCaps.archive);
-  active.decompose.setCap(liveCaps.decompose);
-  active.claims.setCap(liveCaps.claims);
-  active.compose.setCap(liveCaps.compose);
-  active.connect.setCap(liveCaps.connect); // SCALE-5: Connect's resolve drain is now live-tunable too
-  const priorCeiling = priorCfg.copilotCeiling;
-  const priorCaps = JSON.stringify(priorCfg.stageCaps ?? {});
-  if (priorCeiling !== copilotCeiling || priorCaps !== JSON.stringify(stageCaps ?? {})) {
-    active.log.info('scale.applied', { ceiling: effectiveCeiling, caps: liveCaps });
-    await appendAuditEvent(root, {
-      actor: 'panel',
-      eventType: 'instance-config-change',
-      subjects: {},
-      payload: { field: 'scale', ceiling: copilotCeiling ?? 'default', caps: stageCaps ?? {}, why: 'Principal change via Control Panel' },
-    });
-  }
-  return readInstanceConfig(root);
-}
-
-/** The librarian/stage agents for observe-only display (PANEL-3): the static catalog overlaid with
- *  the resolved model (env-requested or Copilot default) + live running/idle status (PANEL-9). */
-export async function listAgentsForActive(): Promise<AgentView[]> {
-  // SPEC-0048: per-agent resolution — each row shows the model THAT agent launches with (its own pin
-  // → global → floor) + its configured pick (for the picker). `agentModels` read from the persisted
-  // config so the view reflects the saved picks even before a restart re-applies the override cache.
-  const configuredModels = active ? (await readInstanceConfig(active.stagingWt)).agentModels : undefined;
-  return buildAgentViews(AGENT_CATALOG, {
-    resolveModel: (agentKey) => resolveCopilotModel(undefined, agentKey),
-    configuredModels,
-    pipelineActive: active !== null,
+  return instanceSettingsControlPanel.setInstanceSettings(settings, {
+    root: active.stagingWt,
+    lock: active.lock,
+    log: active.log,
+    applyLiveCaps: (caps) => {
+      active!.orch.setCap(caps.archive);
+      active!.decompose.setCap(caps.decompose);
+      active!.claims.setCap(caps.claims);
+      active!.compose.setCap(caps.compose);
+      active!.connect.setCap(caps.connect); // SCALE-5: Connect's resolve drain is now live-tunable too
+    },
   });
 }
 
-/** SPEC-0048 — the model picker's data: the live CLI accepted catalog (probed), the currently-resolved
- *  launch model, the persisted global pick (if any), and whether that pick is stale (no longer accepted
- *  by this CLI version → the brass note). Best-effort: a probe miss leaves `accepted` null (the picker
- *  shows the resolved/configured value but can't offer a fresh list). */
-export async function getModelCatalogForActive(): Promise<ModelCatalogView> {
-  const accepted = await probeAcceptedModels();
-  const resolved = resolveCopilotModel();
-  const configured = active ? (await readInstanceConfig(active.stagingWt)).model : undefined;
-  const staleConfigured = !!configured && accepted !== null && !accepted.includes(configured);
-  return { accepted, resolved, configured, staleConfigured };
+export async function listAgentsForActive(): Promise<AgentView[]> {
+  return modelsControlPanel.listAgents(active ? { root: active.stagingWt, pipelineActive: true } : null);
 }
 
-/** SPEC-0048 — persist the Principal's global model pick (Agents-view picker), validated against the
- *  live CLI catalog first so a stale/rejected id is REFUSED (never persisted into a hard-break). An
- *  empty/null id clears the override (→ the preference-list probe re-resolves). Applies live via
- *  `setResolvedLaunchModel` so new launches use it without a restart. */
+export async function getModelCatalogForActive(): Promise<ModelCatalogView> {
+  return modelsControlPanel.getModelCatalog(active?.stagingWt ?? null);
+}
+
 export async function setActiveModel(id: string | null): Promise<SetModelResult> {
   if (!active) return { ok: false, resolved: resolveCopilotModel() };
-  const root = active.stagingWt;
-  const trimmed = (id ?? '').trim();
-
-  if (trimmed.length === 0) {
-    // Clear the override → re-resolve from the preference list against the live catalog.
-    let prefs: string[] | undefined;
-    await active.lock.run(async () => {
-      const prior = await readInstanceConfig(root);
-      prefs = prior.modelPreferences;
-      const { model: _drop, ...rest } = prior;
-      void _drop;
-      await writeInstanceConfig(root, rest);
-      await commitControlFile(root, instanceConfigPath(root), 'instance model=cleared');
-    }, 'instance-model:write');
-    await initLaunchModel({ preferences: prefs, log: active.log.child({ scope: 'model' }) }).catch(() => {});
-    return { ok: true, resolved: resolveCopilotModel() };
-  }
-
-  // Validate the pick against the live catalog: a rejected id is refused (resolution unchanged). An
-  // `unknown` (un-probable CLI) is allowed — the per-call `auto` net still guards a real launch reject.
-  const { result } = await validateModel(trimmed);
-  if (result === 'rejected') return { ok: false, resolved: resolveCopilotModel(), reason: 'rejected' };
-
-  await active.lock.run(async () => {
-    const prior = await readInstanceConfig(root);
-    await writeInstanceConfig(root, { ...prior, model: trimmed });
-    await commitControlFile(root, instanceConfigPath(root), `instance model=${trimmed}`);
-  }, 'instance-model:write');
-  setResolvedLaunchModel(trimmed); // apply live — new launches use it immediately
-  return { ok: true, resolved: resolveCopilotModel() };
+  return modelsControlPanel.setModel(id, { root: active.stagingWt, lock: active.lock, log: active.log });
 }
 
-/** SPEC-0048 — set/clear ONE agent's per-agent model pick (Agents-view per-agent picker). Validated
- *  against the live catalog (rejected → refused). Empty/null clears that agent's pick (→ global default).
- *  Persists `instance.agentModels` under the lock + applies live via `setAgentModelOverrides`. Returns
- *  that agent's now-resolved model. */
 export async function setActiveAgentModel(agentKey: string, id: string | null): Promise<SetModelResult> {
   if (!active) return { ok: false, resolved: resolveCopilotModel(undefined, agentKey) };
-  const root = active.stagingWt;
-  const key = agentKey.trim();
-  const trimmed = (id ?? '').trim();
-  if (key.length === 0) return { ok: false, resolved: resolveCopilotModel() };
-
-  // A non-empty pick must be catalog-accepted (rejected → refuse, leave the agent on its current model).
-  if (trimmed.length > 0) {
-    const { result } = await validateModel(trimmed);
-    if (result === 'rejected') return { ok: false, resolved: resolveCopilotModel(undefined, agentKey), reason: 'rejected' };
-  }
-
-  let next: Record<string, string> = {};
-  await active.lock.run(async () => {
-    const prior = await readInstanceConfig(root);
-    const map = { ...(prior.agentModels ?? {}) };
-    if (trimmed.length > 0) map[key] = trimmed;
-    else delete map[key]; // clear → fall back to the global default
-    next = map;
-    const { agentModels: _drop, ...rest } = prior;
-    void _drop;
-    await writeInstanceConfig(root, { ...rest, ...(Object.keys(map).length > 0 ? { agentModels: map } : {}) });
-    await commitControlFile(root, instanceConfigPath(root), `instance agentModels.${key}=${trimmed || 'cleared'}`);
-  }, 'instance-agent-model:write');
-  setAgentModelOverrides(next); // apply live
-  return { ok: true, resolved: resolveCopilotModel(undefined, agentKey) };
+  return modelsControlPanel.setAgentModel(agentKey, id, { root: active.stagingWt, lock: active.lock, log: active.log });
 }
 
 // --- Control Panel · Watched folders (SPEC-0037 WATCH-9; over the watch registry) ---
+// Full implementation lives in registries/watchControlPanel.ts (#528 ENG-7).
 
-/** List the active KB's watched folders for the unified Sources view (WATCH-9): config + the live
- *  `watching` flag (from the scheduler) + each folder's newest `watch` audit folded as `lastEvent`.
- *  Reads `staging` (registry + audit live there). No active KB → empty (PANEL-9 degrade). */
+function watchCtx(a: ActivePipeline): watchControlPanel.WatchCtx {
+  return { root: a.stagingWt, lock: a.lock, vaultPath: a.vaultPath, log: a.log, watchingIds: () => a.watch.watchingIds(), refresh: () => a.watch.refresh() };
+}
+
 export async function listWatchFoldersForActive(): Promise<WatchFolderView[]> {
   if (!active) return [];
-  const root = active.stagingWt;
-  const registry = await readWatchRegistry(root, active.log);
-  const events = await readEvents(root, { actors: ['watch'] }); // newest-first
-  const lastByWatch: Record<string, (typeof events)[number] | undefined> = {};
-  for (const f of registry) lastByWatch[f.id] = events.find((e) => e.subjects.watchId === f.id);
-  return buildWatchFolderViews(registry, active.watch.watchingIds(), lastByWatch);
+  return watchControlPanel.listWatchFolders(watchCtx(active));
 }
 
-/**
- * Apply a Sources-view edit to a watched folder (WATCH-9) + return the refreshed list. Untrusted IPC
- * input is validated at this boundary; a `folderPath` being set/changed is **loop-guarded** against the
- * REAL vault (WATCH-10) — a loop-unsafe folder (the vault/.kb/.git or an ancestor) is REFUSED and never
- * persisted (the change is dropped, fail-safe). The write + git commit run under the shared lock
- * (durability); a conforming `panel` audit records the change (AUDIT-2); then the scheduler re-syncs so a
- * newly-enabled folder starts watching (and a disabled one stops).
- */
 export async function setActiveWatchFolder(patch: WatchFolderPatch): Promise<WatchFolderView[]> {
   if (!active) return [];
-  const root = active.stagingWt;
-  if (typeof patch.id !== 'string' || patch.id.length === 0) return listWatchFoldersForActive();
-
-  const clean: WatchFolderPatch = { id: patch.id };
-  if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
-  if (typeof patch.scope === 'string' && patch.scope.trim()) clean.scope = patch.scope.trim();
-  if (typeof patch.sensitivity === 'string' && patch.sensitivity.trim()) clean.sensitivity = patch.sensitivity.trim();
-  if (typeof patch.label === 'string') clean.label = patch.label;
-  if (Array.isArray(patch.ignoreGlobs)) clean.ignoreGlobs = patch.ignoreGlobs.filter((g): g is string => typeof g === 'string');
-  if (typeof patch.folderPath === 'string' && patch.folderPath.trim()) clean.folderPath = patch.folderPath.trim();
-  // Slice-2 opt-ins (WATCH-12/14): coerce to safe values at the boundary — maxDepth clamped to [0, cap].
-  if (typeof patch.recursive === 'boolean') clean.recursive = patch.recursive;
-  if (typeof patch.maxDepth === 'number' && Number.isFinite(patch.maxDepth)) clean.maxDepth = Math.min(Math.max(0, Math.floor(patch.maxDepth)), WATCH_MAX_DEPTH_CAP);
-  if (typeof patch.consume === 'boolean') clean.consume = patch.consume;
-
-  // WATCH-10 loop-guard at the IPC boundary: a folderPath set/change must be loop-safe vs the REAL vault,
-  // else REFUSE the whole change (never persist a folder that would re-ingest the vault into itself).
-  if (clean.folderPath !== undefined) {
-    const guard = await checkWatchLoopSafe(active.vaultPath, clean.folderPath);
-    if (!guard.ok) {
-      active.log.child({ scope: 'watch' }).warn('watch.config-refused', { watchId: clean.id, folderPath: clean.folderPath, reason: guard.reason });
-      await appendAuditEvent(root, { actor: 'panel', eventType: 'watch-config-change', subjects: { watchId: clean.id }, payload: { refused: true, folderPath: clean.folderPath, reason: guard.reason, why: 'folder-watch loop-guard refused the folder (WATCH-10)' } });
-      return listWatchFoldersForActive(); // fail-safe: nothing persisted
-    }
-  }
-
-  let applied = false;
-  await active.lock.run(async () => {
-    const existing = (await readWatchRegistry(root)).find((f) => f.id === clean.id);
-    if (existing) {
-      await patchWatchFolder(root, clean.id, {
-        ...(clean.enabled !== undefined ? { enabled: clean.enabled } : {}),
-        ...(clean.folderPath !== undefined ? { folderPath: clean.folderPath } : {}),
-        ...(clean.scope !== undefined ? { scope: clean.scope } : {}),
-        ...(clean.sensitivity !== undefined ? { sensitivity: clean.sensitivity } : {}),
-        ...(clean.label !== undefined ? { label: clean.label } : {}),
-        ...(clean.ignoreGlobs !== undefined ? { ignoreGlobs: clean.ignoreGlobs } : {}),
-        ...(clean.recursive !== undefined ? { recursive: clean.recursive } : {}),
-        ...(clean.maxDepth !== undefined ? { maxDepth: clean.maxDepth } : {}),
-        ...(clean.consume !== undefined ? { consume: clean.consume } : {}),
-      });
-    } else {
-      // New watched folder requires a folderPath (already loop-guarded above).
-      if (clean.folderPath === undefined) return;
-      await upsertWatchFolder(root, {
-        id: clean.id,
-        folderPath: clean.folderPath,
-        enabled: clean.enabled ?? false,
-        scope: clean.scope ?? DEFAULT_WATCH_SCOPE,
-        sensitivity: clean.sensitivity ?? DEFAULT_WATCH_SENSITIVITY,
-        ...(clean.label !== undefined ? { label: clean.label } : {}),
-        ...(clean.ignoreGlobs !== undefined ? { ignoreGlobs: clean.ignoreGlobs } : {}),
-        ...(clean.recursive !== undefined ? { recursive: clean.recursive } : {}),
-        ...(clean.maxDepth !== undefined ? { maxDepth: clean.maxDepth } : {}),
-        ...(clean.consume !== undefined ? { consume: clean.consume } : {}),
-      });
-    }
-    applied = true;
-    await commitControlFile(root, watchRegistryPath(root), `watch ${clean.id} config change`);
-  }, 'watch-config:write');
-
-  if (applied) {
-    await appendAuditEvent(root, { actor: 'panel', eventType: 'watch-config-change', subjects: { watchId: clean.id }, payload: { ...(clean.enabled !== undefined ? { enabled: clean.enabled } : {}), ...(clean.folderPath !== undefined ? { folderPath: clean.folderPath } : {}), ...(clean.recursive !== undefined ? { recursive: clean.recursive } : {}), ...(clean.maxDepth !== undefined ? { maxDepth: clean.maxDepth } : {}), ...(clean.consume !== undefined ? { consume: clean.consume } : {}), why: 'Principal edited a watched folder via Control Panel' } });
-    await active.watch.refresh(); // start/stop live watchers to match the new config
-  }
-  return listWatchFoldersForActive();
+  return watchControlPanel.setWatchFolder(patch, watchCtx(active));
 }
 
-/** Remove a watched folder (WATCH-9): drop it from the registry, audit the removal, and stop its live
- *  watcher. An unsafe id is a no-op (the registry guard would reject it anyway). */
 export async function removeActiveWatchFolder(id: string): Promise<WatchFolderView[]> {
   if (!active) return [];
-  if (!isSafeWatchId(id)) return listWatchFoldersForActive();
-  const root = active.stagingWt;
-  let removed = false;
-  await active.lock.run(async () => {
-    const folders = await readWatchRegistry(root);
-    if (!folders.some((f) => f.id === id)) return;
-    await writeWatchRegistry(root, folders.filter((f) => f.id !== id));
-    removed = true;
-    await commitControlFile(root, watchRegistryPath(root), `watch ${id} removed`);
-  }, 'watch-config:remove');
-  if (removed) {
-    await appendAuditEvent(root, { actor: 'panel', eventType: 'watch-config-change', subjects: { watchId: id }, payload: { removed: true, why: 'Principal removed a watched folder via Control Panel' } });
-    await active.watch.refresh(); // tear down the removed folder's live watcher
-  }
-  return listWatchFoldersForActive();
+  return watchControlPanel.removeWatchFolder(id, watchCtx(active));
 }
 
 // --- Control Panel · Researchers (SPEC-0028 RESEARCH-15; over the researcher registry) ---
+// Full implementation lives in registries/researchersControlPanel.ts (#528 ENG-7).
 
-/** List the active KB's researchers with each one's last-run (from its newest `researcher` audit
- *  event). Reads `staging` (registry + audit live there). No active KB → empty (PANEL-9 degrade). */
+function researchersCtx(a: ActivePipeline): researchersControlPanel.ResearchersCtx {
+  return { root: a.stagingWt, lock: a.lock, log: a.log };
+}
+
 export async function listResearchersForActive(): Promise<ResearcherView[]> {
   if (!active) return [];
-  const root = active.stagingWt;
-  const registry = await readResearcherRegistry(root);
-  const events = await readEvents(root, { actors: ['researcher'] }); // newest-first
-  const lastByResearcher: Record<string, AuditEvent | undefined> = {};
-  for (const r of registry) lastByResearcher[r.id] = events.find((e) => e.subjects.researcherId === r.id);
-  return buildResearcherViews(registry, lastByResearcher);
+  return researchersControlPanel.listResearchers(active.stagingWt);
 }
 
-/**
- * Apply a Researchers-view config change (RESEARCH-15) + return the refreshed list. Untrusted IPC
- * input is validated at this boundary (template/egress/schedule/posture dropped unless known enums;
- * an unsafe `id` is rejected by the registry guard). The write + git commit run under the shared
- * lock (durability); then a conforming `panel` audit event records the change (PANEL-7-style).
- */
 export async function setActiveResearcherConfig(patch: ResearcherConfigPatch): Promise<ResearcherView[]> {
   if (!active) return [];
-  const root = active.stagingWt;
-  if (typeof patch.id !== 'string' || patch.id.length === 0) return listResearchersForActive();
-
-  // Validate untrusted IPC input into a `clean` patch (drop unknown enums; the rest is fail-safe).
-  // apply + audit both use `clean`, so a dropped-invalid field is never recorded as applied
-  // (QA-2 #81 follow-up — audit accuracy matters for the egress-relevant fields).
-  const clean: ResearcherConfigPatch = { id: patch.id };
-  if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
-  if (isSchedulePreset(patch.schedule)) clean.schedule = patch.schedule;
-  if (isAutonomyPosture(patch.posture)) clean.posture = patch.posture;
-  if (isEgressTier(patch.egressTier)) clean.egressTier = patch.egressTier;
-  if (isResearcherTemplate(patch.template)) clean.template = patch.template;
-  if (typeof patch.label === 'string') clean.label = patch.label;
-  if (typeof patch.prompt === 'string' && patch.prompt.trim()) clean.prompt = patch.prompt;
-  if (typeof patch.scope === 'string' && patch.scope.trim()) clean.scope = patch.scope;
-  if (typeof patch.repoPath === 'string' && patch.repoPath.trim()) clean.repoPath = patch.repoPath.trim();
-  if (typeof patch.tenantId === 'string' && patch.tenantId.trim()) clean.tenantId = patch.tenantId.trim();
-  // prRepo is owner/name — validated at the boundary (drop a flag-like/garbage value, never store it).
-  if (typeof patch.prRepo === 'string' && isSafeGhRepo(patch.prRepo.trim())) clean.prRepo = patch.prRepo.trim();
-  if (Array.isArray(patch.topics)) clean.topics = patch.topics;
-  // Editable budget/timeout (RESEARCH-15/18, WS3): clamp valid numbers to the sane range; reject garbage
-  // (non-numeric / ≤0 / non-integer calls) by dropping it (field unchanged). The allowlist is NOT editable.
-  const cleanMaxCalls = clampToolCalls(patch.maxToolCalls);
-  if (cleanMaxCalls !== undefined) clean.maxToolCalls = cleanMaxCalls;
-  const cleanTimeout = clampTimeoutMs(patch.timeoutMs);
-  if (cleanTimeout !== undefined) clean.timeoutMs = cleanTimeout;
-  const cleanMaxDepth = clampMaxDepth(patch.maxDepth); // WS3 Slice-2: the chain-depth safety bound (RESEARCH-11)
-  if (cleanMaxDepth !== undefined) clean.maxDepth = cleanMaxDepth;
-  const cleanOrient = clampOrientBudget(patch.orientBudget); // RESEARCH-22 warm-start: non-egress awareness cap
-  if (cleanOrient !== undefined) clean.orientBudget = cleanOrient;
-
-  let prior: ResearcherConfig | undefined;
-  let applied = false;
-  await active.lock.run(async () => {
-    const registry = await readResearcherRegistry(root);
-    prior = registry.find((r) => r.id === clean.id);
-    if (prior) {
-      await patchResearcher(root, clean.id, {
-        ...(clean.enabled !== undefined ? { enabled: clean.enabled } : {}),
-        ...(clean.schedule !== undefined ? { schedule: clean.schedule } : {}),
-        ...(clean.posture !== undefined ? { posture: clean.posture } : {}),
-        ...(clean.egressTier !== undefined ? { egressTier: clean.egressTier } : {}),
-        ...(clean.prompt !== undefined ? { prompt: clean.prompt } : {}),
-        ...(clean.scope !== undefined ? { scope: clean.scope } : {}),
-        ...(clean.topics !== undefined ? { topics: clean.topics } : {}),
-        // WS3: maxToolCalls + maxDepth (Slice-2) merge into the existing budget (each preserved if unset);
-        // timeoutMs is top-level.
-        ...(clean.maxToolCalls !== undefined || clean.maxDepth !== undefined
-          ? {
-              budget: {
-                ...prior.budget,
-                ...(clean.maxToolCalls !== undefined ? { maxToolCalls: clean.maxToolCalls } : {}),
-                ...(clean.maxDepth !== undefined ? { maxDepth: clean.maxDepth } : {}),
-              },
-            }
-          : {}),
-        ...(clean.timeoutMs !== undefined ? { timeoutMs: clean.timeoutMs } : {}),
-        ...(clean.orientBudget !== undefined ? { orientBudget: clean.orientBudget } : {}), // RESEARCH-22 warm-start (top-level)
-        // Template config: merge repoPath (Code) / tenantId (M365) into the existing config,
-        // preserving other config keys.
-        ...(clean.repoPath !== undefined || clean.tenantId !== undefined || clean.prRepo !== undefined
-          ? {
-              config: {
-                ...(prior.config ?? {}),
-                ...(clean.repoPath !== undefined ? { repoPath: clean.repoPath } : {}),
-                ...(clean.tenantId !== undefined ? { tenantId: clean.tenantId } : {}),
-                ...(clean.prRepo !== undefined ? { prRepo: clean.prRepo } : {}),
-              },
-            }
-          : {}),
-      });
-    } else {
-      // New researcher: derive a safe config from the (validated) template + defaults.
-      const template = clean.template ?? 'custom';
-      const egressTier = clean.egressTier ?? defaultEgressFor(template);
-      clean.egressTier = egressTier; // record the actual created egress in the audit (from local-only)
-      await upsertResearcher(root, {
-        id: clean.id,
-        template,
-        label: clean.label,
-        prompt: clean.prompt ?? `Research ${template} sources relevant to the request.`,
-        egressTier,
-        scope: clean.scope ?? 'global',
-        budget: {
-          ...DEFAULT_RESEARCHER_BUDGET,
-          ...(clean.maxToolCalls !== undefined ? { maxToolCalls: clean.maxToolCalls } : {}),
-          ...(clean.maxDepth !== undefined ? { maxDepth: clean.maxDepth } : {}),
-        },
-        ...(clean.timeoutMs !== undefined ? { timeoutMs: clean.timeoutMs } : {}),
-        ...(clean.orientBudget !== undefined ? { orientBudget: clean.orientBudget } : {}),
-        schedule: clean.schedule ?? 'off',
-        posture: clean.posture ?? DEFAULT_POSTURE,
-        enabled: clean.enabled ?? false,
-        ...(clean.topics ? { topics: clean.topics } : {}),
-        ...(clean.repoPath || clean.tenantId || clean.prRepo
-          ? { config: { ...(clean.repoPath ? { repoPath: clean.repoPath } : {}), ...(clean.tenantId ? { tenantId: clean.tenantId } : {}), ...(clean.prRepo ? { prRepo: clean.prRepo } : {}) } }
-          : {}),
-      });
-    }
-    applied = true;
-    await commitControlFile(root, researcherRegistryPath(root), `researcher ${clean.id} config change`);
-  }, 'researcher-config:write');
-  if (applied) {
-    // Conforming `panel` audit: one event per changed behavior-relevant field (from→to), validated
-    // values only — never a dropped-invalid field, never a no-op re-assert (QA-2 #81 follow-up).
-    for (const event of researcherConfigAuditEvents(prior, clean)) await appendAuditEvent(root, event);
-  }
-  return listResearchersForActive();
+  return researchersControlPanel.setResearcherConfig(patch, researchersCtx(active));
 }
 
-/**
- * Delete a researcher (PANEL-11 lifecycle delete): PURGE its config row from the registry, audit the
- * removal (`panel` actor, `removed: true`), and let the scheduler tear its standing pass down naturally
- * (it re-reads the registry each tick — PANEL-6 — so a removed researcher is simply never scheduled
- * again; no live handle to stop, unlike a watched folder's fs watcher). Already-produced sources +
- * findings + the full audit trail are RETAINED — ground truth is sacred (PANEL-11); only the config/
- * registration is purged. An unsafe id is a no-op (the registry guard rejects it anyway). Mirrors
- * `removeActiveWatchFolder`.
- */
 export async function removeActiveResearcher(id: string): Promise<ResearcherView[]> {
   if (!active) return [];
-  if (!isSafeResearcherId(id)) return listResearchersForActive();
-  const root = active.stagingWt;
-  let removed = false;
-  await active.lock.run(async () => {
-    const registry = await readResearcherRegistry(root);
-    if (!registry.some((r) => r.id === id)) return;
-    await deleteResearcher(root, id);
-    removed = true;
-    await commitControlFile(root, researcherRegistryPath(root), `researcher ${id} removed`);
-  }, 'researcher-config:remove');
-  if (removed) {
-    await appendAuditEvent(root, { actor: 'panel', eventType: 'researcher-config-change', subjects: { researcherId: id }, payload: { removed: true, why: 'Principal removed a researcher via Control Panel (config purged; sources + audit retained)' } });
-  }
-  return listResearchersForActive();
+  return researchersControlPanel.removeResearcher(id, researchersCtx(active));
 }
 
-/**
- * Manual "Run now" for a researcher (RESEARCH-15, "run-now to test") — a single on-demand pass via
- * the run-pass against a synthetic request derived from the researcher's config. It runs the REAL
- * cognition (`makeWebResearchFn` — egress-gated + SSRF-safe), the same adapter the scheduler uses, so
- * "Run now" can never ingest synthetic scaffolding into the Principal's vault. Until the live SDK
- * web-fetch session is wired (gated separately), the gated adapter yields a graceful no-finding rather
- * than fabricate a source. The Principal's trigger is audited as a `panel` event; the run's own work
- * is audited by the run-pass (actor `researcher`).
- */
 export async function runActiveResearcherNow(id: string): Promise<RunResearcherResult> {
   if (!active) return { ran: false, reason: 'no-kb' };
-  const root = active.stagingWt;
-  const r = (await readResearcherRegistry(root)).find((x) => x.id === id);
-  if (!r) return { ran: false, reason: 'not-found' };
-  const what = researchWhatFor(r); // WS1 #6: the researcher's real name, never the generic template word ("code")
-  const req: ResearchRequest = {
-    id: ulid(),
-    ts: new Date().toISOString(),
-    by: { stage: 'panel' },
-    what,
-    why: 'on-demand test run via Control Panel',
-    context: '',
-    dedupKey: dedupKeyFor({ what, by: {} }),
-  };
-  // Same cliPath+dev-log wiring + per-template cognition as the scheduler (one seam, #160) — so Run-now
-  // can't silently no-op in the packaged app, and a code/m365 researcher tests its OWN adapter.
-  const opts = researchDepsOptions(active.log);
-  const res = await runResearcher(root, r, req, { research: selectResearchFn(root, r, opts), lock: active.lock });
-  await appendAuditEvent(root, {
-    actor: 'panel',
-    eventType: 'researcher-run-now',
-    subjects: { researcherId: id },
-    payload: { outcome: res.failed ? 'failed' : res.ceilingReached ? 'ceiling-reached' : res.sourceIds.length > 0 ? 'researched' : 'no-finding', why: 'Principal manual run via Control Panel' },
-  });
-  return {
-    ran: true,
-    sourceIds: res.sourceIds,
-    note: res.note,
-    ...(res.failed ? { failed: true, ...(res.error ? { error: res.error } : {}) } : {}),
-    ...(res.ceilingReached ? { ceilingReached: true } : {}),
-  };
+  return researchersControlPanel.runResearcherNow(id, researchersCtx(active));
 }
 
-/** Recent runs for a researcher (RESEARCH-15) — its `researcher` audit events, newest-first. */
 export async function listResearcherRunsForActive(id: string): Promise<ResearcherLastRun[]> {
   if (!active) return [];
-  const events = await readEvents(active.stagingWt, { actors: ['researcher'], subjectId: id });
-  return events.map((e) => lastRunFromEvent(e)).filter((x): x is ResearcherLastRun => x !== null);
+  return researchersControlPanel.listResearcherRuns(active.stagingWt, id);
 }
 
 // --- Control Panel · Sources — INTAKE feed connectors (SPEC-0027 PANEL-4 / INTAKE-14) ---
+// Full implementation lives in registries/intakeControlPanel.ts + registries/sourceSensitivityControlPanel.ts (#528 ENG-7).
 
-/** The intake connector registry as the Sources view needs it, with each connector's last pull. */
 export async function listIntakeConnectorsForActive(): Promise<IntakeConnectorView[]> {
   if (!active) return [];
-  const root = active.stagingWt;
-  const registry = await readIntakeRegistry(root);
-  const events = await readEvents(root, { actors: ['intake'] }); // newest-first
-  const lastByConnector: Record<string, AuditEvent | undefined> = {};
-  for (const c of registry) lastByConnector[c.id] = events.find((e) => e.subjects.intakeId === c.id);
-  return buildIntakeConnectorViews(registry, lastByConnector);
+  return intakeControlPanel.listIntakeConnectors(active.stagingWt);
 }
 
-/**
- * Apply a Sources-view connector config change (INTAKE-14) + return the refreshed list. Untrusted IPC
- * input is validated at this boundary (type/schedule dropped unless known enums; `maxItemsPerPass`
- * clamped; an unsafe `id` is rejected by the registry guard). The write + git commit run under the
- * shared lock; then a conforming `panel` audit event records the change (PANEL-7-style).
- */
 export async function setActiveIntakeConnectorConfig(patch: IntakeConnectorConfigPatch): Promise<IntakeConnectorView[]> {
   if (!active) return [];
-  const root = active.stagingWt;
-  if (typeof patch.id !== 'string' || patch.id.length === 0) return listIntakeConnectorsForActive();
-
-  // Validate untrusted IPC into a `clean` patch (drop unknown enums; clamp the item cap). apply + audit
-  // both use `clean`, so a dropped-invalid field is never recorded as applied (mirrors researchers #81).
-  const clean: IntakeConnectorConfigPatch = { id: patch.id };
-  if (isIntakeConnectorType(patch.type)) clean.type = patch.type;
-  if (typeof patch.label === 'string') clean.label = patch.label;
-  if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
-  if (isSchedulePreset(patch.schedule)) clean.schedule = patch.schedule;
-  if (typeof patch.scope === 'string' && patch.scope.trim()) clean.scope = patch.scope.trim();
-  if (typeof patch.sensitivity === 'string' && patch.sensitivity.trim()) clean.sensitivity = patch.sensitivity.trim();
-  const cleanMax = clampMaxItems(patch.maxItemsPerPass);
-  if (cleanMax !== undefined) clean.maxItemsPerPass = cleanMax;
-  if (typeof patch.feedUrl === 'string' && patch.feedUrl.trim()) clean.feedUrl = patch.feedUrl.trim();
-  if (typeof patch.tenantId === 'string' && patch.tenantId.trim()) clean.tenantId = patch.tenantId.trim();
-  if (typeof patch.folder === 'string' && patch.folder.trim()) clean.folder = patch.folder.trim();
-
-  let prior: IntakeConnectorConfig | undefined;
-  let applied = false;
-  await active.lock.run(async () => {
-    const registry = await readIntakeRegistry(root);
-    prior = registry.find((c) => c.id === clean.id);
-    if (prior) {
-      await patchIntakeConnector(root, clean.id, {
-        ...(clean.enabled !== undefined ? { enabled: clean.enabled } : {}),
-        ...(clean.schedule !== undefined ? { schedule: clean.schedule } : {}),
-        ...(clean.scope !== undefined ? { scope: clean.scope } : {}),
-        ...(clean.sensitivity !== undefined ? { sensitivity: clean.sensitivity } : {}),
-        ...(clean.label !== undefined ? { label: clean.label } : {}),
-        ...(clean.maxItemsPerPass !== undefined ? { maxItemsPerPass: clean.maxItemsPerPass } : {}),
-        // Merge type-specific config (RSS feedUrl / M365 tenantId+folder), preserving other keys.
-        ...(clean.feedUrl !== undefined || clean.tenantId !== undefined || clean.folder !== undefined
-          ? {
-              config: {
-                ...(prior.config ?? {}),
-                ...(clean.feedUrl !== undefined ? { feedUrl: clean.feedUrl } : {}),
-                ...(clean.tenantId !== undefined ? { tenantId: clean.tenantId } : {}),
-                ...(clean.folder !== undefined ? { folder: clean.folder } : {}),
-              },
-            }
-          : {}),
-      });
-    } else {
-      // New connector: derive a safe config from the (validated) type + conservative defaults.
-      const type = clean.type ?? 'rss';
-      clean.type = type;
-      await upsertIntakeConnector(root, {
-        id: clean.id,
-        type,
-        ...(clean.label ? { label: clean.label } : {}),
-        enabled: clean.enabled ?? false,
-        schedule: clean.schedule ?? 'off',
-        scope: clean.scope ?? DEFAULT_INTAKE_SCOPE,
-        sensitivity: clean.sensitivity ?? DEFAULT_INTAKE_SENSITIVITY,
-        ...(clean.maxItemsPerPass !== undefined ? { maxItemsPerPass: clean.maxItemsPerPass } : {}),
-        ...(clean.feedUrl || clean.tenantId || clean.folder
-          ? { config: { ...(clean.feedUrl ? { feedUrl: clean.feedUrl } : {}), ...(clean.tenantId ? { tenantId: clean.tenantId } : {}), ...(clean.folder ? { folder: clean.folder } : {}) } }
-          : {}),
-      });
-    }
-    applied = true;
-    await commitControlFile(root, intakeRegistryPath(root), `intake ${clean.id} config change`);
-  }, 'intake-config:write');
-  if (applied) {
-    // Conforming `panel` audit: one event per changed behavior-relevant field (validated values only).
-    for (const event of intakeConfigAuditEvents(prior, clean)) await appendAuditEvent(root, event);
-  }
-  return listIntakeConnectorsForActive();
+  return intakeControlPanel.setIntakeConnectorConfig(patch, { root: active.stagingWt, lock: active.lock });
 }
 
-/**
- * Delete an intake feed connector (PANEL-11 lifecycle delete): PURGE its config row from the registry,
- * audit the removal (`panel` actor, `removed: true`), and let the scheduler tear its standing pull down
- * naturally (it re-reads the registry each tick — PANEL-6). Already-produced sources + the full audit
- * trail are RETAINED — only the config/registration is purged (ground truth is sacred, PANEL-11). An
- * unsafe id is a no-op (the registry guard rejects it anyway). Mirrors `removeActiveResearcher`.
- */
 export async function removeActiveIntakeConnector(id: string): Promise<IntakeConnectorView[]> {
   if (!active) return [];
-  if (!isSafeConnectorId(id)) return listIntakeConnectorsForActive();
-  const root = active.stagingWt;
-  let removed = false;
-  await active.lock.run(async () => {
-    const registry = await readIntakeRegistry(root);
-    if (!registry.some((c) => c.id === id)) return;
-    await deleteIntakeConnector(root, id);
-    removed = true;
-    await commitControlFile(root, intakeRegistryPath(root), `intake ${id} removed`);
-  }, 'intake-config:remove');
-  if (removed) {
-    await appendAuditEvent(root, { actor: 'panel', eventType: 'intake-config-change', subjects: { intakeId: id }, payload: { removed: true, why: 'Principal removed an intake feed via Control Panel (config purged; sources + audit retained)' } });
-  }
-  return listIntakeConnectorsForActive();
+  return intakeControlPanel.removeIntakeConnector(id, { root: active.stagingWt, lock: active.lock });
 }
 
-/**
- * Principal override of a source's sensitivity label (SENSE-7/8). Validates the id is a real archived
- * source; under the canonical-writer lock it (1) persists the override to the Replay-sticky store so a
- * rebuild re-applies it (the classifier never overwrites a `by: principal` label), (2) re-stamps the
- * source's `source.md` frontmatter to the new label + `by: principal` (committing both atomically), then
- * (3) audits the change (`panel` event, from→to + why, SENSE-8). An empty label CLEARS the override (back
- * to the classifier/default). A custom label is accepted verbatim (SENSE-1); the comparator handles unknowns.
- */
-export async function setActiveSourceSensitivity(sourceId: string, label: string): Promise<{ ok: boolean; reason?: string; sensitivity?: string }> {
-  if (!active) return { ok: false, reason: 'no-kb' };
-  if (typeof sourceId !== 'string' || !isUlid(sourceId)) return { ok: false, reason: 'bad-id' }; // #29: only a real ULID → a real source path
-  const clean = typeof label === 'string' ? label.trim() : '';
-  const root = active.stagingWt;
-  const srcMdRel = path.join('sources', dateShard(sourceId), sourceId, 'source.md');
-  const srcMdAbs = path.join(root, srcMdRel);
-  try {
-    await fs.access(srcMdAbs); // early not-found before taking the lock
-  } catch {
-    return { ok: false, reason: 'not-found' };
-  }
-  const at = new Date().toISOString();
-  let fromLabel = '';
-  await active.lock.run(async () => {
-    // Read the authoritative base INSIDE the lock so a concurrent archive of the same source can't make
-    // the re-stamp clobber a stale base (KB-QD-2 #267).
-    const before = await fs.readFile(srcMdAbs, 'utf8');
-    fromLabel = (before.match(/^sensitivity: (.*)$/m)?.[1] ?? '').trim();
-    await setSensitivityOverride(root, sourceId, clean, at); // clean === '' clears the override
-    // Setting: re-stamp the live source.md now so the Panel reflects it without a rebuild. Clearing: leave
-    // the frontmatter as-is (a later Replay re-derives the classifier/default label).
-    if (clean.length > 0) await fs.writeFile(srcMdAbs, applySensitivityOverrideToSourceMd(before, clean, at), 'utf8');
-    const git = boundedGit(root);
-    await git.add([path.relative(root, sensitivityOverridesPath(root)), srcMdRel]);
-    const staged = (await git.diff(['--cached', '--name-only'])).trim();
-    if (staged.length > 0) await git.commit(`control-panel: sensitivity ${sourceId} → ${clean || '(cleared)'}`);
-  }, 'sensitivity-override:write');
-  await appendAuditEvent(root, {
-    actor: 'panel',
-    eventType: 'sensitivity-override',
-    subjects: { sourceId },
-    payload: { field: 'sensitivity', from: fromLabel, to: clean || '(cleared → classifier/default)', by: 'principal', why: 'Principal overrode a source sensitivity via Control Panel' },
-  });
-  return { ok: true, sensitivity: clean || fromLabel };
-}
-
-/** Read the current sensitivity label + provenance for a set of sources (SENSE-10) — for the Control
- *  Panel (the Activity-lineage drill-down) to show a chip + offer the Principal an edit. Read-only. */
-export async function getActiveSourceSensitivities(sourceIds: string[]): Promise<Record<string, SourceSensitivity>> {
-  if (!active || !Array.isArray(sourceIds)) return {};
-  return readSourceSensitivities(active.stagingWt, sourceIds.filter((s): s is string => typeof s === 'string'));
-}
-
-/**
- * Manual "Run now" for an intake connector (INTAKE-14, "run-now to test") — a single on-demand pull
- * via the real run-pass + the real per-type fetch (RSS = the SSRF-safe gated fetch; M365 = env-gated,
- * surfaces a clear `intake-failed` until wired). Never ingests synthetic scaffolding. The Principal's
- * trigger is audited as a `panel` event; the pull's own work is audited by the run-pass (actor `intake`).
- */
 export async function runActiveIntakeConnectorNow(id: string): Promise<RunIntakeConnectorResult> {
   if (!active) return { ran: false, reason: 'no-kb' };
-  const root = active.stagingWt;
-  const c = (await readIntakeRegistry(root)).find((x) => x.id === id);
-  if (!c) return { ran: false, reason: 'not-found' };
-  const res = await runIntakeConnector(root, c, { fetch: selectIntakeFn(c) });
-  await appendAuditEvent(root, {
-    actor: 'panel',
-    eventType: 'intake-run-now',
-    subjects: { intakeId: id },
-    payload: { outcome: res.failed ? 'failed' : res.sourceIds.length > 0 ? 'intook' : 'no-new-items', why: 'Principal manual run via Control Panel' },
-  });
-  return { ran: true, sourceIds: res.sourceIds, note: res.note, ...(res.failed ? { failed: true, ...(res.error ? { error: res.error } : {}) } : {}) };
+  return intakeControlPanel.runIntakeConnectorNow(id, active.stagingWt);
 }
 
-/** Commit a job-registry change on `staging` — the durability record (audit is a separate `panel` event). */
-async function commitRegistryChange(root: string, message: string): Promise<void> {
-  await commitControlFile(root, jobRegistryPath(root), message);
+export async function setActiveSourceSensitivity(sourceId: string, label: string): Promise<{ ok: boolean; reason?: string; sensitivity?: string }> {
+  if (!active) return { ok: false, reason: 'no-kb' };
+  return sourceSensitivityControlPanel.setSourceSensitivity(sourceId, label, { root: active.stagingWt, lock: active.lock });
 }
 
-/**
- * Commit one Control-Panel working file on the `staging` root — the **durability record**: these
- * files (`.kb/jobs/registry.json`, `.kb/instance.json`) are tracked on `staging`, never promoted, so
- * a commit is durable and protects them from a stray staging reset (the *conforming* audit is the
- * separate `panel` event the caller emits). MUST be called inside `lock.run` (it advances the
- * canonical branch directly; under the lock it is just another linear advance that stages cherry-pick
- * their disjoint work onto). A no-op write (identical bytes) commits nothing.
- */
-// Exported for the #163 regression gate (boundedGit under the lock); `timeoutMs` defaults to the
-// standard bound and is overridable so the test can drive the timeout fast.
-export async function commitControlFile(root: string, absPath: string, message: string, timeoutMs?: number): Promise<void> {
-  const git = boundedGit(root, timeoutMs); // #163: bounded — runs under the canonical-writer lock
-  const rel = path.relative(root, absPath);
-  await git.add(rel);
-  // #517 BUG-10: scope BOTH the staged-check and the commit to `rel` — an unscoped `diff --cached` /
-  // `commit` would (a) short-circuit `return` on someone ELSE's leftover staged file even when `rel`
-  // itself has no change, or (b) silently sweep that leftover into this "control-panel: ..." commit.
-  const staged = (await git.diff(['--cached', '--name-only', '--', rel])).trim();
-  if (staged.length === 0) return; // nothing actually changed for THIS file
-  await git.commit(`control-panel: ${message}`, rel);
+export async function getActiveSourceSensitivities(sourceIds: string[]): Promise<Record<string, SourceSensitivity>> {
+  if (!active) return {};
+  return sourceSensitivityControlPanel.getSourceSensitivities(active.stagingWt, sourceIds);
 }
 
 /** Stop and clear the active pipeline (used on shutdown / vault switch). */

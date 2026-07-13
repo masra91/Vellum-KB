@@ -8,19 +8,12 @@
 // seam (parseComposeDecision) REJECTS an un-grounded answer, so a bad session can't write
 // ungrounded prose — the stage retries and then falls back to the structured blocks alone (never a
 // hard failure; unlike Research, Compose performs NO egress).
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { withCopilotSlot } from './copilotConcurrency';
 import { detectCopilot } from './copilot';
-import { resolveCopilotModel } from './copilotModel';
-import { runWithModelFallback } from './copilotLaunch';
-import { runWithSelfRepair, appendRepairInstruction } from './selfRepair';
 import { UNTRUSTED_SOURCE_SKILL, UNTRUSTED_SOURCE_DELIMITER_NOTE } from './untrustedSource';
 import { parseComposeDecision, type ComposeDecision } from './compose';
-import type { AgentTrace } from './archivist';
-import { COPILOT_OP, type SpanCtx } from './tracing';
+import { makeDefaultCopilotRunner, runDeciderScaffold, makeAvailabilityGate, type CopilotRunner } from './deciderScaffold';
+import type { SpanCtx } from './tracing';
 
-const exec = promisify(execFile);
 const COPILOT_TIMEOUT_MS = 120_000; // composing readable prose over many claims takes time
 
 /** One claim offered to Compose as evidence — numbered 1..N (array order); the agent cites by number. */
@@ -47,37 +40,7 @@ export interface ComposeInput {
 /** A decider maps a ComposeInput to a validated, grounded ComposeDecision. May throw (COMPOSE-7). */
 export type ComposeDecider = (input: ComposeInput, ctx?: SpanCtx) => Promise<ComposeDecision>;
 
-/** Injectable runner: given the composed prompt (+ optional working directory), return the
- *  session's stdout. `cwd` scopes the Copilot subprocess to the staging worktree. */
-export type CopilotRunner = (prompt: string, cwd?: string, model?: string) => Promise<string>;
-
-/** Launch flags (excludes `-p <prompt>`); recorded verbatim in the AgentTrace (ORCH-16). The
- *  model is pinned in-app so prod never silently inherits `~/.copilot/settings.json`. `model` lets
- *  the fallback wrapper launch with `auto` when the pinned id is rejected (recorded as the real model). */
-function launchFlags(model: string = resolveCopilotModel()): string[] {
-  return ['--no-ask-user', '--model', model];
-}
-
-const defaultRunner: CopilotRunner = async (prompt, cwd, model) =>
-  // One global copilot slot so concurrent stage drains can't fan out past the process-wide ceiling.
-  withCopilotSlot(async () => {
-    try {
-      // COPILOT-CONTEXT-SCOPE-BUG: run in the staging worktree (`cwd`) so Copilot's workspace
-      // scan (`tgrep count-files`) is rooted here, NOT the filesystem root. With no cwd the
-      // subprocess inherits Electron's cwd (`/` in a packaged app) → a runaway root scan.
-      // `cwd: undefined` (tests / unscoped) behaves exactly as before (inherits parent cwd).
-      const { stdout } = await exec('copilot', ['-p', prompt, ...launchFlags(model)], {
-        timeout: COPILOT_TIMEOUT_MS,
-        maxBuffer: 8 * 1024 * 1024,
-        cwd,
-      });
-      return stdout;
-    } catch (err) {
-      const stderr = (err as { stderr?: unknown }).stderr;
-      if (err instanceof Error && stderr) err.message += `\n[copilot stderr] ${String(stderr).slice(0, 2000)}`;
-      throw err;
-    }
-  }, { stage: 'compose' }); // SCALE-3: tag the stage so the ceiling reserves it a slot
+export type { CopilotRunner };
 
 /** The versioned per-stage instruction template (SPEC-0046 §3/§4), composed per entity. */
 export const COMPOSE_PROMPT_VERSION = 'compose/v1';
@@ -156,47 +119,22 @@ export interface ComposeDeciderOptions {
  * Stamps an ORCH-16 AgentTrace onto the returned decision.
  */
 export function makeComposeDecider(opts: ComposeDeciderOptions = {}): ComposeDecider {
-  const run = opts.run ?? defaultRunner;
+  const run = opts.run ?? makeDefaultCopilotRunner({ stage: 'compose', timeoutMs: COPILOT_TIMEOUT_MS });
   const cwd = opts.vaultPath; // staging worktree → Copilot subprocess cwd (COPILOT-CONTEXT-SCOPE-BUG)
-  let available: boolean | null = opts.available ?? null;
+  const isAvailable = makeAvailabilityGate(opts.available, detectCopilot);
   return async (input, ctx) => {
-    if (available === null) {
-      try {
-        available = (await detectCopilot()).available;
-      } catch {
-        available = false;
-      }
-    }
-    if (!available) throw new Error('compose: copilot unavailable');
-
-    // ORCH-16: `modelUsed` starts at the pin and is rewritten to `auto` if the pinned id is rejected
-    // and we fall back — so the trace records the model that ACTUALLY ran (a silent pin-drift is visible).
-    let modelUsed = resolveCopilotModel();
-    const at = new Date().toISOString();
-    const t0 = Date.now();
-    const cs = ctx?.span?.child(COPILOT_OP);
-    // HEAL-1: self-repair wraps the launch — on a parse/validation/grounding failure, re-prompt with the
-    // error fed back (bounded) before the stage's deterministic blocks-only fallback. A launch/timeout
-    // error from `run` is not a parse error and propagates (HEAL-6 boundary).
-    const basePrompt = buildComposePrompt(input);
-    let repairs = 0;
-    try {
-      const { value: decision } = await runWithSelfRepair(
-        (repair) =>
-          runWithModelFallback((m) => run(repair ? appendRepairInstruction(basePrompt, repair) : basePrompt, cwd, m), {
-            onFallback: (_from, to) => {
-              modelUsed = to;
-            },
-          }),
-        (stdout) => parseComposeDecision(stdout, input.entityId, input.claims.length),
-        { onRepair: () => { repairs += 1; } },
-      );
-      cs?.end('ok');
-      const agent: AgentTrace = { via: 'copilot', runtime: 'copilot', model: modelUsed, params: launchFlags(modelUsed), ok: true, ms: Date.now() - t0, at, ...(repairs > 0 ? { repairs } : {}) };
-      return { ...decision, agent };
-    } catch (e) {
-      cs?.end('error');
-      throw e;
-    }
+    if (!(await isAvailable())) throw new Error('compose: copilot unavailable');
+    // #528 bug 1 fix: adopting the shared scaffold means `agentKey: 'compose'` is now threaded through
+    // (previously omitted here — Compose's Settings model pin and Agents-catalog entry were both dead
+    // because neither the initial resolve nor the model-fallback wrapper was agent-scoped).
+    const { value: decision, agent } = await runDeciderScaffold({
+      agentKey: 'compose',
+      buildPrompt: () => buildComposePrompt(input),
+      parse: (stdout) => parseComposeDecision(stdout, input.entityId, input.claims.length),
+      run,
+      cwd,
+      ctx,
+    });
+    return { ...decision, agent };
   };
 }

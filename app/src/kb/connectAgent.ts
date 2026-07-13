@@ -7,19 +7,12 @@
 // resolution (a wrong merge conflates two real things — worse than a wrong claim). On any
 // failure the decider throws, and the stage treats it as a failed attempt (retry, then set
 // aside; CONNECT-14 / ORCH-12).
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { withCopilotSlot } from './copilotConcurrency';
 import { detectCopilot } from './copilot';
-import { resolveCopilotModel } from './copilotModel';
-import { runWithModelFallback } from './copilotLaunch';
-import { runWithSelfRepair, appendRepairInstruction } from './selfRepair';
 import { UNTRUSTED_SOURCE_SKILL, UNTRUSTED_SOURCE_DELIMITER_NOTE } from './untrustedSource';
 import { parseConnectDecision, type Candidate, type ConnectDecision } from './connect';
-import type { AgentTrace } from './archivist';
-import { COPILOT_OP, type SpanCtx } from './tracing';
+import { makeDefaultCopilotRunner, runDeciderScaffold, makeAvailabilityGate, type CopilotRunner } from './deciderScaffold';
+import type { SpanCtx } from './tracing';
 
-const exec = promisify(execFile);
 const COPILOT_TIMEOUT_MS = 120_000;
 
 /** A minimal view of an existing canonical node that blocks to the same key (for fold-in). */
@@ -60,39 +53,7 @@ export interface CandidateSet {
 /** A decider maps a candidate set to a validated verdict. May throw (CONNECT-14). */
 export type ConnectDecider = (set: CandidateSet, ctx?: SpanCtx) => Promise<ConnectDecision>;
 
-/** Injectable runner: given the composed prompt (+ optional working directory), return the
- *  session's stdout. `cwd` scopes the Copilot subprocess to the staging worktree. */
-export type CopilotRunner = (prompt: string, cwd?: string, model?: string) => Promise<string>;
-
-/** Launch flags (excludes `-p <prompt>`); recorded verbatim in the AgentTrace (ORCH-16). The
- *  model is pinned in-app so prod never silently inherits `~/.copilot/settings.json`. `model` lets
- *  the fallback wrapper launch with `auto` when the pinned id is rejected (recorded as the real model). */
-function launchFlags(model: string = resolveCopilotModel()): string[] {
-  return ['--no-ask-user', '--model', model];
-}
-
-const defaultRunner: CopilotRunner = async (prompt, cwd, model) =>
-  // Acquire one global copilot slot so concurrent (cap>1) stage drains can't fan out past the
-  // process-wide ceiling (dogfood #4 / copilotConcurrency).
-  withCopilotSlot(async () => {
-    try {
-      // COPILOT-CONTEXT-SCOPE-BUG: run in the staging worktree (`cwd`) so Copilot's workspace
-      // scan (`tgrep count-files`) is rooted here, NOT the filesystem root. With no cwd the
-      // subprocess inherits Electron's cwd (`/` in a packaged app) → a runaway root scan.
-      // `cwd: undefined` (tests / unscoped) behaves exactly as before (inherits parent cwd).
-      const { stdout } = await exec('copilot', ['-p', prompt, ...launchFlags(model)], {
-        timeout: COPILOT_TIMEOUT_MS,
-        maxBuffer: 8 * 1024 * 1024,
-        cwd,
-      });
-      return stdout;
-    } catch (err) {
-      // Surface the subprocess stderr on the error so the stage's dev-log records the real cause (OBS-4).
-      const stderr = (err as { stderr?: unknown }).stderr;
-      if (err instanceof Error && stderr) err.message += `\n[copilot stderr] ${String(stderr).slice(0, 2000)}`;
-      throw err;
-    }
-  }, { stage: 'connect' }); // SCALE-3: tag the stage so the ceiling reserves it a slot
+export type { CopilotRunner };
 
 /** The versioned per-stage instruction template (SPEC-0014 Q9 / SPEC-0020 §3.3). */
 export const CONNECT_PROMPT_VERSION = 'connect/v1';
@@ -209,50 +170,20 @@ export interface ConnectDeciderOptions {
  * The verdict is validated to PARTITION exactly the candidate ids in the set (connect.ts).
  */
 export function makeConnectDecider(opts: ConnectDeciderOptions = {}): ConnectDecider {
-  const run = opts.run ?? defaultRunner;
+  const run = opts.run ?? makeDefaultCopilotRunner({ stage: 'connect', timeoutMs: COPILOT_TIMEOUT_MS });
   const cwd = opts.vaultPath; // staging worktree → Copilot subprocess cwd (COPILOT-CONTEXT-SCOPE-BUG)
-  let available: boolean | null = opts.available ?? null;
+  const isAvailable = makeAvailabilityGate(opts.available, detectCopilot);
   return async (set, ctx) => {
-    if (available === null) {
-      try {
-        available = (await detectCopilot()).available;
-      } catch {
-        available = false;
-      }
-    }
-    if (!available) throw new Error('connect: copilot unavailable');
-
-    // ORCH-16: `modelUsed` starts at the pin and is rewritten to `auto` if the pinned id is rejected
-    // and we fall back — so the trace records the model that ACTUALLY ran (a silent pin-drift is visible).
-    let modelUsed = resolveCopilotModel(undefined, 'connect'); // SPEC-0048: per-agent pin, else global
-    const at = new Date().toISOString();
-    const t0 = Date.now();
+    if (!(await isAvailable())) throw new Error('connect: copilot unavailable');
     const ids = set.candidates.map((c) => c.id);
-    // OBS-13: time the Copilot call as a child of the stage's run span (failures included).
-    const cs = ctx?.span?.child(COPILOT_OP);
-    // HEAL-1: self-repair wraps the launch — on a parse/validation failure, re-prompt with the error
-    // fed back (bounded). runWithModelFallback (per attempt) handles a rejected model id underneath; a
-    // launch/timeout/systemic error from `run` is NOT a parse error and propagates (HEAL-6 / #256 boundary).
-    const basePrompt = buildConnectPrompt(set);
-    let repairs = 0;
-    try {
-      const { value: decision } = await runWithSelfRepair(
-        (repair) =>
-          runWithModelFallback((m) => run(repair ? appendRepairInstruction(basePrompt, repair) : basePrompt, cwd, m), {
-            agentKey: 'connect',
-            onFallback: (_from, to) => {
-              modelUsed = to;
-            },
-          }),
-        (stdout) => parseConnectDecision(stdout, set.blockKey, ids),
-        { onRepair: () => { repairs += 1; } },
-      );
-      cs?.end('ok');
-      const agent: AgentTrace = { via: 'copilot', runtime: 'copilot', model: modelUsed, params: launchFlags(modelUsed), ok: true, ms: Date.now() - t0, at, ...(repairs > 0 ? { repairs } : {}) };
-      return { ...decision, agent };
-    } catch (e) {
-      cs?.end('error');
-      throw e;
-    }
+    const { value: decision, agent } = await runDeciderScaffold({
+      agentKey: 'connect',
+      buildPrompt: () => buildConnectPrompt(set),
+      parse: (stdout) => parseConnectDecision(stdout, set.blockKey, ids),
+      run,
+      cwd,
+      ctx,
+    });
+    return { ...decision, agent };
   };
 }
