@@ -626,3 +626,175 @@ describe('recall — adaptive length & effort (ASK-18)', () => {
     expect(res.answer.length).toBeLessThan(120); // a sentence or two, not an essay
   });
 });
+
+// #514 — Ask responsiveness batch (deep review 2026-07-12): live progress, bounded prompt bytes,
+// windowed tool results, and the trace recording the model/effort that actually ran.
+describe('recall — live progress events (#514)', () => {
+  let v: RecallVault | undefined;
+  afterEach(async () => {
+    if (v) await rmTempDir(v.root);
+    v = undefined;
+  });
+
+  it('fires onProgress synchronously on each retrieval tool call, naming the tool + running count', async () => {
+    v = await buildRecallVault();
+    const events: Array<{ phase: string; tool?: string; used: number; max: number }> = [];
+    const { client } = fakeClient([
+      { tool: 'entityLookup', args: { query: 'Ada' } },
+      { tool: 'claimsForEntity', args: { entity: v.adaRel } },
+      { tool: 'submitAnswer', args: { answer: 'x [1]', citations: [{ kind: 'claim', ref: v.claimRel }], grounded: true } },
+    ]);
+    await recall(v.root, 'q', { client, now: fixedNow, onProgress: (e) => events.push(e) });
+
+    // submitAnswer is not a retrieval call — only the two retrieval tools emit progress.
+    expect(events).toEqual([
+      { phase: 'tool-call', tool: 'entityLookup', used: 1, max: expect.any(Number) },
+      { phase: 'tool-call', tool: 'claimsForEntity', used: 2, max: expect.any(Number) },
+    ]);
+  });
+
+  it('fires a budget-exhausted progress event when a call is degraded past the cap', async () => {
+    v = await buildRecallVault();
+    const events: Array<{ phase: string }> = [];
+    const { client } = fakeClient([
+      { tool: 'entityLookup', args: { query: 'Ada' } },
+      { tool: 'entityLookup', args: { query: 'Ada' } }, // past the cap of 1 → degrades
+      { tool: 'submitAnswer', args: { answer: 'x', citations: [], grounded: false } },
+    ]);
+    await recall(v.root, 'q', { client, now: fixedNow, maxToolCalls: 1, onProgress: (e) => events.push(e) });
+    expect(events.map((e) => e.phase)).toEqual(['tool-call', 'budget-exhausted']);
+  });
+
+  it('never calling onProgress is fine — it is optional and never awaited/blocking', async () => {
+    v = await buildRecallVault();
+    const { client } = fakeClient([{ tool: 'entityLookup', args: { query: 'Ada' } }, { tool: 'submitAnswer', args: { answer: 'x', citations: [], grounded: false } }]);
+    await expect(recall(v.root, 'q', { client, now: fixedNow })).resolves.toBeDefined();
+  });
+});
+
+describe('recall — bounded prompt bytes independent of conversation length (#514)', () => {
+  let v: RecallVault | undefined;
+  afterEach(async () => {
+    if (v) await rmTempDir(v.root);
+    v = undefined;
+  });
+
+  it('caps a 20-turn history to the last 10, noting how many were omitted', async () => {
+    v = await buildRecallVault();
+    const history = Array.from({ length: 20 }, (_, i) => ({ question: `q${i}`, answer: `a${i}` }));
+    const { client, lastConfig: _lastConfig } = fakeClient([{ tool: 'submitAnswer', args: { answer: 'x', citations: [], grounded: false } }]);
+    // Capture the actual prompt sent — sendAndWait's first arg.
+    let sentPrompt = '';
+    const capturingClient: RecallClient = {
+      async createSession(config) {
+        const real = await client.createSession(config);
+        return {
+          ...real,
+          sendAndWait: async (prompt: string, timeoutMs?: number) => {
+            sentPrompt = prompt;
+            return real.sendAndWait(prompt, timeoutMs);
+          },
+        };
+      },
+    };
+    await recall(v.root, { question: 'the new question', history }, { client: capturingClient, now: fixedNow });
+
+    expect(sentPrompt).toContain('10 earlier turn(s) omitted for length');
+    expect(sentPrompt).not.toContain('q0\n'); // the oldest 10 turns are gone
+    expect(sentPrompt).not.toContain('q9\n');
+    expect(sentPrompt).toContain('q10'); // the most recent 10 survive
+    expect(sentPrompt).toContain('q19');
+    expect(sentPrompt).toContain('the new question');
+  });
+
+  it('caps each surviving turn’s text so K turns × per-turn-cap is a real constant bound, not just a turn-count cap', async () => {
+    v = await buildRecallVault();
+    const hugeAnswer = 'x'.repeat(50_000);
+    const history = [{ question: 'q', answer: hugeAnswer }];
+    const { client } = fakeClient([{ tool: 'submitAnswer', args: { answer: 'x', citations: [], grounded: false } }]);
+    let sentPrompt = '';
+    const capturingClient: RecallClient = {
+      async createSession(config) {
+        const real = await client.createSession(config);
+        return { ...real, sendAndWait: async (prompt: string, timeoutMs?: number) => ((sentPrompt = prompt), real.sendAndWait(prompt, timeoutMs)) };
+      },
+    };
+    await recall(v.root, { question: 'q2', history }, { client: capturingClient, now: fixedNow });
+    expect(sentPrompt.length).toBeLessThan(hugeAnswer.length); // the 50KB answer did NOT pass through whole
+    expect(sentPrompt).toContain('…[truncated]');
+  });
+});
+
+describe('recall — no single tool result exceeds the 32KB bound (#514)', () => {
+  let v: RecallVault | undefined;
+  afterEach(async () => {
+    if (v) await rmTempDir(v.root);
+    v = undefined;
+  });
+
+  it('windows a >32KB tool result (head + tail) with an honest truncation note, well under 32KB', async () => {
+    v = await buildRecallVault();
+    const tools = makeReadOnlyTools(v.root);
+    const captured = { answered: false, answer: '', citations: [] as Citation[], declaredGrounded: true };
+    const budget = { used: 0, truncated: false };
+    // A fake tool surface whose readSource returns a 5MB "file" (the exact PERF-A6 class: readSource
+    // returns whole files into context).
+    const bigTools: typeof tools = { ...tools, readSource: async () => 'y'.repeat(5 * 1024 * 1024) };
+    const defs = buildRecallToolDefs(bigTools, captured, budget, 10);
+    const readSource = defs.find((d) => d.name === 'readSource')!;
+
+    const out = (await readSource.handler({ dir: 'sources/whatever' })) as string;
+    expect(Buffer.byteLength(out, 'utf8')).toBeLessThan(32 * 1024);
+    expect(out).toContain('truncated');
+    expect(out).toContain('32KB per-call bound');
+  });
+
+  it('a small tool result passes through byte-identical (no windowing when under the bound)', async () => {
+    v = await buildRecallVault();
+    const tools = makeReadOnlyTools(v.root);
+    const captured = { answered: false, answer: '', citations: [] as Citation[], declaredGrounded: true };
+    const budget = { used: 0, truncated: false };
+    const defs = buildRecallToolDefs(tools, captured, budget, 10);
+    const lookup = defs.find((d) => d.name === 'entityLookup')!;
+    const out = (await lookup.handler({ query: 'Ada' })) as string;
+    expect(out).not.toContain('truncated');
+    expect(JSON.parse(out).some((e: { rel: string }) => e.rel === v!.adaRel)).toBe(true);
+  });
+});
+
+describe('recall — trace records the model + effort that actually ran (#514)', () => {
+  let v: RecallVault | undefined;
+  afterEach(async () => {
+    if (v) await rmTempDir(v.root);
+    v = undefined;
+  });
+
+  it('records the requested model + effort label on a normal run', async () => {
+    v = await buildRecallVault();
+    const { client } = fakeClient([{ tool: 'submitAnswer', args: { answer: 'x', citations: [], grounded: false } }]);
+    const res = await recall(v.root, 'q', { client, now: fixedNow, model: 'claude-haiku-4.5', effort: 'quick' });
+    expect(res.trace?.model).toBe('claude-haiku-4.5');
+    expect(res.trace?.effort).toBe('quick');
+  });
+
+  it('records the model that ACTUALLY ran (auto), not the stale pin, after the pre-flight fallback retry', async () => {
+    v = await buildRecallVault();
+    const base = fakeClient([{ tool: 'submitAnswer', args: { answer: 'x', citations: [], grounded: false } }]);
+    const client: RecallClient = {
+      async createSession(config) {
+        if (config.model !== 'auto') throw new Error('Model "claude-opus-4" from --model flag is not available.');
+        return base.client.createSession(config);
+      },
+    };
+    const res = await recall(v.root, 'q', { client, now: fixedNow, model: 'claude-opus-4', effort: 'considered' });
+    expect(res.trace?.model).toBe('auto'); // the trace is honest about what ACTUALLY ran
+    expect(res.trace?.effort).toBe('considered');
+  });
+
+  it('forwards reasoningEffort to the SDK session config when set', async () => {
+    v = await buildRecallVault();
+    const { client, lastConfig } = fakeClient([{ tool: 'submitAnswer', args: { answer: 'x', citations: [], grounded: false } }]);
+    await recall(v.root, 'q', { client, now: fixedNow, reasoningEffort: 'low' });
+    expect(lastConfig()?.reasoningEffort).toBe('low');
+  });
+});

@@ -49,7 +49,10 @@ describe('Semaphore (copilot concurrency primitive)', () => {
   it('never lets in-flight exceed the ceiling under heavy contention', async () => {
     const sem = new Semaphore(3);
     const peak = await peakConcurrency(20, (fn) => withSem(sem, fn));
-    expect(peak).toBe(3); // reaches the ceiling (not over-serialized) AND never exceeds it
+    // #514: UNTAGGED background (this test's flood carries no `stage`) now reserves 1 slot for
+    // interactive (ASK-16) — so it fans out to ceiling-1, not the full ceiling. Still reaches its
+    // bound (not over-serialized) AND never exceeds it.
+    expect(peak).toBe(2);
   });
 
   it('serializes fully at ceiling 1', async () => {
@@ -150,7 +153,9 @@ describe('withCopilotSlot / acquireCopilotSlot (the shared global slot)', () => 
     const flood = ceiling * 4 + 7;
     const peak = await peakConcurrency(flood, withCopilotSlot);
     expect(peak).toBeLessThanOrEqual(ceiling); // the global bound holds...
-    expect(peak).toBe(ceiling); // ...and is actually reached (cap>1 parallelism works)
+    // #514: withCopilotSlot carries no `stage` (jobs/researchers class) — UNTAGGED background now
+    // reserves 1 slot for interactive (ASK-16), so it fans out to ceiling-1, not the full ceiling.
+    expect(peak).toBe(ceiling > 1 ? ceiling - 1 : ceiling); // ...and reaches its (reserved) bound
     expect(copilotSemaphore.active).toBe(0); // fully drained
   });
 
@@ -242,6 +247,69 @@ describe('Semaphore — SPEC-0048 SCALE-3 per-stage no-starvation reservation', 
     d[1]();
     (await pP)();
     (await bgP)();
+  });
+});
+
+// #514 (deep review 2026-07-12): "the interactive lane is front-of-queue for the NEXT FREED SLOT
+// ONLY — researchers hold a slot up to 60min, Ask hard-fails after 30s." A saturated pool of UNTAGGED
+// background work (researchers/jobs) must never be able to consume the ceiling's last slot, so an
+// interactive acquire is granted immediately instead of waiting behind a long-held researcher.
+describe('Semaphore — untagged background reserves ≥1 slot for interactive (#514 / ASK-16)', () => {
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
+  it('with the ceiling saturated by UNTAGGED background holders, a priority acquire is granted immediately — no waiting for a release', async () => {
+    const sem = new Semaphore(3);
+    // Two untagged (researcher/job-style) acquisitions — the reservation caps them at ceiling-1.
+    const r1 = await sem.acquire();
+    const r2 = await sem.acquire();
+    expect(sem.active).toBe(2);
+    // A third untagged acquisition would saturate the ceiling — the reservation must block it.
+    let thirdGranted = false;
+    const r3P = sem.acquire().then((r) => ((thirdGranted = true), r));
+    await tick();
+    expect(thirdGranted).toBe(false); // held back — 1 slot stays reserved for interactive
+    expect(sem.active).toBe(2);
+
+    // The interactive acquire is granted RIGHT NOW, using the reserved slot — no wait for r1/r2 to release.
+    const release = await sem.acquire({ priority: true, timeoutMs: 50 });
+    expect(sem.active).toBe(3);
+    release();
+    r1();
+    r2();
+    (await r3P)();
+  });
+
+  it('does NOT reserve when nothing background is tagged AND no interactive demand exists — a lone untagged acquisition still gets the slot', async () => {
+    const sem = new Semaphore(3);
+    const rel = await sem.acquire(); // 1 of 3 — well under the reserve boundary
+    expect(sem.active).toBe(1);
+    rel();
+  });
+
+  it('a SOLO tagged pipeline stage still fans out to the FULL ceiling (untouched — the interactive reserve is scoped to untagged work only)', async () => {
+    const sem = new Semaphore(3);
+    let inFlight = 0;
+    let peak = 0;
+    await Promise.all(
+      Array.from({ length: 10 }, () =>
+        (async () => {
+          const rel = await sem.acquire({ stage: 'decompose' });
+          inFlight++;
+          peak = Math.max(peak, inFlight);
+          await tick();
+          inFlight--;
+          rel();
+        })(),
+      ),
+    );
+    expect(peak).toBe(3); // no throughput cost for tagged pipeline work — the reserve targets untagged only
+  });
+
+  it('at ceiling=1 there is nothing to reserve — untagged background still gets the only slot (never starves outright)', async () => {
+    const sem = new Semaphore(1);
+    const rel = await sem.acquire();
+    expect(sem.active).toBe(1);
+    rel();
   });
 });
 
