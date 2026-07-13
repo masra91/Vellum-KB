@@ -43,6 +43,30 @@ describe('Mutex (canonical writer)', () => {
     expect(lock.state().held).toBe(false);
   });
 
+  // KB-Quality-Driver review (#544 REJECT → fix): the original #515 refactor left an unattached
+  // `.finally()`-derived promise that fired a REAL Node `unhandledRejection` event on every ORDINARY
+  // section failure — nothing to do with the new `sectionTimeoutMs` feature (the pre-existing "boom"
+  // test above still passed logically; the break was only visible as a process-level event, which is
+  // exactly why it slipped past a plain `.rejects.toThrow()` assertion and only surfaced as vitest's
+  // own "Unhandled Errors" / non-zero exit code in CI). This listens for that event directly.
+  it('#544 REGRESSION: a normal (non-timeout) section rejection never fires an unhandledRejection event', async () => {
+    const captured: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      captured.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const lock = new Mutex(); // no sectionTimeoutMs configured — the exact path that broke
+      await expect(lock.run(async () => { throw new Error('ordinary failure'); }, 'section')).rejects.toThrow('ordinary failure');
+      // Flush a full macrotask so a dangling derived-promise rejection (queued on a microtask) has
+      // settled and had its chance to fire `unhandledRejection` before we assert.
+      await sleep(20);
+      expect(captured).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('state() reports held + waiters + holder while a section runs (OBS-7)', async () => {
     const lock = new Mutex();
     expect(lock.state()).toMatchObject({ held: false, waiters: 0 });
