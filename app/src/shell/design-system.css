@@ -405,16 +405,58 @@
 .vmark.churn { background: var(--gold); animation: vChurnDot 1.3s ease-in-out infinite; }
 @keyframes vChurnDot { 0%, 100% { opacity: 0.5; transform: scale(0.82); } 50% { opacity: 1; transform: scale(1.12); } }
 
-/* Brand diamond at logo scale — churns briefly while a view warms (.is-thinking), looms while working
-   (.is-working). The shell toggles .is-thinking on every view change. */
+/* Brand diamond at logo scale (#580 §6 — MESH/RECURSE, mechanical/clockwork; replaces the rejected
+   organic pulse+flip primitives previously here, Principal ruling on #402 §5.1: "no breathing, either way".
+   Scope discipline: this is `.dmk` ONLY (the brand-mark/watermark instances) — `.vmark.loom`/`.vmark.churn`
+   above are a DIFFERENT consumer of the same LOOM/CHURN semantic names (loading/warming faces, #520) and
+   are deliberately untouched; this is a brand-identity statement about the mark itself, not an app-wide
+   re-theme. The shell toggles .is-thinking on every view change (~1100ms hold, shell.ts).
+   • MESH (.is-working, continuous) — the two rings counter-rotate at differential constant speed, like
+     meshed gears turning against each other; `.d-core` (the center dot) stays fully static — no
+     continuous animation anywhere, honoring "no breathing" with zero ambiguity.
+   • RECURSE (.is-thinking, episodic, one-shot ~900ms) — one bounded step of the lattice recursing to the
+     NEXT nesting level (0.5 = the generator's own halving ratio, §2) then a hard, unequal, mechanical
+     snap back — not an eased bounce. `.d-mid` phase-shifts ~10% later than `.d-out` so the recursion
+     visibly propagates outward-to-inward. Both rings' RECURSE rules are declared AFTER their MESH rules
+     below — equal specificity (3 classes each), so while `.is-thinking` is present (added alongside, not
+     instead of, `.is-working`) the later rule wins and RECURSE plays; once `.is-thinking` clears, MESH
+     resumes. Don't reorder these two rule groups without preserving that relationship. */
 .dmk { display: inline-block; line-height: 0; }
 .dmk svg { display: block; }
-.dmk.is-thinking .d-mid { transform-origin: center; animation: dChurn 2.6s var(--e-out) infinite; }
-.dmk.is-working .d-core { transform-origin: center; animation: dLoom 2.8s var(--e-out) infinite; }
-@keyframes dChurn { 0% { transform: rotate(0) scale(1); } 50% { transform: rotate(180deg) scale(0.86); } 100% { transform: rotate(360deg) scale(1); } }
-@keyframes dLoom { 0% { opacity: 0.35; transform: scale(0.6); } 60% { opacity: 1; transform: scale(1.05); } 100% { opacity: 0.35; transform: scale(0.6); } }
+.dmk.is-working .d-out { transform-origin: center; animation: dMeshOut 28s linear infinite; }
+.dmk.is-working .d-mid { transform-origin: center; animation: dMeshMid 19s linear infinite; }
+.dmk.is-thinking .d-out { transform-origin: center; animation: dRecurseOut 900ms cubic-bezier(0.5, 0, 0.9, 0.4) 1; }
+.dmk.is-thinking .d-mid { transform-origin: center; animation: dRecurseMid 900ms cubic-bezier(0.5, 0, 0.9, 0.4) 1; }
+@keyframes dMeshOut { 0% { transform: rotate(0); } 100% { transform: rotate(360deg); } }
+@keyframes dMeshMid { 0% { transform: rotate(360deg); } 100% { transform: rotate(0); } }
+/* arrive at the halved (0.5) scale by 45%, hold, then an instant (0.1%-wide) snap back — a mechanical
+   tick/reset, not an eased bounce. */
+@keyframes dRecurseOut {
+  0% { transform: scale(1); }
+  45% { transform: scale(0.5); }
+  85% { transform: scale(0.5); }
+  85.1% { transform: scale(1); }
+  100% { transform: scale(1); }
+}
+/* the same shape, every stop shifted +10% later — the mid ring recurses AFTER the outer ring starts. */
+@keyframes dRecurseMid {
+  0% { transform: scale(1); }
+  10% { transform: scale(1); }
+  55% { transform: scale(0.5); }
+  95% { transform: scale(0.5); }
+  95.1% { transform: scale(1); }
+  100% { transform: scale(1); }
+}
+
+/* #512 PERF-R8 / #580 §6.1 correction: `animation-play-state` doesn't cascade from a parent to a
+   descendant's own independently-declared animation — a rule hardcoded to `.sidebar-wmark` itself (the
+   OLD shape, when the watermark ran its own `viz-drift`) had zero effect on a child ring's MESH rotation,
+   and `.dmk`/BRAND_DIAMOND never had shell-idle coverage at all. This one selector covers both `.dmk`
+   instances (BRAND_DIAMOND + the watermark) since MESH's rotation always lives on their `.d-out`/`.d-mid`
+   children. `.shell-idle` is toggled by shell.ts on blur/focus/visibilitychange. */
+body.shell-idle .dmk .d-out, body.shell-idle .dmk .d-mid { animation-play-state: paused; }
 
 /* Reduced-motion: both signatures collapse to a calm static mark (state still reads via colour + glyph). */
 @media (prefers-reduced-motion: reduce) {
-  .vmark, .vmark.loom::after, .vmark.churn, .dmk .d-mid, .dmk .d-core { animation: none !important; }
+  .vmark, .vmark.loom::after, .vmark.churn, .dmk .d-out, .dmk .d-mid { animation: none !important; }
 }
