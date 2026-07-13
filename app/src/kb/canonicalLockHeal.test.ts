@@ -9,6 +9,8 @@ import {
   classifyIndexLock,
   reconcileStaleIndexLock,
   resolveIndexLockPath,
+  resolveGitDir,
+  reconcileCherryPickSequencer,
   GATE3_STALE_AGE_MS,
   type ClassifyInputs,
 } from './canonicalLockHeal';
@@ -235,5 +237,139 @@ describe('ORCH-27 acquire-finds-stale through the REAL advanceOrCollide path (in
     // HEAD advanced to include the work commit (the wedge is resolved, not merely cleared).
     expect((await git.revparse(['HEAD'])).trim()).not.toBe(base);
     expect((await git.raw('log', '--oneline')).includes('work commit')).toBe(true);
+  });
+});
+
+// #515 BUG-2 — startup CHERRY_PICK_HEAD / sequencer heal: a SIGKILL mid cherry-pick leaves the
+// canonical worktree in a sequencer state nothing detected before. Without this, the NEXT capture's
+// plain `add inbox` + commit silently CONCLUDES the stale cherry-pick under a "capture:" message
+// (possibly with conflict markers) — the exact silent-corruption mechanism the issue describes.
+describe('#515 reconcileCherryPickSequencer (startup heal)', () => {
+  let dir: string;
+  afterEach(async () => {
+    if (dir) await rmTempDir(dir);
+  });
+
+  it('no CHERRY_PICK_HEAD → absent, no git invoked (the healthy common case)', async () => {
+    dir = await makeTempDir('kb-cp-heal-');
+    const root = path.join(dir, 'repo');
+    await fs.mkdir(path.join(root, '.git'), { recursive: true });
+    const runGit = vi.fn();
+    const v = await reconcileCherryPickSequencer(root, { runGit });
+    expect(v).toBe('absent');
+    expect(runGit).not.toHaveBeenCalled();
+  });
+
+  it('SAFETY: CHERRY_PICK_HEAD present + a live external git process → KEEP, nothing touched', async () => {
+    dir = await makeTempDir('kb-cp-heal-');
+    const root = path.join(dir, 'repo');
+    const gitDir = await resolveGitDir(root); // no .git yet → falls back to <root>/.git
+    await fs.mkdir(gitDir, { recursive: true });
+    const cherryPickHead = path.join(gitDir, 'CHERRY_PICK_HEAD');
+    await fs.writeFile(cherryPickHead, 'deadbeef\n', 'utf8');
+    const runGit = vi.fn();
+    const v = await reconcileCherryPickSequencer(root, { runGit, scanExternalGit: async () => 'present' });
+    expect(v).toBe('kept');
+    expect(runGit).not.toHaveBeenCalled();
+    await expect(fs.access(cherryPickHead)).resolves.toBeUndefined(); // untouched — fail safe
+  });
+
+  it('SAFETY: CHERRY_PICK_HEAD present + inconclusive scan → KEEP (never clear on a scan we could not run)', async () => {
+    dir = await makeTempDir('kb-cp-heal-');
+    const root = path.join(dir, 'repo');
+    const gitDir = await resolveGitDir(root);
+    await fs.mkdir(gitDir, { recursive: true });
+    await fs.writeFile(path.join(gitDir, 'CHERRY_PICK_HEAD'), 'deadbeef\n', 'utf8');
+    const runGit = vi.fn();
+    const v = await reconcileCherryPickSequencer(root, { runGit, scanExternalGit: async () => 'inconclusive' });
+    expect(v).toBe('kept');
+    expect(runGit).not.toHaveBeenCalled();
+  });
+
+  it('present + no live external git → CLEARED via `cherry-pick --abort`', async () => {
+    dir = await makeTempDir('kb-cp-heal-');
+    const root = path.join(dir, 'repo');
+    const gitDir = await resolveGitDir(root);
+    await fs.mkdir(gitDir, { recursive: true });
+    const cherryPickHead = path.join(gitDir, 'CHERRY_PICK_HEAD');
+    await fs.writeFile(cherryPickHead, 'deadbeef\n', 'utf8');
+    const runGit = vi.fn(async (_root: string, args: string[]) => {
+      if (args[0] === 'cherry-pick' && args[1] === '--abort') await fs.rm(cherryPickHead, { force: true });
+    });
+    const audit = vi.fn();
+    const v = await reconcileCherryPickSequencer(root, { runGit, scanExternalGit: async () => 'none', audit });
+    expect(v).toBe('cleared');
+    expect(runGit).toHaveBeenCalledWith(root, ['cherry-pick', '--abort']);
+    expect(audit).toHaveBeenCalledTimes(1);
+    await expect(fs.access(cherryPickHead)).rejects.toThrow();
+  });
+
+  it('present + `--abort` itself fails → falls back to a hard reset, still CLEARED', async () => {
+    dir = await makeTempDir('kb-cp-heal-');
+    const root = path.join(dir, 'repo');
+    const gitDir = await resolveGitDir(root);
+    await fs.mkdir(gitDir, { recursive: true });
+    const cherryPickHead = path.join(gitDir, 'CHERRY_PICK_HEAD');
+    await fs.writeFile(cherryPickHead, 'deadbeef\n', 'utf8');
+    await fs.mkdir(path.join(gitDir, 'sequencer'), { recursive: true });
+    const runGit = vi.fn(async (_root: string, args: string[]) => {
+      if (args[0] === 'cherry-pick') throw new Error('abort failed — corrupt sequencer');
+      // 'reset --hard HEAD' succeeds — the function itself removes CHERRY_PICK_HEAD/sequencer after.
+    });
+    const v = await reconcileCherryPickSequencer(root, { runGit, scanExternalGit: async () => 'none' });
+    expect(v).toBe('cleared');
+    expect(runGit).toHaveBeenCalledWith(root, ['reset', '--hard', 'HEAD']);
+    await expect(fs.access(cherryPickHead)).rejects.toThrow();
+    await expect(fs.access(path.join(gitDir, 'sequencer'))).rejects.toThrow();
+  });
+
+  // REGRESSION (real git, end-to-end): an interrupted CONFLICTING cherry-pick leaves CHERRY_PICK_HEAD;
+  // the heal clears it, and — the actual #515 acceptance criterion — a subsequent commit only contains
+  // the files it explicitly stages (an `inbox/`-only pathspec commit, mirroring a real capture), never
+  // any half-applied content the abandoned cherry-pick had staged.
+  it('REGRESSION #515: an interrupted CONFLICTING cherry-pick is healed; a later scoped commit stays clean', async () => {
+    dir = await makeTempDir('kb-cp-heal-int-');
+    const root = path.join(dir, 'repo');
+    await fs.mkdir(root, { recursive: true });
+    const git = simpleGit(root);
+    await git.init(['--initial-branch=canon']);
+    await ensureGitIdentity(git);
+    await fs.writeFile(path.join(root, 'shared.txt'), 'base\n');
+    await git.raw('add', '-A');
+    await git.commit('seed');
+    const base = (await git.revparse(['HEAD'])).trim();
+
+    // A work branch that conflicts with canon on the same file.
+    await git.checkoutBranch('kb/work', base);
+    await fs.writeFile(path.join(root, 'shared.txt'), 'work-change\n');
+    await git.raw('add', '-A');
+    await git.commit('work change');
+    const workHead = (await git.revparse(['HEAD'])).trim();
+    await git.checkout('canon');
+    await fs.writeFile(path.join(root, 'shared.txt'), 'canon-change\n');
+    await git.raw('add', '-A');
+    await git.commit('canon change');
+
+    // Start (and deliberately abandon, mid-conflict) a cherry-pick — simulates a SIGKILL leaving the
+    // sequencer state on disk, exactly what a crash mid-`advanceOrCollide` would produce.
+    await git.raw('cherry-pick', workHead).catch(() => {}); // conflicts → leaves CHERRY_PICK_HEAD, no throw needed for the test
+    const gitDir = await resolveGitDir(root);
+    await expect(fs.access(path.join(gitDir, 'CHERRY_PICK_HEAD'))).resolves.toBeUndefined(); // sequencer state confirmed present
+
+    const v = await reconcileCherryPickSequencer(root, { scanExternalGit: async () => 'none' });
+    expect(v).toBe('cleared');
+    await expect(fs.access(path.join(gitDir, 'CHERRY_PICK_HEAD'))).rejects.toThrow(); // sequencer cleared
+
+    // A subsequent capture-shaped commit — add only `inbox/`, nothing else — must NOT pick up any
+    // leftover conflict-markered content from the abandoned pick (there is none to pick up: the reset
+    // restored the pre-pick tree exactly).
+    await fs.mkdir(path.join(root, 'inbox'), { recursive: true });
+    await fs.writeFile(path.join(root, 'inbox', 'note.md'), 'a capture\n');
+    await git.raw('add', 'inbox');
+    await git.commit('capture: 1 item(s) [test]');
+    const committed = (await git.raw('show', '--stat', '--format=', 'HEAD')).trim();
+    expect(committed).toContain('inbox/note.md');
+    expect(committed).not.toContain('shared.txt'); // the conflicted file was never re-touched by capture
+    expect((await fs.readFile(path.join(root, 'shared.txt'), 'utf8')).trim()).toBe('canon-change'); // canon's own content, no conflict markers
   });
 });

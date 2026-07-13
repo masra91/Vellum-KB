@@ -10,24 +10,20 @@
 // "Advanced" disclosure (rarely needed). NO ember — agent activity is not a decision (sprout=active,
 // slate=interactive). Status-first: the live `status` field drives the pill, no render-path vault scan.
 import { esc } from '../html';
-import { withTimeout, renderLoadError } from '../loadGuard';
+import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
+import { createVisibilityPoll } from '../visibilityPoll';
 import type { AgentView, ModelCatalogView } from '../../kb/types';
 
 // Mounted as the **Librarians** section of the Agents hub (SPEC-0053 WS-E) — the hub owns the group
 // header/naming, so this section renders the librarian grid (the global default-model control above it).
 export async function mountAgents(container: HTMLElement): Promise<void> {
-  container.innerHTML = `<p class="ag-loading viz-body">Loading…</p>`;
+  paintSkeleton(container, '', 'cards');
   await render(container);
-  const timer = setInterval(() => {
-    if (!document.contains(container)) {
-      clearInterval(timer);
-      return;
-    }
-    // Skip the status IPC when the Agents view isn't showing (the shell mounts once + toggles `.hidden`,
-    // so the container stays in the DOM) or the window is backgrounded — don't poll status no one sees.
-    if (container.classList.contains('hidden') || document.hidden) return;
-    void refreshStatus(container);
-  }, 5000);
+  // #509: this container is the Librarians SECTION nested inside the Agents hub, not the `.view` the
+  // shell toggles `.hidden` on — checking `container`'s own class (the old guard) never engaged, so the
+  // poll ran every 5s for the rest of the session regardless of which view was active. The shared helper
+  // walks up to the ancestor `.view` instead, so the intended pause actually engages.
+  createVisibilityPoll(container, 5000, () => refreshStatus(container));
 }
 
 async function render(container: HTMLElement): Promise<void> {
@@ -94,6 +90,7 @@ function wireModelPicker(container: HTMLElement): void {
   select.addEventListener('change', () => {
     const id = select.value; // '' = clear the override (Auto)
     select.disabled = true;
+    select.classList.add('is-busy'); // #520 §10
     void window.kbApi
       .setModel(id.length > 0 ? id : null)
       .then((res) => {
@@ -106,6 +103,7 @@ function wireModelPicker(container: HTMLElement): void {
       })
       .finally(() => {
         select.disabled = false;
+        select.classList.remove('is-busy');
       });
   });
 }
@@ -119,6 +117,7 @@ function wireAgentPickers(container: HTMLElement): void {
       const id = select.value; // '' = clear → use the global default
       if (!key) return;
       select.disabled = true;
+      select.classList.add('is-busy'); // #520 §10
       void window.kbApi
         .setAgentModel(key, id.length > 0 ? id : null)
         .then((res) => {
@@ -130,6 +129,7 @@ function wireAgentPickers(container: HTMLElement): void {
         })
         .finally(() => {
           select.disabled = false;
+          select.classList.remove('is-busy');
         });
     });
   }

@@ -3,7 +3,7 @@
 // CopilotClient connection) without spawning the CLI.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const sdk = vi.hoisted(() => ({ ctorArgs: [] as unknown[], forStdioArgs: [] as unknown[] }));
+const sdk = vi.hoisted(() => ({ ctorArgs: [] as unknown[], forStdioArgs: [] as unknown[], stopCalls: 0 }));
 
 vi.mock('@github/copilot-sdk', () => ({
   CopilotClient: class {
@@ -13,7 +13,9 @@ vi.mock('@github/copilot-sdk', () => ({
     async createSession(): Promise<{ sendAndWait: () => Promise<unknown>; disconnect: () => Promise<void> }> {
       return { sendAndWait: async () => ({}), disconnect: async () => {} };
     }
-    async stop(): Promise<void> {}
+    async stop(): Promise<void> {
+      sdk.stopCalls++;
+    }
   },
   RuntimeConnection: {
     forStdio: (o: unknown) => {
@@ -30,6 +32,7 @@ import { RECALL_SKILL, RECALL_SKILL_VERSION, makeSdkRecallClient } from './recal
 beforeEach(() => {
   sdk.ctorArgs.length = 0;
   sdk.forStdioArgs.length = 0;
+  sdk.stopCalls = 0;
 });
 
 describe('recall skill (ASK-4)', () => {
@@ -70,5 +73,31 @@ describe('makeSdkRecallClient (ASK-12 substrate + BUG #65 cliPath)', () => {
     await client.createSession({ tools: [] });
     expect(sdk.forStdioArgs).toHaveLength(0);
     expect(sdk.ctorArgs[0]).toEqual({});
+  });
+
+  // #514: recall.ts previously built a FRESH RecallClient per question — every `createSession` therefore
+  // constructed a NEW CopilotClient (a new `copilot` CLI server process), never stopped. The fix is
+  // reusing ONE RecallClient across questions (wired in ipc.ts); this pins the underlying guarantee that
+  // makes that reuse actually work — the SAME RecallClient instance across multiple createSession calls
+  // constructs the CopilotClient exactly ONCE (lazily, on the first call) and shares it thereafter.
+  it('reuses the SAME underlying CopilotClient across multiple createSession calls (2nd+ question skips the server boot)', async () => {
+    const client = makeSdkRecallClient({ cliPath: '/abs/path/copilot' });
+    await client.createSession({ tools: [] });
+    await client.createSession({ tools: [] });
+    await client.createSession({ tools: [] });
+    expect(sdk.ctorArgs).toHaveLength(1); // ONE CopilotClient (= one CLI server) for three questions
+  });
+
+  it('disconnect() is a no-op when no session was ever created (nothing to stop, never throws)', async () => {
+    const client = makeSdkRecallClient({});
+    await expect(client.disconnect?.()).resolves.toBeUndefined();
+    expect(sdk.stopCalls).toBe(0);
+  });
+
+  it('disconnect() stops the underlying CopilotClient once it was lazily constructed — this is what actually releases the leaked CLI server (#514)', async () => {
+    const client = makeSdkRecallClient({});
+    await client.createSession({ tools: [] }); // lazily constructs the CopilotClient
+    await client.disconnect?.();
+    expect(sdk.stopCalls).toBe(1);
   });
 });

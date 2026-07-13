@@ -189,6 +189,22 @@ jobs:
             fi
             echo "Packaged artifact OK: $dir/Vellum"
           fi
+      # SPEC-0061 T1 / ENG-17 item 3: the library index's `better-sqlite3` native module is
+      # externalized (vite.main.config.ts) and must land UNPACKED outside app.asar (dlopen can't
+      # load a `.node` from inside an asar) — the same class of break as the #247 fsevents
+      # regression this job already guards, but for a dep that (unlike fsevents) installs on every
+      # OS, so this ubuntu leg is also the ABI-rebuild canary (ENG-17 item 4): if native-module
+      # rebuild-for-Electron ever breaks, THIS assertion is what catches it, on every PR.
+      - name: Assert better-sqlite3 was unpacked into app.asar.unpacked (SPEC-0061 T1)
+        shell: bash
+        run: |
+          hit=$(find out -path '*/app.asar.unpacked/*better_sqlite3*.node' 2>/dev/null | head -n1)
+          if [ -z "$hit" ]; then
+            echo "::error::better_sqlite3.node not found under any app.asar.unpacked/ — externalize/auto-unpack-natives regression?"
+            find out -iname '*.node' || true
+            exit 1
+          fi
+          echo "better-sqlite3 native unpacked OK: $hit"
 
   # macOS package build-check — the durable catch for the macOS-only NATIVE-dep regression class
   # (#247 `fsevents`: `os: ["darwin"]` deps never install/bundle on Linux, so the ubuntu `package`
@@ -237,6 +253,19 @@ jobs:
             fi
             echo "Packaged artifact OK: $dir/Vellum"
           fi
+      # SPEC-0061 T1 / ENG-17 item 6 — the macOS leg is where a `.node` signing regression would
+      # actually surface (KB_OSX_SIGN=1 builds only; this job's default run is unsigned, same as the
+      # ubuntu leg, but the unpack-location assertion applies identically on every OS).
+      - name: Assert better-sqlite3 was unpacked into app.asar.unpacked (SPEC-0061 T1)
+        shell: bash
+        run: |
+          hit=$(find out -path '*/app.asar.unpacked/*better_sqlite3*.node' 2>/dev/null | head -n1)
+          if [ -z "$hit" ]; then
+            echo "::error::better_sqlite3.node not found under any app.asar.unpacked/ — externalize/auto-unpack-natives regression?"
+            find out -iname '*.node' || true
+            exit 1
+          fi
+          echo "better-sqlite3 native unpacked OK: $hit"
 
   e2e:
     name: e2e (packaged smoke) — phased / opt-in

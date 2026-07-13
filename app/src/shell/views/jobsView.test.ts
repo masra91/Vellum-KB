@@ -372,7 +372,8 @@ describe('Jobs view · #145 load resilience (no infinite spinner on a hung IPC)'
     const listJobs = vi.fn<KbApi['listJobs']>().mockReturnValueOnce(new Promise<JobView[]>(() => {})); // hangs
     setApi({ listJobs, setJobConfig: vi.fn(), runJobNow: vi.fn() });
     const mounted = mountJobs(root); // blocked on the hung load
-    expect(root.textContent).toContain('Loading…'); // spinner initially
+    expect(root.querySelector('[aria-busy="true"]')).not.toBeNull(); // skeleton initially (#520)
+    expect(root.textContent).not.toContain('Loading…'); // never bare "Loading…" (#520 §8)
 
     await vi.advanceTimersByTimeAsync(LOAD_TIMEOUT_MS); // trip the timeout
     await mounted;

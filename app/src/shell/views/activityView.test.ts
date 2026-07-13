@@ -425,10 +425,11 @@ describe('Activity view · #145 load resilience (no infinite spinner on a hung I
     const activityFeed = vi.fn<KbApi['activityFeed']>().mockReturnValueOnce(new Promise<ActivityFeedResult>(() => {})); // hangs
     (window as unknown as { kbApi: Pick<KbApi, 'activityFeed'> }).kbApi = { activityFeed: activityFeed as unknown as KbApi['activityFeed'] };
     mountActivity(c);
-    expect(c.textContent).toContain('Loading…'); // spinner initially
+    expect(c.querySelector('#activityBody')?.getAttribute('aria-busy')).toBe('true'); // skeleton initially (#520)
+    expect(c.textContent).not.toContain('Loading…'); // never bare "Loading…" (#520 §8)
 
     await vi.advanceTimersByTimeAsync(LOAD_TIMEOUT_MS); // trip the timeout
-    expect(c.textContent).not.toContain('Loading…'); // no infinite spinner
+    expect(c.querySelector('#activityBody')?.getAttribute('aria-busy')).toBe('false'); // no infinite spinner
     expect(c.querySelector('.activity-error')).toBeTruthy();
     expect(c.querySelector('.load-retry')).toBeTruthy();
     // VUX-CONFORM #524 §3/§8 — v3-surface buttons use the sentence-case .v3-btn pill, not bare

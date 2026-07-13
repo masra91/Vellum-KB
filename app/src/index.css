@@ -168,12 +168,12 @@ ul.checks li {
 .setup-view h1 { font-family: var(--voice); font-weight: 500; font-size: 1.6rem; color: var(--ink); letter-spacing: 0.01em; margin: 0 0 0.5rem; }
 .setup-view .muted { color: var(--stone); font-family: var(--ui); font-size: 0.9rem; line-height: 1.5; }
 .setup-view .path { font-family: var(--mono); font-size: 0.8rem; color: var(--ink-2); word-break: break-all; background: var(--parchment); padding: 0.4rem 0.6rem; border-radius: var(--r-chip); }
-.setup-view button.primary { appearance: none; border: 1px solid var(--viridian); border-radius: var(--r-pill); background: var(--viridian); color: var(--linen); font-family: var(--ui); font-size: 0.9rem; font-weight: 600; padding: 0.5rem 1.2rem; cursor: pointer; margin-top: 0.75rem; text-transform: none; letter-spacing: 0; transition: var(--t); }
+.setup-view button.primary { appearance: none; border: 1px solid var(--viridian); border-radius: var(--r-pill); background: var(--viridian); color: var(--linen); font-family: var(--ui); font-size: 0.9rem; font-weight: 600; padding: 0.5rem 1.2rem; cursor: pointer; margin-top: 0.75rem; text-transform: none; letter-spacing: 0; transition: var(--dur-quick) var(--e-out); }
 .setup-view button.primary:hover, .setup-view button.primary:focus-visible { background: color-mix(in srgb, var(--viridian) 82%, black); border-color: color-mix(in srgb, var(--viridian) 82%, black); }
 .setup-view button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 /* EditableField text pattern (_design-system.md §6) — a bottom-rule input, not a boxed generic field. */
 .setup-view .field { display: block; margin: 1rem 0 0.5rem; font-family: var(--ui); font-size: 0.85rem; color: var(--stone); }
-.setup-view .field input { display: block; width: 100%; margin-top: 0.35rem; padding: 0.35rem 0.1rem; border: 0; border-bottom: 1px solid var(--hair); border-radius: 0; background: transparent; color: var(--ink); font-family: var(--ui); font-size: 0.95rem; transition: border-color var(--t); }
+.setup-view .field input { display: block; width: 100%; margin-top: 0.35rem; padding: 0.35rem 0.1rem; border: 0; border-bottom: 1px solid var(--hair); border-radius: 0; background: transparent; color: var(--ink); font-family: var(--ui); font-size: 0.95rem; transition: border-color var(--dur-quick) var(--e-out); }
 .setup-view .field input:focus-visible { outline: none; border-bottom-color: var(--slate); box-shadow: 0 1px 0 0 var(--slate); }
 .setup-view .checkbox { display: flex; align-items: center; gap: 0.5rem; font-family: var(--ui); font-size: 0.85rem; color: var(--stone); margin: 0.75rem 0; }
 .setup-view .checkbox input { accent-color: var(--slate); }
@@ -199,7 +199,7 @@ ul.checks li {
 .capture-eyebrow { display: flex; align-items: center; gap: 0.5rem; font-family: var(--ui); font-weight: 600; font-size: 0.68rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); }
 .capture-title { font-family: var(--voice); font-weight: 500; font-size: 1.7rem; margin: 0.5rem 0 0; color: var(--ink); letter-spacing: -0.01em; }
 /* The composer surface — linen, hairline, lifts + rings on focus-within (the mock's .cap-surface). */
-.capture-composer { background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 1.1rem 1.2rem 1rem; transition: border-color var(--t), box-shadow var(--t); }
+.capture-composer { background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 1.1rem 1.2rem 1rem; transition: border-color var(--dur-quick) var(--e-out), box-shadow var(--dur-quick) var(--e-out); }
 .capture-composer:focus-within { border-color: rgba(58, 110, 136, 0.45); box-shadow: var(--shadow-raise), var(--ring); }
 .capture-composer .viz-field__input--multiline { width: 100%; min-height: 9rem; resize: vertical; border: 0; background: transparent; font-family: var(--voice); font-size: 1.05rem; line-height: 1.6; color: var(--ink); outline: none; }
 .capture-composer .viz-field__input--multiline::placeholder { color: var(--faint); font-style: italic; }
@@ -213,7 +213,7 @@ ul.checks li {
    surfaces. .viz-btn's uppercase is the correct instrument tell on Researchers/Jobs/Field Desk; v3
    surfaces were hand-overriding text-transform per call site (.capture-submit, .review-confirm) —
    this promotes that override to a reusable class so future v3 buttons don't re-derive it or forget it. */
-.v3-btn { appearance: none; font: inherit; font-family: var(--ui); font-weight: 600; text-transform: none; letter-spacing: 0; border-radius: var(--r-pill); padding: 0.45rem 1.2rem; cursor: pointer; transition: var(--t); }
+.v3-btn { appearance: none; font: inherit; font-family: var(--ui); font-weight: 600; text-transform: none; letter-spacing: 0; border-radius: var(--r-pill); padding: 0.45rem 1.2rem; cursor: pointer; transition: var(--dur-quick) var(--e-out); }
 .v3-btn:disabled { opacity: 0.5; cursor: default; }
 .v3-btn--primary { background: var(--viridian); border: 1px solid var(--viridian); color: #f6f2e6; }
 .v3-btn--primary:hover, .v3-btn--primary.is-hover, .v3-btn--primary:focus-visible { background: color-mix(in srgb, var(--viridian) 82%, black); border-color: color-mix(in srgb, var(--viridian) 82%, black); color: #f6f2e6; }
@@ -221,7 +221,7 @@ ul.checks li {
 .v3-btn--ghost:hover, .v3-btn--ghost.is-hover, .v3-btn--ghost:focus-visible { color: var(--viridian); }
 .v3-btn--sm { font-size: 0.78rem; padding: 0.25rem 0.7rem; }
 /* Dropzone — a dashed region that hover-lifts; drag-over = a slate wash (interactive, NOT sprout/ember). */
-.capture-dropzone { margin-top: 0.9rem; padding: 1.1rem; border: 1px dashed var(--hair); border-radius: var(--r-chip); text-align: center; color: var(--stone); font-family: var(--ui); font-size: 0.85rem; transition: transform var(--t), border-color var(--t), background var(--t); }
+.capture-dropzone { margin-top: 0.9rem; padding: 1.1rem; border: 1px dashed var(--hair); border-radius: var(--r-chip); text-align: center; color: var(--stone); font-family: var(--ui); font-size: 0.85rem; transition: transform var(--dur-quick) var(--e-out), border-color var(--dur-quick) var(--e-out), background var(--dur-quick) var(--e-out); }
 .capture-dropzone:hover { transform: translateY(-1px); border-color: var(--stone); }
 .capture-dropzone.over { border-color: var(--slate); background: rgba(58, 110, 136, 0.08); color: var(--ink); }
 .capture-dropzone-glyph { color: var(--slate); margin-right: 0.35rem; }
@@ -300,37 +300,87 @@ body.shell-active #app {
   flex: 0 0 3.1rem; display: flex; align-items: center; gap: 0.8rem; padding: 0 0.9rem;
   background: linear-gradient(180deg, var(--linen), var(--parchment));
   border-bottom: 0.5px solid var(--hair); position: relative; z-index: 6;
+  /* #519 §4 — the bar itself is the drag region (main.ts's hiddenInset titleBarStyle draws no native
+     bar of its own); the three interactive controls opt back out so the window stays draggable
+     everywhere else on the band without swallowing their clicks. */
+  -webkit-app-region: drag;
 }
-.topsearch {
-  appearance: none; flex: 1 1 auto; max-width: 27.5rem; display: flex; align-items: center; gap: 0.55rem;
+.topsearch-shell, .topctx, .quickadd { -webkit-app-region: no-drag; }
+/* #519 §2 — the pill CONTAINER (an <input> can't hold child elements, so the glyph/hint live beside it,
+   not inside it). `.topsearch-shell` carries the visual the old button-styled `.topsearch` owned
+   directly; `position: relative` anchors the results overlay. `:focus-within` substitutes for the old
+   `:focus-visible` (the div itself is never focused — its child input is). */
+.topsearch-shell {
+  position: relative; flex: 1 1 auto; max-width: 27.5rem; display: flex; align-items: center; gap: 0.55rem;
   background: var(--linen); border: 0.5px solid var(--hair); border-radius: var(--r-chip);
-  padding: 0.5rem 0.75rem; color: var(--faint); font: inherit; font-size: 0.78rem; cursor: text; text-align: left;
-  transition: var(--t);
+  padding: 0.5rem 0.75rem; transition: var(--dur-quick) var(--e-out);
 }
-.topsearch:hover { border-color: #d2c7a8; color: var(--stone); }
-.topsearch:focus-visible { outline: none; box-shadow: var(--ring); border-color: var(--viridian); color: var(--stone); }
-.topsearch svg { width: 0.95rem; height: 0.95rem; color: var(--gold-deep); flex: none; }
-.topsearch .ts-ph { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.topsearch .kbd { margin-left: auto; font-family: var(--mono); font-size: 0.68rem; color: var(--stone); border: 0.5px solid var(--hair); border-radius: 5px; padding: 0.05rem 0.35rem; background: var(--linen); }
+.topsearch-shell:hover { border-color: #d2c7a8; }
+.topsearch-shell:focus-within { box-shadow: var(--ring); border-color: var(--viridian); }
+.ts-glyph { display: flex; flex: none; }
+.ts-glyph svg { width: 0.95rem; height: 0.95rem; color: var(--gold-deep); flex: none; }
+/* The real input (#519 §2 — replaces the styled-but-inert button). Reset to inherit the shell's pill
+   chrome; the shell's :focus-within box-shadow is the only focus ring (no double outline on the field). */
+.topsearch {
+  appearance: none; flex: 1 1 auto; min-width: 0; background: transparent; border: 0; outline: none;
+  color: var(--ink); font: inherit; font-size: 0.78rem; padding: 0;
+}
+.topsearch::placeholder { color: var(--faint); }
+/* VUX-DARK #521 §4: was a hand-hex #9a927e (the pre-token --faint value) — the same survival-patch
+   class of bug the dark re-point sweep converted everywhere else. --stone re-points on dark for free. */
+.kbd {
+  flex: none; margin-left: auto; font-family: var(--mono); font-size: 0.68rem; color: var(--stone);
+  border: 0.5px solid var(--hair); border-radius: 5px; padding: 0.05rem 0.35rem; background: var(--linen);
+  transition: visibility 0s, opacity var(--dur-quick) var(--e-out);
+}
+/* §2 — hides (not removed) once the field has a value, so it can't collide with typed text. */
+.kbd.is-hidden { visibility: hidden; opacity: 0; }
+
+/* #519 §2 — the results overlay: same linen/hair/r-chip family as the search pill itself (not a new
+   floating-card shape), anchored directly under the input. */
+.search-results {
+  position: absolute; top: calc(100% + 0.35rem); left: 0; right: 0; z-index: 20;
+  background: var(--linen); border: 0.5px solid var(--hair); border-radius: var(--r-chip);
+  box-shadow: var(--shadow-raise); max-height: 18rem; overflow-y: auto; padding: 0.3rem;
+}
+.search-result {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem;
+  padding: 0.4rem 0.55rem; border-radius: var(--r-chip); cursor: pointer; color: var(--ink);
+  font-family: var(--ui); font-size: 0.82rem;
+}
+/* Interactive-state law (§0): the active/hovered option reads slate — the ONE new visual rule this
+   section adds; everything else reuses the .topsearch/.topchip linen-and-hair family. */
+.search-result:hover, .search-result.is-active {
+  background: color-mix(in srgb, var(--slate) 8%, var(--linen));
+}
+.search-result-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-result-kind { flex: none; color: var(--stone); font-family: var(--mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.search-empty { padding: 0.55rem; color: var(--stone); font-family: var(--ui); font-size: 0.82rem; }
 /* Per-view contextual filter slot — populated by each view via setTopbarContext (empty until a view fills it). */
 .topctx { display: flex; align-items: center; gap: 0.45rem; min-width: 0; overflow: hidden; }
 .topctx:empty { display: none; }
 .topchip { display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: var(--stone); border: 0.5px solid var(--hair); background: var(--linen); border-radius: var(--r-chip); padding: 0.35rem 0.65rem; white-space: nowrap; flex: none; }
 .topchip svg { width: 0.85rem; height: 0.85rem; color: var(--gold-deep); }
+/* #519 §3 — actionable chips (Health's Re-scan, Agents' Add-a-researcher) vs. Explore/Activity's
+   informational ones: interactive-state law (§0) — slate on hover, never a repurposed ember/accent hue. */
+.topchip--action { cursor: pointer; appearance: none; font: inherit; transition: border-color var(--dur-quick) var(--e-out), color var(--dur-quick) var(--e-out); }
+.topchip--action:hover, .topchip--action:focus-visible { border-color: var(--slate); color: var(--slate); }
 .topspacer { flex: 1 1 auto; }
 .quickadd {
   flex: none; display: inline-flex; align-items: center; gap: 0.45rem; font-family: var(--ui); font-size: 0.8rem;
   font-weight: 600; color: #fff; cursor: pointer; border: 0.5px solid color-mix(in srgb, var(--viridian) 78%, black); border-radius: var(--r-chip);
   padding: 0.45rem 0.85rem; background: linear-gradient(180deg, var(--viridian-2), var(--viridian));
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset, 0 8px 18px -10px rgba(47, 107, 91, 0.6);
-  transition: transform var(--t), box-shadow var(--t), filter var(--t);
+  transition: transform var(--dur-quick) var(--e-out), box-shadow var(--dur-quick) var(--e-out), filter var(--dur-quick) var(--e-out);
 }
 .quickadd svg { width: 1rem; height: 1rem; color: #e2f2eb; }
 .quickadd:hover { transform: translateY(-1px); filter: brightness(1.03); box-shadow: 0 1px 0 rgba(255, 255, 255, 0.3) inset, 0 12px 24px -10px rgba(47, 107, 91, 0.7); }
 .quickadd:focus-visible { outline: none; box-shadow: var(--ring); }
 
 /* "You" identity card (SPEC-0060 §7, VUX-21) — the rail's first-class self, at the foot of the rail. */
-.user { margin-top: auto; display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem; border-radius: 11px; border: 0.5px solid var(--hair); background: var(--linen); cursor: default; transition: var(--t); }
+/* VUX-DARK #521 §4: background was a hand-hex #fbf6ea (the pre-token --linen value) — same survival-
+   patch class of bug the dark re-point sweep converted everywhere else. --linen re-points on dark for free. */
+.user { margin-top: auto; display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem; border-radius: 11px; border: 0.5px solid var(--hair); background: var(--linen); cursor: default; transition: var(--dur-quick) var(--e-out); }
 .user:hover { box-shadow: var(--shadow-card); transform: translateY(-1px); }
 .user-ini { width: 1.9rem; height: 1.9rem; flex: none; border-radius: 9px; background: radial-gradient(circle at 40% 35%, var(--viridian-2), color-mix(in srgb, var(--viridian) 70%, black)); color: #fff; display: flex; align-items: center; justify-content: center; border: 0.5px solid rgba(201, 163, 90, 0.5); }
 .user-ini svg { width: 1rem; height: 1rem; }
@@ -377,7 +427,7 @@ body.shell-active #app {
   padding: 0.5rem 0.7rem;
   cursor: pointer;
   position: relative;
-  transition: background var(--viz-dur-quick) var(--viz-ease-out), color var(--viz-dur-quick) var(--viz-ease-out), transform var(--viz-dur-quick) var(--viz-ease-out);
+  transition: background var(--dur-quick) var(--viz-ease-out), color var(--dur-quick) var(--viz-ease-out), transform var(--dur-quick) var(--viz-ease-out);
 }
 /* Hover-life: warm the row, gild + grow the icon. */
 .sidebar .nav-item:hover { background: rgba(251, 246, 234, 0.7); color: var(--viz-ink); }
@@ -405,7 +455,7 @@ body.shell-active #app {
   justify-content: center;
   font-size: 1.15rem; /* sets the 1em inline line-icon size */
   color: var(--viz-idle);
-  transition: color var(--viz-dur-quick) var(--viz-ease-out), transform var(--viz-dur-quick) var(--viz-ease-out);
+  transition: color var(--dur-quick) var(--viz-ease-out), transform var(--dur-quick) var(--viz-ease-out);
 }
 .nav-icon svg { display: block; } /* inline line glyph; inherits currentColor → gilds gold on hover/active */
 .nav-label { flex: 1 1 auto; }
@@ -430,9 +480,23 @@ body.shell-active #app {
   width: 100%;
 }
 /* Per-view churn-in: a brief settle when a view becomes active (paired with the brand-diamond churn). */
-.content .view:not(.hidden) { animation: shellFadein 0.34s var(--e-out); }
+.content .view:not(.hidden) { animation: shellFadein var(--dur-settle) var(--e-out); }
 @keyframes shellFadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce) { .content .view:not(.hidden) { animation: none; } }
+
+/* Shared shell-wide motion states (#520 §10) — generalizes .viz-btn--busy (design-system.css) to any
+   button firing an async action, on OR off a .viz-surface. `.is-busy`: label stays legible, border/label
+   take sprout (active, never ember/decision), pulse via the existing viz-breathe keyframe; the caller
+   also sets the native `disabled` attribute so a second click can't double-fire. `.is-leaving`: the exit
+   motion for a resolved/removed item — fade + lift over --dur-settle, then the caller removes the node
+   (never a synchronous .remove()). */
+.is-busy { animation: viz-breathe var(--dur-breathe) ease-in-out infinite; color: var(--sprout); border-color: var(--sprout); }
+.is-leaving { opacity: 0; transform: translateY(-6px) scale(0.99); margin-bottom: -1rem; pointer-events: none; transition: opacity var(--dur-settle) var(--e-out), transform var(--dur-settle) var(--e-out), margin-bottom var(--dur-settle) var(--e-out); }
+
+@media (prefers-reduced-motion: reduce) {
+  .content .view:not(.hidden) { animation: none; }
+  .is-busy { animation: none; }
+  .is-leaving { transition: none; }
+}
 
 .view.hidden {
   display: none;
@@ -504,7 +568,7 @@ dl.settings dd {
    sprout-breathe dot marks active backing-off; the global reduced-motion reset makes it static. */
 .scale-throttle { display: flex; align-items: center; gap: 0.4rem; color: var(--stone); }
 .scale-throttle[hidden] { display: none; }
-.scale-throttle__dot { flex: 0 0 auto; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--sprout); animation: viz-breathe 1.8s ease-in-out infinite; }
+.scale-throttle__dot { flex: 0 0 auto; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--sprout); animation: viz-breathe var(--dur-breathe) ease-in-out infinite; }
 
 /* ════════════════════════════════════════════════════════════════════════════════════════════════
    Reviews view — VELLUM v3 (SPEC-0060 VUX-1/VUX-13). The "needs you" queue (SPEC-0018 REVIEW-10), on
@@ -523,13 +587,32 @@ ul.review-list { list-style: none; padding: 0; margin: 1.1rem 0 0; display: flex
 .rev-skeleton-list { pointer-events: none; }
 .rev-skel-status { display: flex; align-items: center; gap: 0.5rem; margin: 0.2rem 0 0.2rem; font-family: var(--ui); font-size: 0.8rem; color: var(--stone); }
 .reviews-v2 li.rev-skeleton-card { background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 1.1rem 1.2rem; display: flex; flex-direction: column; gap: 0.65rem; }
-.rev-skeleton { display: block; height: 0.75rem; border-radius: 5px; background: linear-gradient(100deg, var(--parchment) 30%, rgba(255, 255, 255, 0.6) 50%, var(--parchment) 70%); background-size: 220% 100%; animation: rev-shimmer 1.5s ease-in-out infinite; }
+.rev-skeleton, .skel { display: block; height: 0.75rem; border-radius: 5px; background: linear-gradient(100deg, var(--parchment) 30%, rgba(255, 255, 255, 0.6) 50%, var(--parchment) 70%); background-size: 220% 100%; animation: shimmer 1.5s ease-in-out infinite; }
 .rev-skeleton-line { width: 80%; }
 .rev-skeleton-line--short { width: 46%; }
 .rev-skeleton-line--sub { width: 32%; height: 0.6rem; }
 .reviews-v2 .rev-skeleton-sub { margin-top: 1rem; }
-@keyframes rev-shimmer { 0% { background-position: 120% 0; } 100% { background-position: -120% 0; } }
-@media (prefers-reduced-motion: reduce) { .rev-skeleton { animation: none; } }
+/* Canonical shimmer sweep (#520 §7) — the one shared keyframe; formerly two separately-named duplicates
+   (Reviews' own sweep + Ask's own sweep) with different timing/direction values. */
+@keyframes shimmer { 0% { background-position: 120% 0; } 100% { background-position: -120% 0; } }
+@media (prefers-reduced-motion: reduce) { .rev-skeleton, .skel { animation: none; } }
+
+/* Generalized skeleton primitive (#520 §8, paintSkeleton() in loadGuard.ts) — the same .skel line, in
+   three container-shape-agnostic layouts. skel-ln width modifiers mirror the Reviews/Ask precedents
+   (rev-skeleton-line--short/--sub, ask-skel w1/w2/w3) under one shared name. */
+.skel-status { display: flex; align-items: center; gap: 0.5rem; margin: 0.2rem 0 0.7rem; font-family: var(--ui); font-size: 0.8rem; color: var(--stone); }
+.skel-ln { display: block; height: 0.75rem; }
+.skel-ln--short { width: 46%; }
+.skel-ln--sub { width: 32%; height: 0.6rem; }
+.skel-ln--w1 { width: 92%; } .skel-ln--w2 { width: 78%; } .skel-ln--w3 { width: 86%; }
+/* cards — Sources/Connectors, Agents-hub sub-sections, Settings sections. */
+.skel-cards { display: flex; flex-direction: column; gap: 0.65rem; }
+.skel-card { background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 1.1rem 1.2rem; display: flex; flex-direction: column; gap: 0.65rem; }
+/* rows — flat table/list surfaces (Activity feed, Jobs/Schedules). */
+.skel-rows { display: flex; flex-direction: column; gap: 0.5rem; }
+.skel-row { display: flex; flex-direction: column; gap: 0.35rem; padding: 0.5rem 0; border-bottom: 0.5px solid var(--hair); }
+/* prose — flowing text (Today's flow-strip, Ask's conversation-pane cold-start). */
+.skel-prose { display: flex; flex-direction: column; gap: 0.5rem; }
 
 /* A review card — the EMBER decision surface (the one sanctioned ember in v3): an ember wash + border
    marks "this needs your decision". Hover lifts. */
@@ -539,7 +622,7 @@ ul.review-list { list-style: none; padding: 0; margin: 1.1rem 0 0; display: flex
   border-radius: var(--r-card);
   box-shadow: var(--shadow-card);
   padding: 1.15rem 1.3rem 1.05rem;
-  transition: transform var(--t), box-shadow var(--t);
+  transition: transform var(--dur-quick) var(--e-out), box-shadow var(--dur-quick) var(--e-out);
 }
 .reviews-v2 li.review:hover { transform: translateY(-1px); box-shadow: var(--shadow-raise); }
 /* Kicker — the ember "needs you" eyebrow. */
@@ -596,7 +679,7 @@ button:disabled {
 .ask-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.25rem; font-family: var(--ui); font-size: 0.78rem; color: var(--stone); }
 .ask-sub .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--faint); }
 .ask-actions { position: relative; display: flex; align-items: center; gap: 0.4rem; flex: none; }
-.ask-act { display: inline-flex; align-items: center; gap: 0.35rem; font-family: var(--ui); font-size: 0.8rem; font-weight: 500; color: var(--ink-2); background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0.4rem 0.7rem; cursor: pointer; transition: background var(--t), border-color var(--t); }
+.ask-act { display: inline-flex; align-items: center; gap: 0.35rem; font-family: var(--ui); font-size: 0.8rem; font-weight: 500; color: var(--ink-2); background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0.4rem 0.7rem; cursor: pointer; transition: background var(--dur-quick) var(--e-out), border-color var(--dur-quick) var(--e-out); }
 .ask-act:hover { background: var(--hover); }
 .ask-act .ask-act-i { font-size: 0.9em; color: var(--stone); }
 .ask-act.is-quiet { background: transparent; color: var(--stone); border-color: transparent; }
@@ -617,16 +700,16 @@ button:disabled {
 .ask-pastpanel[hidden] { display: none; }
 .ask-past-status { font-family: var(--ui); font-size: 0.82rem; color: var(--stone); padding: 0.7rem 0.6rem; }
 .ask-past-status.error { color: var(--oxide); }
-.ask-pastrow { display: flex; align-items: stretch; gap: 0.15rem; border-radius: var(--r-chip); transition: background var(--t); }
+.ask-pastrow { display: flex; align-items: stretch; gap: 0.15rem; border-radius: var(--r-chip); transition: background var(--dur-quick) var(--e-out); }
 .ask-pastrow:hover, .ask-pastrow:focus-within { background: var(--hover); }
 .ask-pastopen { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; text-align: left; background: transparent; border: 0; border-radius: var(--r-chip); padding: 0.55rem 0.6rem; cursor: pointer; font: inherit; }
-.ask-pastdel { flex: none; align-self: center; background: transparent; border: 0; border-radius: var(--r-chip); padding: 0.4rem 0.55rem; margin-right: 0.15rem; cursor: pointer; font: inherit; font-size: 0.82rem; color: var(--faint); transition: color var(--t), background var(--t); }
+.ask-pastdel { flex: none; align-self: center; background: transparent; border: 0; border-radius: var(--r-chip); padding: 0.4rem 0.55rem; margin-right: 0.15rem; cursor: pointer; font: inherit; font-size: 0.82rem; color: var(--faint); transition: color var(--dur-quick) var(--e-out), background var(--dur-quick) var(--e-out); }
 .ask-pastdel:hover, .ask-pastdel:focus-visible { color: var(--oxide); background: rgba(168, 67, 42, 0.1); }
 /* Inline delete confirm (PANEL-7 idiom) — revealed by the ✕; cancel-default. "Delete?" + a slate ✓ + a
    stone ✕. The ✓ goes oxide (a true destructive confirm); no ember. */
 .ask-pastconfirm { flex: none; align-self: center; display: inline-flex; align-items: center; gap: 0.2rem; margin-right: 0.15rem; }
 .ask-pastconfirm-q { font-family: var(--ui); font-size: 0.74rem; color: var(--stone); margin-right: 0.15rem; }
-.ask-pastdel-yes, .ask-pastdel-no { background: transparent; border: 0; border-radius: var(--r-chip); padding: 0.3rem 0.45rem; cursor: pointer; font: inherit; font-size: 0.82rem; line-height: 1; transition: color var(--t), background var(--t); }
+.ask-pastdel-yes, .ask-pastdel-no { background: transparent; border: 0; border-radius: var(--r-chip); padding: 0.3rem 0.45rem; cursor: pointer; font: inherit; font-size: 0.82rem; line-height: 1; transition: color var(--dur-quick) var(--e-out), background var(--dur-quick) var(--e-out); }
 .ask-pastdel-yes { color: var(--slate); }
 .ask-pastdel-yes:hover, .ask-pastdel-yes:focus-visible { color: var(--oxide); background: rgba(168, 67, 42, 0.1); }
 .ask-pastdel-no { color: var(--faint); }
@@ -678,7 +761,7 @@ button:disabled {
 .ask-refs { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.35rem; }
 .ask-refs-h { display: flex; align-items: center; gap: 0.6rem; font-family: var(--ui); font-size: 0.66rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); margin-bottom: 0.15rem; }
 .ask-refs-h .line { flex: 1; height: 1px; background: var(--hair); }
-.ask-ref { display: flex; align-items: center; gap: 0.6rem; width: 100%; text-align: left; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0.5rem 0.7rem; cursor: pointer; transition: background var(--t), border-color var(--t); font: inherit; }
+.ask-ref { display: flex; align-items: center; gap: 0.6rem; width: 100%; text-align: left; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0.5rem 0.7rem; cursor: pointer; transition: background var(--dur-quick) var(--e-out), border-color var(--dur-quick) var(--e-out); font: inherit; }
 .ask-ref:hover, .ask-ref:focus-visible { background: var(--hover); border-color: var(--slate); }
 .ask-ref .num { font-family: var(--mono); font-size: 0.78rem; color: var(--slate); flex: none; }
 .ask-ref .rbody { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; flex: 1; }
@@ -686,13 +769,13 @@ button:disabled {
 .ask-ref .rkind { font-family: var(--ui); font-size: 0.62rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--stone); }
 .ask-ref .rkind.k-entity { color: var(--slate); }
 .ask-ref .rkind.k-claim { color: var(--viridian); }
-.ask-ref .rgo { color: var(--faint); flex: none; transition: transform var(--t), color var(--t); }
+.ask-ref .rgo { color: var(--faint); flex: none; transition: transform var(--dur-quick) var(--e-out), color var(--dur-quick) var(--e-out); }
 .ask-ref:hover .rgo, .ask-ref:focus-visible .rgo { color: var(--slate); transform: translateX(2px); }
 .ask-cite-status.error { margin-top: 0.5rem; font-size: 0.78rem; color: var(--oxide); }
 
 /* Save-to-KB (ASK-6) — a quiet per-answer action; the saved state confirms in viridian (not ember). */
 .ask-save-row { margin-top: 0.9rem; display: flex; align-items: center; gap: 0.5rem; font-family: var(--ui); font-size: 0.78rem; }
-.ask-save { display: inline-flex; align-items: center; gap: 0.35rem; font: inherit; font-weight: 500; color: var(--ink-2); background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0.35rem 0.65rem; cursor: pointer; transition: background var(--t), border-color var(--t); }
+.ask-save { display: inline-flex; align-items: center; gap: 0.35rem; font: inherit; font-weight: 500; color: var(--ink-2); background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0.35rem 0.65rem; cursor: pointer; transition: background var(--dur-quick) var(--e-out), border-color var(--dur-quick) var(--e-out); }
 .ask-save:hover { background: var(--hover); border-color: var(--slate); }
 .ask-save:disabled { opacity: 0.55; cursor: default; }
 .ask-save-row.is-saved { color: var(--viridian); }
@@ -702,9 +785,8 @@ button:disabled {
 /* Calm in-flight state (never a blank async gap, VUX) — a status line + a shimmer skeleton. */
 .ask-status { font-family: var(--ui); font-size: 0.85rem; color: var(--stone); }
 .ask-skel { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.7rem; }
-.ask-skel .ln { height: 0.7rem; border-radius: 5px; background: linear-gradient(90deg, var(--parchment) 25%, var(--hair) 37%, var(--parchment) 63%); background-size: 400% 100%; animation: askShimmer 1.4s ease-in-out infinite; }
+.ask-skel .ln { height: 0.7rem; } /* .skel (index.css above) supplies shape/shimmer — the canonical prose skeleton line */
 .ask-skel .w1 { width: 92%; } .ask-skel .w2 { width: 78%; } .ask-skel .w3 { width: 86%; }
-@keyframes askShimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
 
 /* Empty state — calm invitation, never a void. */
 .ask-empty { max-width: 480px; margin: 3.5rem auto 0; text-align: center; }
@@ -714,7 +796,7 @@ button:disabled {
 
 /* ── The floating ask bar — the recall console (VUX-11). Effort toggle lives here (IA-lock VUX-19). ── */
 .ask-dock { position: sticky; bottom: 0; padding: 0.8rem 0 1rem; background: linear-gradient(180deg, transparent, var(--vellum) 28%); }
-.ask-bar { max-width: 760px; margin: 0 auto; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 0.7rem 0.8rem 0.6rem; transition: border-color var(--t), box-shadow var(--t); }
+.ask-bar { max-width: 760px; margin: 0 auto; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 0.7rem 0.8rem 0.6rem; transition: border-color var(--dur-quick) var(--e-out), box-shadow var(--dur-quick) var(--e-out); }
 .ask-bar:focus-within { border-color: var(--viridian); box-shadow: var(--ring); }
 .ask-input { width: 100%; border: 0; background: transparent; resize: none; font-family: var(--voice); font-size: 1.02rem; line-height: 1.5; color: var(--ink); outline: none; max-height: 160px; }
 .ask-input::placeholder { color: var(--faint); }
@@ -722,22 +804,23 @@ button:disabled {
 
 /* Quick/Considered effort toggle — a segmented radio (the on-state lifts on linen). */
 .ask-modes { display: inline-flex; gap: 0.2rem; background: var(--parchment); border: 1px solid var(--hair); border-radius: var(--r-pill); padding: 0.18rem; }
-.ask-mode { display: inline-flex; align-items: baseline; gap: 0.3rem; font: inherit; font-family: var(--ui); font-size: 0.78rem; font-weight: 600; color: var(--stone); background: transparent; border: 0; border-radius: var(--r-pill); padding: 0.3rem 0.7rem; cursor: pointer; transition: background var(--t), color var(--t), box-shadow var(--t); }
+.ask-mode { display: inline-flex; align-items: baseline; gap: 0.3rem; font: inherit; font-family: var(--ui); font-size: 0.78rem; font-weight: 600; color: var(--stone); background: transparent; border: 0; border-radius: var(--r-pill); padding: 0.3rem 0.7rem; cursor: pointer; transition: background var(--dur-quick) var(--e-out), color var(--dur-quick) var(--e-out), box-shadow var(--dur-quick) var(--e-out); }
 .ask-mode small { font-weight: 400; font-size: 0.86em; color: var(--faint); }
 .ask-mode.is-on { color: var(--ink); background: var(--linen); box-shadow: var(--shadow-card); }
 .ask-mode.is-on small { color: var(--stone); }
 .ask-mode:not(.is-on):hover { color: var(--ink-2); }
 
 /* Send — the recall identity colour (viridian), the one emphasized action. */
-.ask-send { margin-left: auto; display: inline-flex; align-items: center; gap: 0.4rem; font-family: var(--ui); font-size: 0.86rem; font-weight: 600; color: var(--linen); background: linear-gradient(180deg, var(--viridian-2), var(--viridian)); border: 1px solid var(--viridian); border-radius: var(--r-pill); padding: 0.45rem 1rem; cursor: pointer; transition: filter var(--t), opacity var(--t); }
+.ask-send { margin-left: auto; display: inline-flex; align-items: center; gap: 0.4rem; font-family: var(--ui); font-size: 0.86rem; font-weight: 600; color: var(--linen); background: linear-gradient(180deg, var(--viridian-2), var(--viridian)); border: 1px solid var(--viridian); border-radius: var(--r-pill); padding: 0.45rem 1rem; cursor: pointer; transition: filter var(--dur-quick) var(--e-out), opacity var(--dur-quick) var(--e-out); }
 .ask-send:hover { filter: brightness(1.06); }
 .ask-send:disabled { opacity: 0.55; cursor: default; }
 .ask-send .ask-send-i { font-weight: 700; }
 .ask-hint { font-family: var(--mono); font-size: 0.66rem; color: var(--stone); margin-top: 0.45rem; }
 
-/* Reduced-motion: the seal pulse + skeleton shimmer collapse to calm static (state reads via colour). */
+/* Reduced-motion: the seal pulse collapses to calm static (state reads via colour). Skeleton shimmer
+   reduced-motion is handled once, generically, by the shared .skel rule above. */
 @media (prefers-reduced-motion: reduce) {
-  .ask-ans.is-thinking .seal, .ask-skel .ln { animation: none !important; }
+  .ask-ans.is-thinking .seal { animation: none !important; }
 }
 
 /* --- Explore view (SPEC-0039 EXPLORE) — the read-only entity-neighborhood graph. --- */
@@ -862,7 +945,7 @@ button:disabled {
 .explore-expand:hover, .explore-expand:focus-visible, .explore-expand.is-open { color: var(--slate); } /* interactive expand → accent (#415) */
 /* Expand-in-place peek (EXPLORE-7) — a neighbor's own links, indented under it, revealed with a brief
    fade that degrades to instant under reduced-motion (EXPLORE-13, the @media below). */
-.explore-subneighbors { margin: 0.1rem 0 0.3rem 1.5rem; padding-left: 0.6rem; border-left: 1px dashed var(--hair); animation: explore-reveal var(--viz-dur-state, 240ms) ease-out; }
+.explore-subneighbors { margin: 0.1rem 0 0.3rem 1.5rem; padding-left: 0.6rem; border-left: 1px dashed var(--hair); animation: explore-reveal var(--dur-state, 240ms) ease-out; }
 .explore-subneighbor-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.1rem; }
 .explore-subneighbor .explore-recenter { padding: 0.2rem 0.3rem; font-size: 0.92em; }
 .explore-sub-loading, .explore-sub-empty { font-size: 0.78rem; color: var(--stone); font-style: italic; }
@@ -899,7 +982,7 @@ button:disabled {
 .exp-legend .exp-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.3rem; vertical-align: middle; }
 .exp-legend-more { color: var(--stone); font-family: var(--mono); }
 /* edges: slate at rest; gold + brighter on the node's hover (lit incident edge) */
-.exp-edge { stroke: var(--slate); opacity: 0.34; fill: none; transition: stroke var(--viz-dur-quick) var(--e-out), opacity var(--viz-dur-quick) var(--e-out); }
+.exp-edge { stroke: var(--slate); opacity: 0.34; fill: none; transition: stroke var(--dur-quick) var(--e-out), opacity var(--dur-quick) var(--e-out); }
 .exp-edge--spec { stroke-dasharray: 3 3; opacity: 0.24; }
 /* incident edge lit gold when its node is hovered/focused (§3 hover-life; wired in exploreView). */
 .exp-edge--hot { stroke: var(--gold); opacity: 0.9; stroke-width: 2.4; }
@@ -961,7 +1044,7 @@ button:disabled {
 .health-count { font-size: 0.95rem; font-weight: 600; }
 /* A dimension = an `.hrow` glance row (tile + title/desc + count) over its findings. */
 .health-dimension { margin: 0; }
-.hrow { display: flex; align-items: center; gap: 12px; padding: 0.75rem 1.1rem; border-bottom: 0.5px solid var(--hair); transition: background var(--t); }
+.hrow { display: flex; align-items: center; gap: 12px; padding: 0.75rem 1.1rem; border-bottom: 0.5px solid var(--hair); transition: background var(--dur-quick) var(--e-out); }
 .health-dimension:last-child .hrow { border-bottom: none; }
 .hrow:hover { background: var(--hover); }
 /* #184: the severity hue lives ONLY on the tile (bg + icon, sprout/gold/oxide tokens, color-mix so it
@@ -988,7 +1071,7 @@ button:disabled {
 /* The secondary action zone (VUX-16). MAINTENANCE actions, not decisions → NO ember (DL-1): apply = slate
    interactive, dismiss = faint→oxide, working = loom (sprout), error = inline oxide. Low-emphasis at rest,
    full on row hover/focus-within so the click-through stays the primary affordance. */
-.health-actions { flex: none; display: flex; align-items: center; gap: 0.35rem; opacity: 0.6; transition: opacity var(--t); }
+.health-actions { flex: none; display: flex; align-items: center; gap: 0.35rem; opacity: 0.6; transition: opacity var(--dur-quick) var(--e-out); }
 .health-row:hover .health-actions, .health-row:focus-within .health-actions { opacity: 1; }
 .health-act { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.74rem; color: var(--slate); background: none; border: 0.5px solid var(--hair); border-radius: var(--r-chip); padding: 0.15rem 0.5rem; cursor: pointer; white-space: nowrap; }
 .health-act:hover { background: color-mix(in srgb, var(--slate) 10%, transparent); border-color: var(--slate); }
@@ -1051,10 +1134,10 @@ button:disabled {
 .ag-last .path { font-size: inherit; color: var(--faint); }
 /* Per-card "Model" disclosure — quiet, rarely opened (observe-first). */
 .ag-adv { margin-top: 0.7rem; border-top: 1px solid var(--hair); padding-top: 0.2rem; }
-.ag-adv summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.1rem 0.3rem; font-family: var(--ui); font-size: 0.75rem; color: var(--stone); transition: color var(--t); }
+.ag-adv summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.1rem 0.3rem; font-family: var(--ui); font-size: 0.75rem; color: var(--stone); transition: color var(--dur-quick) var(--e-out); }
 .ag-adv summary::-webkit-details-marker { display: none; }
 .ag-adv summary:hover { color: var(--ink); }
-.ag-adv summary .chev { transition: transform var(--t); font-size: 0.9rem; }
+.ag-adv summary .chev { transition: transform var(--dur-quick) var(--e-out); font-size: 0.9rem; }
 .ag-adv[open] summary .chev { transform: rotate(90deg); }
 .ag-adv summary .sub { margin-left: auto; font-family: var(--mono); font-size: 0.68rem; color: var(--faint); }
 .ag-adv-body { padding: 0.3rem 0.1rem 0.4rem; display: flex; flex-direction: column; gap: 0.2rem; }
@@ -1100,7 +1183,7 @@ button:disabled {
 .job-label { font-family: var(--voice); font-weight: 500; font-size: 1rem; color: var(--ink); letter-spacing: 0; }
 .job-badge { margin-left: 0.1rem; }
 /* Arm switch — a calm pill; resting = stone outline, enabled = viridian dot + ink. */
-.job-enabled { margin-left: auto; display: inline-flex; align-items: center; gap: 0.4rem; background: var(--vellum); border: 1px solid var(--hair); border-radius: var(--r-pill); padding: 0.25rem 0.7rem; font-family: var(--ui); font-size: 0.72rem; font-weight: 500; color: var(--stone); cursor: pointer; transition: color var(--t), border-color var(--t); }
+.job-enabled { margin-left: auto; display: inline-flex; align-items: center; gap: 0.4rem; background: var(--vellum); border: 1px solid var(--hair); border-radius: var(--r-pill); padding: 0.25rem 0.7rem; font-family: var(--ui); font-size: 0.72rem; font-weight: 500; color: var(--stone); cursor: pointer; transition: color var(--dur-quick) var(--e-out), border-color var(--dur-quick) var(--e-out); }
 .job-enabled .dot { width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--faint); }
 .job[data-armed='true'] .job-enabled { color: var(--viridian); border-color: rgba(47, 107, 91, 0.3); }
 .job[data-armed='true'] .job-enabled .dot { background: var(--viridian); }
@@ -1117,22 +1200,22 @@ button:disabled {
 
 .badge { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 0.05rem 0.35rem; }
 
-/* Retryable load-failure fallback (#145) — the Retry button reuses .btn; just space it from the text. */
-.load-error .load-retry { margin-left: 0.5rem; font-size: 0.85em; padding: 0.2rem 0.6rem; }
-
-/* SPEC-0058 slice-0 — the WARMING state (a full-graph read still scanning a cold/large vault) is NOT an
-   error: calm muted ink, never the --error / --viz-oxide hue, so a cold start reads as "still preparing",
-   not "broken" (KB-Lead's warming-vs-error reframe). Functional/minimal — the warming-state visual
-   co-evolves with the UX-v2 redesign per surface (STATE-13 / DL-1·DL-2). */
-.load-warming { color: var(--viz-ink-muted); font-size: 0.9rem; }
-.load-warming .load-retry { margin-left: 0.5rem; font-size: 0.85em; padding: 0.2rem 0.6rem; }
-
-/* The Retry fallback button (renderLoadError, loadGuard.ts) is the last consumer of the legacy .btn.
-   The legacy .confirm / .btn-danger were retired in the WS3 migration: Settings (their final consumer)
-   now composes the blessed .viz-confirm / .viz-btn--danger primitives, as Jobs already does. */
-.btn { appearance: none; font: inherit; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg); padding: 0.4rem 0.8rem; cursor: pointer; }
-.btn:hover { background: var(--hover); }
-.btn:disabled { opacity: 0.5; cursor: default; }
+/* Shared warming/error fallback face (#520 §9, renderWarming/renderLoadError in loadGuard.ts) — v3 linen
+   card, restyled off the legacy .card/.btn (dedicated .load-face-btn below is the last non-viz-btn button
+   in the shell; no promoted v3 Button primitive exists yet to reuse — #520 §11 open question, deferred). */
+.load-face { background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 1.1rem 1.2rem; }
+.load-face-btn { appearance: none; font: inherit; font-family: var(--ui); font-size: 0.85em; background: transparent; color: var(--ink); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0.2rem 0.6rem; margin-left: 0.5rem; cursor: pointer; transition: border-color var(--dur-quick) var(--e-out), color var(--dur-quick) var(--e-out); }
+.load-face-btn:hover { border-color: var(--slate); color: var(--slate); }
+.load-face-btn:disabled { opacity: 0.5; cursor: default; }
+/* WARMING (SPEC-0058 slice-0): a full-graph read still scanning a cold/large vault is NOT an error — calm
+   muted ink, never --oxide, so a cold start reads "still preparing" (KB-Lead's warming-vs-error reframe).
+   The churn mark loops (not the usual 1100ms one-shot) for as long as warming persists (#520 §9). */
+.load-warming { color: var(--stone); font-size: 0.9rem; display: flex; align-items: baseline; gap: 0.4rem; }
+.load-face-mark { animation-iteration-count: infinite; }
+/* ERROR: oxide reads on the border only — the copy stays --ink (contrast contract, §0/§2: oxide never
+   colors normal-size text). */
+.load-face-error { border-color: var(--oxide); }
+.load-face-error .load-error { color: var(--ink); font-size: 0.9rem; }
 
 /* --- Sources slots (shared layout; the Agents librarian rows moved to the v3 .ag-card block above) --- */
 .source-slots { list-style: none; padding: 0; margin: 1rem 0 0; display: flex; flex-direction: column; gap: 0.6rem; }
@@ -1200,7 +1283,7 @@ option { background: var(--card); color: var(--fg); }
 .rdesk-strip-head { display: flex; align-items: center; gap: 0.6rem; }
 .rdesk-id { font-family: var(--voice); font-weight: 500; font-size: 1rem; color: var(--ink); letter-spacing: 0; }
 /* Arm switch — a calm pill; resting stone, armed lifts to the clearance exposure hue. */
-.rdesk-arm { margin-left: auto; display: inline-flex; align-items: center; gap: 0.4rem; background: var(--vellum); border: 1px solid var(--hair); border-radius: var(--r-pill); padding: 0.25rem 0.7rem; font-family: var(--ui); font-size: 0.72rem; font-weight: 500; color: var(--stone); cursor: pointer; transition: color var(--t), border-color var(--t); }
+.rdesk-arm { margin-left: auto; display: inline-flex; align-items: center; gap: 0.4rem; background: var(--vellum); border: 1px solid var(--hair); border-radius: var(--r-pill); padding: 0.25rem 0.7rem; font-family: var(--ui); font-size: 0.72rem; font-weight: 500; color: var(--stone); cursor: pointer; transition: color var(--dur-quick) var(--e-out), border-color var(--dur-quick) var(--e-out); }
 .rdesk-arm .dot { width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--faint); }
 .rdesk-strip[data-armed='true'] .rdesk-arm { color: var(--ink); border-color: var(--hair); }
 .rdesk-strip[data-armed='true'][data-clearance='local-only'] .rdesk-arm { color: var(--viridian); }
@@ -1254,7 +1337,7 @@ option { background: var(--card); color: var(--fg); }
 .rdesk-add { margin-top: 1.6rem; padding-top: 1rem; border-top: 1px solid var(--hair); }
 .rdesk-add-head { display: block; font-family: var(--ui); font-size: 0.72rem; color: var(--stone); margin-bottom: 0.5rem; }
 .rdesk-tiles { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.rdesk-tile { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0.45rem 0.75rem; cursor: pointer; color: var(--ink); transition: border-color var(--t), color var(--t); }
+.rdesk-tile { display: inline-flex; align-items: center; gap: 0.4rem; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0.45rem 0.75rem; cursor: pointer; color: var(--ink); transition: border-color var(--dur-quick) var(--e-out), color var(--dur-quick) var(--e-out); }
 .rdesk-tile:hover { border-color: var(--slate); }
 .rdesk-tile[aria-pressed='true'] { border-color: var(--slate); color: var(--slate); }
 .rdesk-tile-glyph { font-size: 1rem; }
@@ -1278,7 +1361,7 @@ option { background: var(--card); color: var(--fg); }
 .rdesk-workiq-status[data-tone='wait'] .rdesk-workiq-dot { background: var(--viz-brass); }
 .rdesk-workiq-status[data-tone='error'] .rdesk-workiq-dot { background: var(--viz-oxide); }
 .rdesk-workiq-status[data-tone='busy'] .rdesk-workiq-dot,
-.rdesk-workiq-status[data-tone='idle'] .rdesk-workiq-dot { background: var(--viz-sprout); animation: viz-breathe var(--viz-dur-breathe) ease-in-out infinite; } /* active install/check transient → --viz-sprout (was ember) */
+.rdesk-workiq-status[data-tone='idle'] .rdesk-workiq-dot { background: var(--viz-sprout); animation: viz-breathe var(--dur-breathe) ease-in-out infinite; } /* active install/check transient → --viz-sprout (was ember) */
 /* idle (Checking…) is the calmer transient — ember dot but a muted text, distinct from active install. */
 .rdesk-workiq-status[data-tone='idle'] .rdesk-workiq-dot { background: var(--viz-idle); }
 .rdesk-workiq-detail { font-size: 0.72rem; color: var(--viz-ink-muted); }
@@ -1336,7 +1419,7 @@ option { background: var(--card); color: var(--fg); }
    so it gets its own secondary row rather than crowding the band the mock actually specifies. */
 .activity-controls { display: flex; flex-direction: column; gap: 0.6rem; margin: 0.9rem 0 0.6rem; }
 .act-band { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
-.act-search { flex: 1 1 auto; min-width: 15rem; display: flex; align-items: center; gap: 0.6rem; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0 0.8rem; height: 2.5rem; transition: border-color var(--t), box-shadow var(--t); }
+.act-search { flex: 1 1 auto; min-width: 15rem; display: flex; align-items: center; gap: 0.6rem; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0 0.8rem; height: 2.5rem; transition: border-color var(--dur-quick) var(--e-out), box-shadow var(--dur-quick) var(--e-out); }
 .act-search:focus-within { border-color: var(--slate); box-shadow: 0 0 0 3px rgba(58, 110, 136, 0.12); }
 .act-search svg { color: var(--faint); width: 1.05rem; height: 1.05rem; flex: none; }
 .act-search input { flex: 1 1 auto; min-width: 0; border: 0; background: transparent; outline: none; font: inherit; font-size: 0.85rem; color: var(--ink); }
@@ -1346,7 +1429,7 @@ option { background: var(--card); color: var(--fg); }
 .act-search__clear:hover, .act-search__clear:focus-visible { color: var(--ink-2); background: rgba(0, 0, 0, 0.04); }
 .act-search.has-val .act-search__clear { display: inline-flex; }
 .act-filter { position: relative; flex: none; }
-.act-filter select { appearance: none; cursor: pointer; height: 2.5rem; padding: 0 2.2rem 0 2.3rem; border-radius: var(--r-chip); background: var(--linen); border: 1px solid var(--hair); font: inherit; font-size: 0.82rem; color: var(--ink-2); font-weight: 500; transition: border-color var(--t); }
+.act-filter select { appearance: none; cursor: pointer; height: 2.5rem; padding: 0 2.2rem 0 2.3rem; border-radius: var(--r-chip); background: var(--linen); border: 1px solid var(--hair); font: inherit; font-size: 0.82rem; color: var(--ink-2); font-weight: 500; transition: border-color var(--dur-quick) var(--e-out); }
 .act-filter select:hover { border-color: var(--stone); }
 .act-filter__lead, .act-filter__chev { position: absolute; top: 50%; transform: translateY(-50%); pointer-events: none; display: flex; }
 .act-filter__lead { left: 0.8rem; color: var(--stone); }
@@ -1385,7 +1468,7 @@ option { background: var(--card); color: var(--fg); }
   padding: 0.6rem 0.7rem;
   border-radius: var(--r-chip);
   cursor: pointer;
-  transition: background var(--t);
+  transition: background var(--dur-quick) var(--e-out);
 }
 .activity-entry-head:hover { background: var(--hover); }
 .activity-entry-row .activity-trace { flex: none; padding: 0 0.7rem; white-space: nowrap; }
@@ -1497,7 +1580,7 @@ option { background: var(--card); color: var(--fg); }
 
 /* Recent activity feed — a kind-glyph tile, the summary (with highlighted refs), the age. */
 .today-feed { list-style: none; margin: 0; padding: 0.4rem 0.5rem 0.7rem; }
-.today-feed-row { display: flex; gap: 0.7rem; align-items: flex-start; padding: 0.5rem 0.6rem; border-radius: var(--r-chip); transition: background var(--t); }
+.today-feed-row { display: flex; gap: 0.7rem; align-items: flex-start; padding: 0.5rem 0.6rem; border-radius: var(--r-chip); transition: background var(--dur-quick) var(--e-out); }
 .today-feed-row:hover { background: var(--hover); }
 .today-feed-glyph { flex: 0 0 1.6rem; width: 1.6rem; height: 1.6rem; display: flex; align-items: center; justify-content: center; border-radius: var(--r-chip); border: 0.5px solid var(--hair); color: var(--stone); }
 .today-feed-glyph svg { width: 0.92rem; height: 0.92rem; }
@@ -1516,7 +1599,7 @@ option { background: var(--card); color: var(--fg); }
   margin: 0.85rem 1.1rem; display: flex; gap: 0.7rem; align-items: flex-start; padding: 0.8rem 0.9rem;
   border: 0.5px solid rgba(200, 116, 60, 0.4); border-left: 3px solid var(--ember); border-radius: var(--r-chip);
   background: linear-gradient(100deg, rgba(200, 116, 60, 0.1), rgba(200, 116, 60, 0.03) 60%);
-  box-shadow: 0 6px 16px -12px rgba(200, 116, 60, 0.5); transition: transform var(--t), box-shadow var(--t);
+  box-shadow: 0 6px 16px -12px rgba(200, 116, 60, 0.5); transition: transform var(--dur-quick) var(--e-out), box-shadow var(--dur-quick) var(--e-out);
 }
 .today-decide:hover { transform: translateY(-1px); box-shadow: 0 10px 22px -12px rgba(200, 116, 60, 0.55); }
 .today-decide-ic { flex: 0 0 1.85rem; width: 1.85rem; height: 1.85rem; display: flex; align-items: center; justify-content: center; border-radius: var(--r-chip); background: rgba(200, 116, 60, 0.12); color: var(--ember); }
@@ -1531,7 +1614,7 @@ option { background: var(--card); color: var(--fg); }
 .today-rest p { margin: 0; font-size: 0.8rem; }
 
 /* Health glance — same dimensions + severity as Health (ok=viridian · warn=gold · bad=oxide), glyph-carried. */
-.today-hrow { display: flex; align-items: center; gap: 0.7rem; padding: 0.7rem 1.1rem; border-bottom: 0.5px solid var(--hair); transition: background var(--t); }
+.today-hrow { display: flex; align-items: center; gap: 0.7rem; padding: 0.7rem 1.1rem; border-bottom: 0.5px solid var(--hair); transition: background var(--dur-quick) var(--e-out); }
 .today-hrow:last-child { border-bottom: none; }
 .today-hrow:hover { background: var(--hover); }
 .today-hi { flex: 0 0 1.85rem; width: 1.85rem; height: 1.85rem; display: flex; align-items: center; justify-content: center; border-radius: var(--r-chip); }

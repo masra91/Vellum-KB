@@ -152,9 +152,11 @@ export async function reapEphemeralWorktrees(root: string, log: DevLog = noopDev
   return { worktrees, branches };
 }
 
-/** Read the canonical worktree's current HEAD commit — the checkpoint a stage prepares off. */
-export async function canonicalHead(root: string): Promise<string> {
-  return (await simpleGit(root).revparse(['HEAD'])).trim();
+/** Read the canonical worktree's current HEAD commit — the checkpoint a stage prepares off.
+ *  #515: bounded — this runs off-lock at the top of every prepare loop, so an unbounded read against
+ *  a wedged repo (e.g. mid-cherry-pick, contended index.lock) would hang the calling stage silently. */
+export async function canonicalHead(root: string, timeoutMs?: number): Promise<string> {
+  return (await boundedGit(root, timeoutMs).revparse(['HEAD'])).trim();
 }
 
 export type AdvanceOutcome = 'advanced' | 'collision';

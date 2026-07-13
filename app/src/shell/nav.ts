@@ -5,15 +5,39 @@
 // to another — e.g. the Field Desk's escalation report → the Reviews queue (no dead affordance).
 export const NAVIGATE_EVENT = 'kb:navigate';
 
-/** Detail payload of a `kb:navigate` event — the target view id (one of the SHELL view constants). */
+/** Detail payload of a `kb:navigate` event — the target view id (one of the SHELL view constants), plus
+ *  an optional `focus` (#519 §2: e.g. an entity id/rel the ⌘K search overlay resolved to) — a view that
+ *  cares reads it off the event directly (the shell's mount-once model means a re-mount can't carry it). */
 export interface NavigateDetail {
   view: string;
+  focus?: string;
 }
 
-/** Ask the shell to switch to `view`. Fire-and-forget — a no-op if no shell is mounted (e.g. tests that
+/** Ask the shell to switch to `view`, optionally carrying a `focus` payload the target view interprets
+ *  (e.g. Explore re-centers on it). Fire-and-forget — a no-op if no shell is mounted (e.g. tests that
  *  don't mount the shell can still listen for the event to assert the intent). */
-export function navigateTo(view: string): void {
-  document.dispatchEvent(new CustomEvent<NavigateDetail>(NAVIGATE_EVENT, { detail: { view } }));
+export function navigateTo(view: string, focus?: string): void {
+  if (focus) pendingFocus = { view, focus };
+  document.dispatchEvent(new CustomEvent<NavigateDetail>(NAVIGATE_EVENT, { detail: { view, ...(focus ? { focus } : {}) } }));
+}
+
+// A view's FIRST-EVER mount can be a direct synchronous side effect of this same navigateTo() dispatch
+// (the shell's mount-once model, SHELL-8, lazily mounts on first activation) — a listener the mounting
+// view registers during that mount can't retroactively catch the event that's already mid-dispatch (DOM
+// event semantics). `pendingFocus` is the fallback a view consults once at mount start, in ADDITION to
+// listening for `kb:navigate` for subsequent (already-mounted) jumps — one value, always freshly consumed.
+let pendingFocus: { view: string; focus: string } | null = null;
+
+/** Consume (read-and-clear) the pending focus for `view`, if `navigateTo` set one for it. Call once at
+ *  mount start AND from a `kb:navigate` listener — both paths funnel through this so the value can never
+ *  go stale (a later unrelated mount can't pick up an old jump). */
+export function consumePendingFocus(view: string): string | undefined {
+  if (pendingFocus?.view === view) {
+    const f = pendingFocus.focus;
+    pendingFocus = null;
+    return f;
+  }
+  return undefined;
 }
 
 // --- SPEC-0060 VUX-3: the top bar's per-view contextual filter slot ---

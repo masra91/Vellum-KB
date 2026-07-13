@@ -593,7 +593,8 @@ describe('Settings · #145 load resilience (no infinite spinner on a hung IPC)',
     const getState = vi.fn<KbApi['getState']>().mockReturnValueOnce(new Promise(() => {})); // hangs
     (window as unknown as { kbApi: Partial<KbApi> }).kbApi = { getState };
     const mounted = mountSettings(root);
-    expect(root.textContent).toContain('Loading…'); // spinner initially
+    expect(root.querySelector('[aria-busy="true"]')).not.toBeNull(); // skeleton initially (#520)
+    expect(root.textContent).not.toContain('Loading…'); // never bare "Loading…" (#520 §8)
 
     await vi.advanceTimersByTimeAsync(LOAD_TIMEOUT_MS); // trip the timeout
     await mounted;

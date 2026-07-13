@@ -121,13 +121,24 @@ export class Semaphore {
 
   /** Whether a BACKGROUND acquisition for `stage` may be granted right now under the reservation rule
    *  (SCALE-3). A stage's FIRST slot (its reservation) is always grantable while any slot is free; a
-   *  2nd+ slot (or an untagged acquisition) is granted only if it leaves ≥1 free per other stage still
-   *  owed its reserved slot. */
+   *  2nd+ slot is granted only if it leaves ≥1 free per other stage still owed its reserved slot.
+   *
+   *  UNTAGGED background (`stage === undefined` — jobs/researchers, ASK-16/#514) gets an ADDITIONAL,
+   *  UNCONDITIONAL interactive reservation: it may never consume the ceiling's LAST slot, so a pool
+   *  saturated by researchers (which can each hold a slot up to 60min) never makes an interactive Ask
+   *  wait for a release — it's granted the reserved slot immediately. This is deliberately scoped to
+   *  UNTAGGED work only, not tagged pipeline stages: a solo ingestion stage (short bursts, already
+   *  governed by the SCALE-3 rule above) still fans out to the FULL ceiling when nothing else is
+   *  contending — reserving unconditionally there would cut real ingestion throughput for a
+   *  reservation that mostly sits idle. Below ceiling=2 there's nothing to reserve without starving
+   *  background outright, so the reserve is a no-op there. */
   private canGrantBackground(stage: string | undefined): boolean {
     if (this.inFlight >= this.ceiling) return false;
     const free = this.ceiling - this.inFlight;
     if (stage !== undefined && (this.inFlightByStage.get(stage) ?? 0) === 0) return true; // reserved first slot
-    return free > this.stagesNeedingReservation(stage);
+    if (stage !== undefined) return free > this.stagesNeedingReservation(stage);
+    const interactiveReserve = this.ceiling > 1 ? 1 : 0;
+    return free > interactiveReserve;
   }
 
   /** Re-evaluate the queues after a release/resize: priority waiters first (ASK-16, always grantable

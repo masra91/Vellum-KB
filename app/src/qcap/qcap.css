@@ -140,7 +140,7 @@
   border-radius: var(--r-chip);
   padding: 0.5rem 0.6rem;
   outline: none;
-  transition: border-color var(--t), box-shadow var(--t);
+  transition: border-color var(--dur-quick) var(--e-out), box-shadow var(--dur-quick) var(--e-out);
 }
 .qcap-field .qcap-input::placeholder {
   color: var(--faint);

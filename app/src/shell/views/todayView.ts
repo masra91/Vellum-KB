@@ -11,7 +11,7 @@
 import { esc, emptyState } from '../html';
 import { navIcon } from '../icons';
 import { navigateTo } from '../nav';
-import { renderLoadError, renderWarming, reportLoadFailure } from '../loadGuard';
+import { renderLoadError, renderWarming, reportLoadFailure, paintSkeleton } from '../loadGuard';
 import type { TodayActivityItem, TodayDecision, TodayHealthRow, TodayProjection, TodayProjectionView, TodayStat, TodayStation } from '../../kb/types';
 
 const HEADER = `<h1 class="today-title viz-signage">Today</h1>`;
@@ -44,7 +44,7 @@ const HEALTH_ICON: Record<TodayHealthRow['status'], string> = { ok: 'circle-chec
 
 export async function mountToday(container: HTMLElement): Promise<void> {
   const state: TodayState = {};
-  container.innerHTML = `<div class="today viz-surface">${HEADER}<p class="viz-body">Loading…</p></div>`;
+  paintSkeleton(container, HEADER, 'prose');
   await load(container, state);
 }
 

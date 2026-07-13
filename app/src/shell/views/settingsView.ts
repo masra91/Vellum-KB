@@ -9,7 +9,7 @@
 // segment, focus roves with arrow keys, and the choice is reflected via `aria-checked`. The autonomy
 // confirm-gate (guarded↔autonomous) re-wires onto the segment, not a removed select.
 import { esc } from '../html';
-import { withTimeout, renderLoadError } from '../loadGuard';
+import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import { mountAboutPanel } from '../aboutPanel';
 import { mountWatchedFolders } from './watchedFolders';
 import { readStoredTheme, setTheme, type Theme } from '../theme';
@@ -69,7 +69,7 @@ const STAGE_LABELS: Record<ScaleStage, string> = {
 };
 
 export async function mountSettings(container: HTMLElement): Promise<void> {
-  container.innerHTML = `<div class="settings-v2 viz-surface"><div class="card"><h1 class="settings-title viz-voice">Settings</h1><p class="settings-note">Loading…</p></div></div>`;
+  paintSkeleton(container, `<h1 class="settings-title viz-voice">Settings</h1>`, 'cards');
 
   // Settings must never error the shell. Any IPC failure (incl. a #145 hang — withTimeout bounds
   // every await below) degrades to a friendly, retryable message.
@@ -663,6 +663,7 @@ function wireReplay(container: HTMLElement): void {
   go.addEventListener('click', async () => {
     go.disabled = true;
     cancel.disabled = true;
+    go.classList.add('is-busy'); // #520 §10 — disable-only surfaces get the same visible busy state
     status.textContent = 'Cleaning & rebuilding…';
     try {
       const res = await window.kbApi.fullReplay();
@@ -673,6 +674,7 @@ function wireReplay(container: HTMLElement): void {
       showConfirm(false);
       go.disabled = false;
       cancel.disabled = false;
+      go.classList.remove('is-busy');
     }
   });
 }
@@ -725,6 +727,7 @@ async function wireQuiesce(container: HTMLElement): Promise<void> {
 
   btn.addEventListener('click', async () => {
     btn.disabled = true;
+    btn.classList.add('is-busy'); // #520 §10
     try {
       const s = await window.kbApi.quiesce();
       render(s);
@@ -733,16 +736,19 @@ async function wireQuiesce(container: HTMLElement): Promise<void> {
       status.textContent = 'Could not start shutdown preparation.';
     } finally {
       btn.disabled = false;
+      btn.classList.remove('is-busy');
     }
   });
   resumeBtn.addEventListener('click', async () => {
     resumeBtn.disabled = true;
+    resumeBtn.classList.add('is-busy'); // #520 §10
     try {
       render(await window.kbApi.resume());
     } catch {
       status.textContent = 'Could not resume.';
     } finally {
       resumeBtn.disabled = false;
+      resumeBtn.classList.remove('is-busy');
     }
   });
 

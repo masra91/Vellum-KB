@@ -102,7 +102,8 @@ vi.mock('./pipeline', () => ({
 
 vi.mock('../kb/recall', () => ({ recall: mocks.recall }));
 
-import { registerIpc, initPipeline } from './ipc';
+import { registerIpc, initPipeline, stopRecallClient } from './ipc';
+import { setResolvedLaunchModel } from '../kb/copilotModel';
 import { createKb } from '../kb/vault';
 import { computeGraphProjection } from '../kb/graphProjection';
 import { obsidianOpenUri } from '../kb/citationLink';
@@ -351,6 +352,102 @@ describe('SPEC-0026 ASK — kb:ask grounded recall', () => {
     expect(res.grounded).toBe(true);
     expect(res.citations[0].ref).toBe('claims/person/ada-lovelace.md');
     expect(mocks.recall).not.toHaveBeenCalled();
+  });
+});
+
+// #514: kb:ask previously built a fresh RecallClient (→ a fresh CLI server) on every call. ipc.ts now
+// passes ONE process-wide client via opts.client — proven here at the wiring level by identity (the
+// underlying "one CopilotClient" guarantee is recallAgent.test.ts's job).
+describe('#514 — kb:ask reuses ONE process-wide RecallClient across questions', () => {
+  async function configureVault(p: string): Promise<void> {
+    await fs.writeFile(path.join(state.userData, 'kb-app.config.json'), JSON.stringify({ activeVaultPath: p }) + '\n');
+  }
+
+  it('passes the SAME client instance (opts.client) on every kb:ask call — 2nd+ question skips the server boot', async () => {
+    await configureVault(vaultDir);
+    await invoke('kb:ask', { question: 'Q1', history: [] });
+    await invoke('kb:ask', { question: 'Q2', history: [] });
+    const client1 = (mocks.recall.mock.calls[0] as unknown[])[2] as { client?: unknown };
+    const client2 = (mocks.recall.mock.calls[1] as unknown[])[2] as { client?: unknown };
+    expect(client1.client).toBeDefined();
+    expect(client1.client).toBe(client2.client); // identical reference — reused, not rebuilt
+  });
+
+  it('stopRecallClient() is safe to call before any ask ever ran (idempotent no-op)', async () => {
+    await expect(stopRecallClient()).resolves.toBeUndefined();
+    await expect(stopRecallClient()).resolves.toBeUndefined();
+  });
+
+  it('a subsequent ask after stopRecallClient() builds a FRESH client (a clean client for the next question, not a stale disconnected one)', async () => {
+    await configureVault(vaultDir);
+    await invoke('kb:ask', { question: 'Q1', history: [] });
+    const before = (mocks.recall.mock.calls[0] as unknown[])[2] as { client?: unknown };
+    await stopRecallClient();
+    await invoke('kb:ask', { question: 'Q2', history: [] });
+    const after = (mocks.recall.mock.calls[1] as unknown[])[2] as { client?: unknown };
+    expect(after.client).not.toBe(before.client);
+  });
+});
+
+// #514: the honest Quick tier is reasoningEffort ONLY — VUX-11 (ratified, PM-confirmed 2026-07-13) rules
+// out a model swap for effort: recall depth (tool-call/time budget, tested elsewhere) + reasoningEffort
+// are the only levers. Quick and Considered resolve the SAME (untiered, global) model.
+describe('#514 — honest Quick tier: reasoningEffort only, model is UNCHANGED by effort (VUX-11)', () => {
+  async function configureVault(p: string): Promise<void> {
+    await fs.writeFile(path.join(state.userData, 'kb-app.config.json'), JSON.stringify({ activeVaultPath: p }) + '\n');
+  }
+
+  afterEach(() => {
+    setResolvedLaunchModel(null);
+  });
+
+  it('effort:"quick" forwards reasoningEffort:"low" but resolves the SAME global model as considered', async () => {
+    await configureVault(vaultDir);
+    setResolvedLaunchModel('claude-opus-4.8');
+    await invoke('kb:ask', { question: 'Who?', history: [], effort: 'quick' });
+    const opts = (mocks.recall.mock.calls[0] as unknown[])[2] as { model?: string; reasoningEffort?: string; effort?: string };
+    expect(opts.model).toBe('claude-opus-4.8'); // NOT a lighter model — VUX-11: no model swap for effort
+    expect(opts.reasoningEffort).toBe('low');
+    expect(opts.effort).toBe('quick');
+  });
+
+  it('effort:"considered" (or omitted) resolves the same model, no reasoningEffort override', async () => {
+    await configureVault(vaultDir);
+    setResolvedLaunchModel('claude-opus-4.8');
+    await invoke('kb:ask', { question: 'Who?', history: [], effort: 'considered' });
+    const opts = (mocks.recall.mock.calls[0] as unknown[])[2] as { model?: string; reasoningEffort?: string; effort?: string };
+    expect(opts.model).toBe('claude-opus-4.8');
+    expect(opts.reasoningEffort).toBeUndefined();
+    expect(opts.effort).toBe('considered');
+  });
+
+  it('quick and considered resolve to the IDENTICAL model — effort never changes which model runs', async () => {
+    await configureVault(vaultDir);
+    setResolvedLaunchModel('claude-sonnet-4.6');
+    await invoke('kb:ask', { question: 'Q1', history: [], effort: 'quick' });
+    await invoke('kb:ask', { question: 'Q2', history: [], effort: 'considered' });
+    const quickOpts = (mocks.recall.mock.calls[0] as unknown[])[2] as { model?: string };
+    const consideredOpts = (mocks.recall.mock.calls[1] as unknown[])[2] as { model?: string };
+    expect(quickOpts.model).toBe(consideredOpts.model);
+  });
+});
+
+// #514: a live Ask pushes tool-call progress back to the SAME renderer that invoked it, so the status
+// line can name the in-flight tool + call count instead of a static "Searching…" line for the whole run.
+describe('#514 — kb:ask pushes live progress to the invoking renderer', () => {
+  async function configureVault(p: string): Promise<void> {
+    await fs.writeFile(path.join(state.userData, 'kb-app.config.json'), JSON.stringify({ activeVaultPath: p }) + '\n');
+  }
+
+  it('passes an onProgress callback that sends kb:askProgress on the invoking sender', async () => {
+    await configureVault(vaultDir);
+    const send = vi.fn();
+    const fn = state.handlers.get('kb:ask')!;
+    await fn({ sender: { send } }, { question: 'Who?', history: [] });
+    const opts = (mocks.recall.mock.calls[0] as unknown[])[2] as { onProgress?: (evt: unknown) => void };
+    expect(typeof opts.onProgress).toBe('function');
+    opts.onProgress!({ phase: 'tool-call', tool: 'entityLookup', used: 1, max: 4 });
+    expect(send).toHaveBeenCalledWith('kb:askProgress', { phase: 'tool-call', tool: 'entityLookup', used: 1, max: 4 });
   });
 });
 
@@ -739,6 +836,20 @@ describe('SPEC-0058 slice-0 — Explore + Health evergreen-graph read path (REAL
     expect(proj.scanned).toBe(2); // both entities were really walked + parsed
     expect(proj.dimensions.map((d) => d.key)).toEqual(['dangling', 'orphans', 'thin']); // the contract shape
     expect(['ok', 'attention']).toContain(proj.overall);
+  });
+
+  it('SPEC-0061 T1 (#530): kb:healthReport serves from the SQLite library index, building it on first read', async () => {
+    await seedGraphVault();
+    const dbPath = path.join(vaultDir, '.kb', 'cache', 'library.db');
+    await expect(fs.access(dbPath)).rejects.toThrow(); // no index yet — proves the NEXT call is what builds it
+
+    const proj = await invoke<{ scanned: number }>('kb:healthReport');
+    expect(proj.scanned).toBe(2);
+    await expect(fs.access(dbPath)).resolves.toBeUndefined(); // the index is now on disk — this call went through it
+
+    // A second call reuses the same on-disk index and still returns the same, correct scan.
+    const proj2 = await invoke<{ scanned: number }>('kb:healthReport');
+    expect(proj2.scanned).toBe(2);
   });
 
   it('all three handlers degrade to safe empty results when no vault is active (never throw)', async () => {

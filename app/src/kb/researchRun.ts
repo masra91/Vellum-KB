@@ -19,6 +19,7 @@ import { admitResearchPass } from './researchCeiling';
 import { deriveNotebook, writeNotebook } from './researchNotebook';
 import { appendRun, type RunLedgerEntry } from './researchLedger';
 import { isSafeResearcherId, RESEARCH_INSTANCE_CEILING, RESEARCH_INSTANCE_WINDOW_MS, type ResearcherConfig, type ResearchRequest, type ResearchProvenance } from './researchers';
+import type { Mutex } from './stageLock';
 
 /** RMEM-2: append one run to the researcher's durable ledger — the first-class run-memory the next pass
  *  consults to skip covered ground + resume the frontier. The pursued gap facet is the missing facet the
@@ -79,6 +80,16 @@ export interface RunResearcherDeps {
    *  (the cycle): the caller (makeResearchDeps) binds the gate + neighborhood reader. Absent → cold start
    *  (unchanged behavior). Orient reads NEVER touch the egress fetch counter — they're a separate budget. */
   orient?: (r: ResearcherConfig, req: ResearchRequest) => Promise<{ orientedReq: ResearchRequest; reads: number; angle: string }>;
+  /**
+   * #517: the shared canonical-writer lock, serializing ONLY the final `captureToInbox` commit below —
+   * never the (potentially slow, network) `deps.research()` egress call above it, which would otherwise
+   * hold the lock for a whole research pass and starve every other capture/advance. Every production
+   * caller (scheduler standing pass, inline sweep, Run-now, review-resume) supplies it; tests that don't
+   * exercise concurrent writers may omit it (add-only unique ULID paths never content-collide, but an
+   * omitted lock can still race another writer's `git add`/`commit` on the same index — the #517
+   * mechanism).
+   */
+  lock?: Mutex;
 }
 
 export interface RunResearcherResult {
@@ -185,10 +196,13 @@ export async function runResearcher(root: string, r: ResearcherConfig, req: Rese
     fetchedAt,
   };
   // Contained write: ULID path, agent supplies only the body. origin:'secondary' → re-enters Decompose.
-  const out = await captureToInbox(root, `researcher:${r.id}`, [{ kind: 'text', text: findings.note }], Date.parse(fetchedAt) || Date.now(), {
-    origin: 'secondary',
-    research: provenance,
-  });
+  // #517: only THIS commit is lock-scoped — the egress call above already finished.
+  const doCapture = () =>
+    captureToInbox(root, `researcher:${r.id}`, [{ kind: 'text', text: findings.note }], Date.parse(fetchedAt) || Date.now(), {
+      origin: 'secondary',
+      research: provenance,
+    });
+  const out = deps.lock ? await deps.lock.run(doCapture, `researcher:${r.id}`) : await doCapture();
 
   await appendAuditEvent(root, {
     actor: 'researcher',

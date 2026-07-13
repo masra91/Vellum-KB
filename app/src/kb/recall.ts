@@ -48,6 +48,16 @@ export interface Citation {
   label?: string; // human label: entity name, claim statement excerpt, …
 }
 
+/** #514: one retrieval tool-call's progress, emitted synchronously as the SDK invokes each tool — so the
+ *  renderer can name the in-flight tool + call count within the same tick the model calls it (well under
+ *  the 500ms AC), instead of staring at a static "Searching…" line for the whole 40-65s run. */
+export interface AskProgressEvent {
+  phase: 'tool-call' | 'budget-exhausted';
+  tool?: string;
+  used: number;
+  max: number;
+}
+
 export interface AskResult {
   question: string;
   /** Markdown answer; substantive assertions carry inline citation markers (ASK-1/7). */
@@ -149,6 +159,9 @@ export interface RecallSessionConfig {
   systemMessage?: { mode?: 'append' | 'replace'; content: string };
   tools?: RecallToolDef[];
   allowedTools?: string[];
+  /** #514: SDK-side reasoning-effort lever (gated per-model — the SDK ignores it for a model that
+   *  doesn't support it). Set by recall() when the caller passes `opts.reasoningEffort`. */
+  reasoningEffort?: string;
 }
 
 export interface RecallSession {
@@ -200,6 +213,16 @@ export interface RecallOptions {
    * "incomplete" (ORCH-7), never a bare timeout.
    */
   sessionBudgetMs?: number;
+  /** #514: SDK-side reasoning-effort lever, forwarded to the session verbatim (gated per-model on the
+   *  SDK side — a model that doesn't support it just ignores it). Set alongside a quick-tier model. */
+  reasoningEffort?: string;
+  /** #514: the tier label this run was asked at (e.g. 'quick' | 'considered') — recorded honestly on the
+   *  trace so it reflects the tier that ACTUALLY ran, not just what was requested. Purely descriptive;
+   *  recall() does not branch on this value (ipc.ts already resolved the model/levers from it). */
+  effort?: string;
+  /** #514: fired synchronously on every retrieval tool call (+ once on budget exhaustion) so a live caller
+   *  can render "looking up X — retrieval N of M" instead of a static status line. Never awaited/blocking. */
+  onProgress?: (evt: AskProgressEvent) => void;
 }
 
 export const DEFAULT_MAX_TOOL_CALLS = 12;
@@ -266,11 +289,13 @@ export async function recall(root: string, q: RecallQuestion | string, opts: Rec
 
   const budget = { used: 0, truncated: false };
   const captured: Captured = { answered: false, answer: '', citations: [], declaredGrounded: true };
-  const toolDefs = buildRecallToolDefs(tools, captured, budget, maxToolCalls);
+  const toolDefs = buildRecallToolDefs(tools, captured, budget, maxToolCalls, opts.onProgress);
 
   let trace: AgentTrace;
   let result: AskResult | null = null;
   let sessionIncomplete = false; // ASK-17(c): the session ran out of budget mid-flight after a partial
+  let modelUsed = opts.model; // #514: the trace records what ACTUALLY ran, not just what was requested —
+  // updated below if the auto-fallback retry fires (a stale pin never silently mislabels the trace).
   try {
     // ASK-16: recall is INTERACTIVE-PRIORITY — acquire a slot from the global pool (it no longer
     // bypasses the safety ceiling) through the priority lane, so the human query reserves capacity
@@ -279,6 +304,7 @@ export async function recall(root: string, q: RecallQuestion | string, opts: Rec
     // One SDK session attempt with a given model id. Acquires/releases its own interactive slot so a
     // model-fallback retry (below) gets a fresh slot rather than holding one across both attempts.
     const runSession = async (model: string | undefined): Promise<void> => {
+      modelUsed = model;
       const releaseSlot = await acquireSlot();
       try {
         const session = await client.createSession({
@@ -286,6 +312,7 @@ export async function recall(root: string, q: RecallQuestion | string, opts: Rec
           systemMessage: { mode: 'append', content: RECALL_SKILL },
           tools: toolDefs,
           allowedTools: [...TOOL_NAMES, SUBMIT_ANSWER_TOOL],
+          reasoningEffort: opts.reasoningEffort,
         });
         try {
           // ASK-17: wait up to the configured budget for `session.idle` (vs the SDK's tight 60s default).
@@ -306,7 +333,7 @@ export async function recall(root: string, q: RecallQuestion | string, opts: Rec
       if (!isModelUnavailableError(err)) throw err;
       await runSession(COPILOT_MODEL_AUTO);
     }
-    trace = { via: 'copilot', runtime: 'copilot', ok: captured.answered, at: clock() };
+    trace = { via: 'copilot', runtime: 'copilot', ok: captured.answered, at: clock(), model: modelUsed, effort: opts.effort };
   } catch (err) {
     const busy = err instanceof CopilotCapacityTimeoutError;
     if (!busy && captured.answered) {
@@ -314,7 +341,7 @@ export async function recall(root: string, q: RecallQuestion | string, opts: Rec
       // answer — keep that best grounded PARTIAL + flag it incomplete; fall through to finalize. Never
       // discard real grounded work for a bare timeout throw (ORCH-7).
       sessionIncomplete = true;
-      trace = { via: 'copilot', runtime: 'copilot', ok: true, at: clock() };
+      trace = { via: 'copilot', runtime: 'copilot', ok: true, at: clock(), model: modelUsed, effort: opts.effort };
     } else {
       // ASK-16 honest fast-fail (capacity) OR a hard failure with nothing captured (SDK/CLI unavailable,
       // a budget exhausted before any answer) → honest, ungrounded result; never fabricate (ORCH-7).
@@ -327,7 +354,7 @@ export async function recall(root: string, q: RecallQuestion | string, opts: Rec
         grounded: false,
         toolCalls: budget.used,
         truncated: true,
-        trace: { via: 'copilot', ok: false, error: err instanceof Error ? err.message : String(err), at: clock() },
+        trace: { via: 'copilot', ok: false, error: err instanceof Error ? err.message : String(err), at: clock(), effort: opts.effort },
       };
     }
   }
@@ -358,10 +385,44 @@ export async function recall(root: string, q: RecallQuestion | string, opts: Rec
   return result;
 }
 
-/** The user-turn prompt: the question plus any prior conversation (ASK-8). The skill is the system message. */
+// #514: bound the conversation history that goes into every prompt — before this, the FULL history was
+// resent verbatim on every turn (`recall.ts:362-365`), so prompt bytes grew unbounded with conversation
+// length. Cap to the last K turns (older turns dropped, honestly noted) and cap EACH turn's text — so the
+// history section has a real constant byte ceiling (K × 2 × per-turn cap), independent of how long the
+// conversation has run.
+const MAX_HISTORY_TURNS = 10;
+const MAX_HISTORY_TURN_CHARS = 2000;
+
+function truncateForHistory(s: string): string {
+  return s.length > MAX_HISTORY_TURN_CHARS ? `${s.slice(0, MAX_HISTORY_TURN_CHARS)}…[truncated]` : s;
+}
+
+/** The user-turn prompt: the question plus any prior conversation (ASK-8), bounded (#514). The skill is
+ *  the system message. */
 function buildUserPrompt(question: string, history: RecallTurn[]): string {
-  const convo = history.length > 0 ? history.map((h) => `Q: ${h.question}\nA: ${h.answer}`).join('\n') + '\n\n' : '';
+  const capped = history.slice(-MAX_HISTORY_TURNS);
+  const omitted = history.length - capped.length;
+  const note = omitted > 0 ? `_(${omitted} earlier turn(s) omitted for length)_\n\n` : '';
+  const convo =
+    capped.length > 0
+      ? note + capped.map((h) => `Q: ${truncateForHistory(h.question)}\nA: ${truncateForHistory(h.answer)}`).join('\n') + '\n\n'
+      : '';
   return `${convo}Question: ${question}\n\nRetrieve from the KB, then finish by calling ${SUBMIT_ANSWER_TOOL} with your grounded answer and citations.`;
+}
+
+// #514: no single tool result reaches the session over this bound — `readSource`/`readNode` could return
+// a whole (possibly multi-MB) file verbatim into context. Windowed (head/tail) rather than a hard cut, so
+// the model still sees the START (usually the most relevant framing) and END (often a conclusion/summary)
+// of a long document, with an honest note in between naming what was dropped.
+const MAX_TOOL_RESULT_BYTES = 32 * 1024;
+const TOOL_RESULT_WINDOW_CHARS = 12 * 1024; // head + tail, leaving headroom under the 32KB bound for the note
+
+function windowToolResult(json: string): string {
+  if (Buffer.byteLength(json, 'utf8') <= MAX_TOOL_RESULT_BYTES) return json;
+  const head = json.slice(0, TOOL_RESULT_WINDOW_CHARS);
+  const tail = json.slice(-TOOL_RESULT_WINDOW_CHARS);
+  const droppedChars = json.length - head.length - tail.length;
+  return `${head}\n…[truncated ~${droppedChars} chars — this result exceeded the ${MAX_TOOL_RESULT_BYTES / 1024}KB per-call bound]…\n${tail}`;
 }
 
 /**
@@ -374,6 +435,7 @@ export function buildRecallToolDefs(
   captured: Captured,
   budget: { used: number; truncated: boolean },
   maxToolCalls: number,
+  onProgress?: (evt: AskProgressEvent) => void,
 ): RecallToolDef[] {
   const retrieval = (
     name: ToolName,
@@ -388,13 +450,17 @@ export function buildRecallToolDefs(
     handler: async (rawArgs) => {
       if (budget.used >= maxToolCalls) {
         budget.truncated = true;
+        onProgress?.({ phase: 'budget-exhausted', tool: name, used: budget.used, max: maxToolCalls });
         return `Retrieval budget exhausted (${maxToolCalls} calls). Do not call more retrieval tools — call ${SUBMIT_ANSWER_TOOL} now with your best grounded answer.`;
       }
       budget.used++;
+      // #514: fire BEFORE the (possibly slow) file IO below, synchronously with the SDK's tool-call —
+      // so a live status line updates within the same tick the model calls the tool, not after it resolves.
+      onProgress?.({ phase: 'tool-call', tool: name, used: budget.used, max: maxToolCalls });
       const args = (rawArgs ?? {}) as Record<string, unknown>;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const out = await (tools[name] as (a: any) => Promise<unknown>)(args);
-      return JSON.stringify(out ?? null);
+      return windowToolResult(JSON.stringify(out ?? null));
     },
   });
 

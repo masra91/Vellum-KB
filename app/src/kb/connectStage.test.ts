@@ -10,7 +10,8 @@ import { createKb } from './vault';
 import { ulid, dateShard } from './ulid';
 import { renderEntityNode, entityFileRel, LINKS_BLOCK_START } from './connectDoc';
 import { applyProse } from './composeDoc';
-import { connectOne, readConnectQueue, ConnectStage, DEFAULT_MAX_ATTEMPTS, linkOne, readLinkQueue, dedupClaimsOnce, linkOrphansOnce, listConnectSetAsideItems, retryConnectItem, dismissConnectItem, readResolveAudit } from './connectStage';
+import { connectOne, readConnectQueue, ConnectStage, DEFAULT_MAX_ATTEMPTS, linkOne, linkOneWouldChange, readLinkQueue, dedupClaimsOnce, linkOrphansOnce, listConnectSetAsideItems, retryConnectItem, dismissConnectItem, readResolveAudit } from './connectStage';
+import { captureToInbox } from './ingest';
 import { cohesionFromFiles } from './cohesion';
 import { resolveIndexLockPath, GATE3_STALE_AGE_MS } from './canonicalLockHeal';
 import { readDisambiguationDecisions, decisionForPair } from './disambiguationDecisions';
@@ -1430,6 +1431,126 @@ describe.skipIf(!gitAvailable)('SPEC-0050 Directives slice-1 — answered disamb
       expect(decisionForPair(await readDisambiguationDecisions(root), a.id, c.id)).toBeUndefined();
       await connectOne(root, key, pairReviewDecider([a.id, c.id], a.id));
       expect(await findOpenReviews(root)).toHaveLength(0); // settled by directive (DIR-3)
+    });
+  });
+});
+
+// #507 PERF-E3: connect's idle sweep did whole-vault work (readLinkQueue's O(N) claims/entities walk +
+// linkOne/linkOrphansOnce/dedupClaimsOnce's own worktree-ensure+reads) unconditionally UNDER THE LOCK,
+// every 30s, forever — even on an idle vault where nothing had changed since the last pass. That's the
+// mechanism behind "hangs during ingest" and capture latency spikes (captures queue behind the sweep).
+describe.skipIf(!gitAvailable)('#507 connect sweep off-lock (HEAD-gate + off-lock byte-stable prefilter)', () => {
+  it('linkOneWouldChange predicts exactly what linkOne would do: true before, false after (idempotent)', async () => {
+    await withTempVault(async (root) => {
+      await createKb({ path: root, initGitIfNeeded: true });
+      const steve = await seedNode(root, 'person', 'Steve Jobs', ['sources/a/01SA']);
+      await seedNode(root, 'organization', 'Apple', ['sources/b/01SB']);
+      await seedClaimRelatesTo(root, steve.rel, 'Co-founded Apple.', ['Apple']);
+      await commitAll(root, 'seed');
+
+      expect(await linkOneWouldChange(root, steve.rel)).toBe(true); // a real link is pending
+      await linkOne(root, steve.rel);
+      expect(await linkOneWouldChange(root, steve.rel)).toBe(false); // now byte-stable — nothing to do
+      // linkOne agrees: calling it again is a confirmed no-op (regression-proof the two never disagree).
+      expect((await linkOne(root, steve.rel)).changed).toBe(false);
+    });
+  });
+
+  it('linkOneWouldChange is a safe (never-hanging) no-op for a since-merged/gone node', async () => {
+    await withTempVault(async (root) => {
+      await createKb({ path: root, initGitIfNeeded: true });
+      expect(await linkOneWouldChange(root, 'entities/person/nobody.md')).toBe(false);
+    });
+  });
+
+  // Fake-clock-equivalent HEAD-gate proof (AC: "linkOne not invoked when HEAD unchanged"): the FIRST
+  // sweep on a vault with pending link work runs the tail for real (and, since it fully processed the
+  // queue it saw, immediately caches the fresh post-commit HEAD as converged); every sweep AFTER that,
+  // with a truly unchanged canonical HEAD, is skipped outright — 0 additional readLinkQueue/linkOne/
+  // linkOrphansOnce/dedupClaimsOnce calls, proven via the tail-run/skip counters, not timing (deterministic).
+  it('HEAD-gate: the link/orphan/dedup tail runs once, then is SKIPPED entirely while HEAD stays unchanged', async () => {
+    await withTempVault(async (root) => {
+      await createKb({ path: root, initGitIfNeeded: true });
+      const steve = await seedNode(root, 'person', 'Steve Jobs', ['sources/a/01SA']);
+      await seedNode(root, 'organization', 'Apple', ['sources/b/01SB']);
+      await seedClaimRelatesTo(root, steve.rel, 'Co-founded Apple.', ['Apple']);
+      await commitAll(root, 'seed');
+
+      const stage = new ConnectStage(root, oneClusterDecider('unused'), new Mutex());
+      await stage.poke(); // first sweep: real work (converges the link) → tail ran, then cached
+      expect(stage.connectSweepTailStats()).toEqual({ skipped: 0, ran: 1 });
+      expect((await fs.readFile(path.join(root, steve.rel), 'utf8'))).toContain('[[');
+
+      await stage.poke(); // second sweep, HEAD unchanged (nothing else committed) → tail SKIPPED
+      expect(stage.connectSweepTailStats()).toEqual({ skipped: 1, ran: 1 });
+      await stage.poke(); // idempotent — stays skipped indefinitely while idle
+      expect(stage.connectSweepTailStats()).toEqual({ skipped: 2, ran: 1 });
+    });
+  });
+
+  it('HEAD-gate: a NEW commit (HEAD moves) makes the next sweep re-run the tail, not skip it', async () => {
+    await withTempVault(async (root) => {
+      await createKb({ path: root, initGitIfNeeded: true });
+      const steve = await seedNode(root, 'person', 'Steve Jobs', ['sources/a/01SA']);
+      await seedNode(root, 'organization', 'Apple', ['sources/b/01SB']);
+      await seedClaimRelatesTo(root, steve.rel, 'Co-founded Apple.', ['Apple']);
+      await commitAll(root, 'seed');
+
+      const stage = new ConnectStage(root, oneClusterDecider('unused'), new Mutex());
+      await stage.poke();
+      expect(stage.connectSweepTailStats()).toEqual({ skipped: 0, ran: 1 });
+
+      // An unrelated capture lands directly on canonical (simulating another writer's commit).
+      await captureToInbox(root, 'test', [{ kind: 'text', text: 'unrelated capture' }], Date.now());
+
+      await stage.poke(); // HEAD moved → the gate must NOT skip (fails-before: a naive time-based
+      // or one-shot gate would wrongly cache the skip forever regardless of new canonical activity)
+      expect(stage.connectSweepTailStats()).toEqual({ skipped: 0, ran: 2 });
+    });
+  });
+
+  // #507 item 2 (off-lock byte-stable prefilter) — the AC's "lock-contention test: a concurrent capture
+  // completes without waiting for [the link pass]". Proven deterministically (not via timing, which
+  // would be flaky under CI load): with N already-linked nodes still sitting in the derived link queue
+  // (readLinkQueue doesn't shrink just because a node is linked — it's a pure function of `relatesTo`
+  // claims), the OLD code took the shared lock once per node just to discover "nothing to do". The fix
+  // means the lock is NEVER taken for an already-stable node — so a concurrent capture queued behind
+  // this loop waits behind ZERO of them, not N.
+  it('off-lock prefilter: an already-converged node NEVER takes the shared lock again (0 "connect:link" holds)', async () => {
+    await withTempVault(async (root) => {
+      await createKb({ path: root, initGitIfNeeded: true });
+      const NODE_COUNT = 5;
+      const nodes: { id: string; rel: string }[] = [];
+      for (let i = 0; i < NODE_COUNT; i++) {
+        const org = await seedNode(root, 'organization', `Org ${i}`, [`sources/o${i}/01S`]);
+        const person = await seedNode(root, 'person', `Person ${i}`, [`sources/p${i}/01S`]);
+        await seedClaimRelatesTo(root, person.rel, `Works at Org ${i}.`, [`Org ${i}`]);
+        nodes.push(person);
+        void org;
+      }
+      await commitAll(root, 'seed 5 person/org pairs');
+
+      const lock = new Mutex();
+      const stage = new ConnectStage(root, oneClusterDecider('unused'), lock);
+      await stage.poke(); // converges all 5 — the tail actually ran and did real lock-held work
+      expect(stage.connectSweepTailStats()).toEqual({ skipped: 0, ran: 1 });
+      for (const n of nodes) expect(await linkOneWouldChange(root, n.rel)).toBe(false); // all stable now
+
+      // Force the gate open again (HEAD must differ from the last converged point) without touching
+      // any of the 5 nodes, so this pass exercises the PER-NODE prefilter in isolation from item 1's
+      // whole-tail gate.
+      await captureToInbox(root, 'test', [{ kind: 'text', text: 'unrelated capture' }], Date.now());
+
+      const runCalls: string[] = [];
+      const realRun = lock.run.bind(lock);
+      lock.run = ((fn: () => Promise<unknown>, label?: string) => {
+        if (label) runCalls.push(label);
+        return realRun(fn, label);
+      }) as typeof lock.run;
+
+      await stage.poke();
+      expect(stage.connectSweepTailStats()).toEqual({ skipped: 0, ran: 2 }); // gate DID run the tail…
+      expect(runCalls.filter((l) => l === 'connect:link')).toEqual([]); // …but took the lock for NONE of the 5 stable nodes
     });
   });
 });

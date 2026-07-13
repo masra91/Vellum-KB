@@ -374,8 +374,8 @@ export interface ComposeBacklogResult {
 
 // The recall engine owns these shapes; re-exported here so the renderer/IPC contract has one
 // import surface. (types.ts stays electron/obsidian-free, STACK-6 — recall.ts is pure kb domain.)
-export type { AskResult, Citation, RecallTurn } from './recall';
-import type { AskResult, RecallTurn } from './recall';
+export type { AskResult, Citation, RecallTurn, AskProgressEvent } from './recall';
+import type { AskResult, RecallTurn, AskProgressEvent } from './recall';
 import type { RecallEffort } from './recallConstants';
 export type { RecallEffort };
 import type { Conversation, ConversationTurn, ConversationSummary } from './conversation';
@@ -796,6 +796,10 @@ export interface KbApi {
   resume(): Promise<QuiesceStatus>;
   quiesceStatus(): Promise<QuiesceStatus | null>;
   ask(req: AskRequest): Promise<AskResult>;
+  // #514: live progress during an in-flight ask (kb:askProgress, pushed from main on the same channel
+  // the invoking kb:ask ran on). Subscribe just before calling ask(), unsubscribe once it settles —
+  // returns the unsubscribe fn. Fires 0+ times per ask; never fires outside an in-flight call.
+  onAskProgress(cb: (evt: AskProgressEvent) => void): () => void;
   // SPEC-0026 ASK-6: save a grounded recall answer as a KB Output.
   saveRecallOutput(result: AskResult): Promise<SaveRecallOutputResult>;
   // SPEC-0060 VUX-11 (past-chats): persist/list/load Ask threads in app userData (NOT the vault). The id

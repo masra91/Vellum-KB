@@ -14,7 +14,8 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { esc } from '../html';
-import type { AskResult, Citation, RecallTurn, Conversation, ConversationSummary, ConversationTurn } from '../../kb/types';
+import { skeletonFragmentHtml } from '../loadGuard';
+import type { AskResult, Citation, RecallTurn, Conversation, ConversationSummary, ConversationTurn, AskProgressEvent } from '../../kb/types';
 
 /**
  * Render the recall answer's markdown to **sanitized** HTML (#93). The answer is LLM/ingested content,
@@ -279,6 +280,11 @@ async function onAsk(container: HTMLElement): Promise<void> {
   scrollToEnd(container);
 
   const started = Date.now();
+  // #514: subscribe to live tool-call progress for the DURATION of this ask only — so the status line
+  // names the in-flight tool + call count instead of a static "Searching…" for the whole 40-65s run.
+  // Updates the in-flight turn's status span directly (no full re-render — see updateThinkingStatus).
+  // ENG-15/16: optional — a harness/older preload without it just keeps the static status line.
+  const unsubscribeProgress = window.kbApi.onAskProgress?.((evt) => updateThinkingStatus(container, evt)) ?? ((): void => {});
   try {
     // VUX-11: send the Quick/Considered effort (AskRequest.effort, #487) so the toggle modulates recall
     // depth — Quick = shallow/fast floor, Considered = full configured depth. Omitted ⇒ considered.
@@ -286,6 +292,7 @@ async function onAsk(container: HTMLElement): Promise<void> {
   } catch (err) {
     turn.error = err instanceof Error ? err.message : String(err);
   } finally {
+    unsubscribeProgress();
     turn.elapsedMs = Date.now() - started;
     busy = false;
     setBusy(container, false);
@@ -415,7 +422,7 @@ async function openPastPanel(container: HTMLElement): Promise<void> {
   pastOpen = true;
   container.querySelector<HTMLElement>('#askPast')?.setAttribute('aria-expanded', 'true');
   panel.hidden = false;
-  panel.innerHTML = `<div class="ask-past-status">Loading…</div>`;
+  panel.innerHTML = `<div class="ask-past-status" aria-busy="true">${skeletonFragmentHtml('rows')}</div>`;
   let list: ConversationSummary[];
   try {
     list = await window.kbApi.listConversations();
@@ -566,13 +573,41 @@ function renderSaveRow(t: Turn, index: number): string {
   return `<div class="ask-save-row"><button type="button" class="ask-save" data-turn="${index}"><span aria-hidden="true">⤓</span> Save to Library</button>${err}</div>`;
 }
 
-/** The calm in-flight state (VUX: never a blank async gap) — a status line + a shimmer skeleton. */
+/** The calm in-flight state (VUX: never a blank async gap) — a status line + a shimmer skeleton. The
+ *  status line starts generic and is updated in place by {@link updateThinkingStatus} as progress events
+ *  arrive (#514) — never re-rendered from here mid-flight (that would flicker + lose the skeleton). */
 function renderThinking(): string {
   return `<div class="ask-ans is-thinking">
     <span class="seal" aria-hidden="true">✦</span>
     <div class="ask-status"><span class="what">Searching your library…</span></div>
-    <div class="ask-skel" aria-hidden="true"><span class="ln w1"></span><span class="ln w2"></span><span class="ln w3"></span></div>
+    <div class="ask-skel" aria-hidden="true"><span class="ln skel w1"></span><span class="ln skel w2"></span><span class="ln skel w3"></span></div>
   </div>`;
+}
+
+/** Human phrase for a retrieval tool name — the status line names WHAT it's looking up, not the raw
+ *  tool identifier (a Principal doesn't know what "entityLookup" means). */
+const PROGRESS_TOOL_LABEL: Record<string, string> = {
+  entityLookup: 'entities',
+  claimsForEntity: 'claims',
+  linkTraversal: 'connections',
+  readNode: 'a note',
+  readSource: 'a source',
+  grep: 'your library',
+};
+
+function progressLabel(evt: AskProgressEvent): string {
+  if (evt.phase === 'budget-exhausted') return 'Wrapping up your answer…';
+  const what = (evt.tool && PROGRESS_TOOL_LABEL[evt.tool]) || 'your library';
+  return `Looking up ${what} — retrieval ${evt.used} of ${evt.max}`;
+}
+
+/** #514: repaint ONLY the in-flight turn's status span in place (no full renderTranscript — that would
+ *  flicker and can't outrun a fast tool-call cadence). Only one ask can be in flight at a time (the
+ *  `busy` guard), so the LAST turn's status span is unambiguously the right target; a no-op if the DOM
+ *  moved on (turn already resolved, view swapped away) — progress arriving late is simply dropped. */
+function updateThinkingStatus(container: HTMLElement, evt: AskProgressEvent): void {
+  const el = container.querySelector<HTMLElement>('.ask-turn:last-child .ask-status .what');
+  if (el) el.textContent = progressLabel(evt);
 }
 
 function relTime(ms: number): string {

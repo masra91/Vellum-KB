@@ -19,6 +19,10 @@ import { ensureGitIdentity } from './vault';
 import { captureToInbox } from './ingest';
 import { commitControlFile } from '../main/pipeline';
 import { Mutex } from './stageLock';
+import { answerReview, writeReviewFile, reviewRel } from './reviewStore';
+import { dismissHealthFindingInVault } from './healthRemediation';
+import { ulid } from './ulid';
+import type { Review } from './reviews';
 
 const BLOCK_MS = 500;
 const SETTLE_BUDGET = 2500;
@@ -81,6 +85,61 @@ describe.skipIf(!gitAvailable)('#163 — every canonical-writer-held git op is t
       const committing = lock.run(() => commitControlFile(root, ctl, 'test change', BLOCK_MS), 'control');
       const outcome = await within(committing.then(() => 'resolved' as const, () => 'rejected' as const), SETTLE_BUDGET);
       expect(outcome).toBe('rejected');
+      const after = await within(lock.run(async () => 'ran', 'after'), SETTLE_BUDGET);
+      expect(after).toBe('ran');
+    } finally {
+      await rmTempDir(dir);
+    }
+  });
+
+  // #515: reviewStore.answerReview and healthRemediation.dismissHealthFindingInVault were the two
+  // remaining raw-`simpleGit` + `add -A` sites inside `lock.run` (the class this file gates against) —
+  // both now go through `boundedGit` with a pathspec-scoped `add`.
+  it('#515 REVIEW-ANSWER: answerReview rejects (does not hang) when its commit blocks, releasing the lock', async () => {
+    const dir = await makeTempDir();
+    try {
+      const root = await makeRepo(dir);
+      await fs.mkdir(path.join(root, 'work'), { recursive: true });
+      const review: Review = {
+        id: ulid(),
+        status: 'open',
+        question: 'Same entity?',
+        detail: 'detail',
+        raisedBy: {
+          stage: 'connect',
+          runId: 'run-1',
+          item: { kind: 'link', ref: 'entities/x.md' },
+          auditRel: 'work/audit.jsonl',
+          markerKey: {},
+        },
+        subject: {},
+        createdAt: new Date().toISOString(),
+      };
+      await writeReviewFile(path.join(root, reviewRel(review.id)), review);
+      await installBlockingPreCommitHook(root);
+      const lock = new Mutex();
+      const answering = answerReview(root, lock, review.id, { verdict: 'confirm' }, BLOCK_MS);
+      const outcome = await within(answering.then(() => 'resolved' as const, () => 'rejected' as const), SETTLE_BUDGET);
+      expect(outcome).toBe('rejected');
+      const after = await within(lock.run(async () => 'ran', 'after'), SETTLE_BUDGET);
+      expect(after).toBe('ran');
+    } finally {
+      await rmTempDir(dir);
+    }
+  });
+
+  it('#515 HEALTH-DISMISS: dismissHealthFindingInVault does not hang when its commit blocks, releasing the lock', async () => {
+    const dir = await makeTempDir();
+    try {
+      const root = await makeRepo(dir);
+      await installBlockingPreCommitHook(root);
+      const lock = new Mutex();
+      // dismissHealthFindingInVault swallows its own errors into `{ ok: false }` (never throws to the
+      // IPC layer) — the invariant to prove here is settle-within-budget + lock-release, not rejection.
+      const dismissing = dismissHealthFindingInVault(root, root, lock, { findingKey: 'orphan:entities/x.md', kind: 'orphan' }, new Date().toISOString(), undefined, BLOCK_MS);
+      const outcome = await within(dismissing, SETTLE_BUDGET);
+      expect(outcome).not.toBe(TIMEOUT);
+      expect((outcome as { ok: boolean }).ok).toBe(false); // the blocked commit surfaced as a failure, not a hang
       const after = await within(lock.run(async () => 'ran', 'after'), SETTLE_BUDGET);
       expect(after).toBe('ran');
     } finally {

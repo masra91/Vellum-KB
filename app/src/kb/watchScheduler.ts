@@ -12,6 +12,7 @@ import chokidar from 'chokidar';
 import { reconcileWatchFolder, type RunWatchDeps } from './watchRun';
 import { readWatchRegistry } from './watchRegistry';
 import { checkWatchLoopSafe, effectiveWatchDepth, type WatchFolderConfig } from './watchConnectors';
+import { Mutex } from './stageLock';
 import { noopDevLog, type DevLog } from './devlog';
 
 /** A live watcher handle (the subset of chokidar's FSWatcher we use). Injectable for tests. */
@@ -46,6 +47,10 @@ export interface WatchSchedulerDeps {
   /** Injectable reconcile pass (tests drive in-flight timing to exercise coalescing); default = the real
    *  `reconcileWatchFolder` core, so production behavior is unchanged. */
   reconcile?: (root: string, f: WatchFolderConfig, deps: RunWatchDeps) => Promise<unknown>;
+  /** #517: the shared canonical-writer lock — threaded into every reconcile pass's `RunWatchDeps.lock`.
+   *  Defaults to a fresh, unshared `Mutex` (tests / standalone use); production always passes the
+   *  real per-vault lock. */
+  lock?: Mutex;
 }
 
 interface ActiveWatch {
@@ -67,6 +72,7 @@ export class WatchScheduler {
   private readonly now: () => string;
   private readonly debounceMs: number;
   private readonly reconcileFn: (root: string, f: WatchFolderConfig, deps: RunWatchDeps) => Promise<unknown>;
+  private readonly lock: Mutex;
   private readonly active = new Map<string, ActiveWatch>();
   private readonly reconciling = new Set<string>(); // single-flight per folder
   private readonly pending = new Set<string>(); // a change arrived mid-pass → one coalesced trailing pass owed
@@ -80,6 +86,7 @@ export class WatchScheduler {
     this.now = deps.now ?? (() => new Date().toISOString());
     this.debounceMs = deps.debounceMs ?? 250;
     this.reconcileFn = deps.reconcile ?? reconcileWatchFolder;
+    this.lock = deps.lock ?? new Mutex();
   }
 
   /** Kick off provisioning (fire-and-forget to fit the sync stage-start contract). */
@@ -163,7 +170,7 @@ export class WatchScheduler {
     if (this.reconciling.has(f.id)) { this.pending.add(f.id); return; } // busy → coalesce, never drop
     this.reconciling.add(f.id);
     try {
-      await this.reconcileFn(this.root, f, { vaultRoot: this.vaultRoot, now: this.now });
+      await this.reconcileFn(this.root, f, { vaultRoot: this.vaultRoot, now: this.now, lock: this.lock });
     } catch (err) {
       this.log.error('watch.reconcile-failed', { watchId: f.id, err });
     } finally {

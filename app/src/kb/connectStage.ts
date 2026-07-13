@@ -1047,38 +1047,31 @@ export async function readLinkQueue(root: string): Promise<string[]> {
   return [...subjects].filter((rel) => existing.has(rel)).sort();
 }
 
-/**
- * Promote ONE canonical node's claims' `relatesTo` hints into a regenerated `[[wikilinks]]` block
- * (CONNECT-12). DETERMINISTIC (no agent): each hint name is resolved by normalized name to a
- * canonical node — exactly-one match → a wikilink; zero match (unknown) → a `note` signal, never a
- * dangling guess (CONNECT-13). An **ambiguous** hint (>1 same-named entity) is never guessed: it
- * escalates to a yes/no Review proposing the first match (CONNECT-15) and renders nothing until the
- * Principal answers — confirm → render that target, reject → leave a `note`. The Review's plan rides
- * in its `markerKey` ({kind:'link', nodeRel, hint, targetRel}); this pass is idempotent — it reads
- * the node's existing link-Reviews and never re-raises a hint already asked. The block is
- * regenerated WHOLE, so the node is byte-stable across re-pokes: nothing-to-do is a no-op.
- * MUST be called serialized via the shared canonical-writer lock so the base branch is steady.
- * NOTE: unlike the other stages, the link pass stays COARSE-LOCKED (whole cycle under the lock) —
- * it CONSUMES Claims' `relatesTo` output, so making it optimistic/concurrent with Claims is a
- * producer-consumer ordering concern that needs its own design (deferred slice-2 follow-up).
- */
-export async function linkOne(root: string, nodeRel: string, log: DevLog = noopDevLog): Promise<LinkOneResult> {
-  root = path.resolve(root);
-  const { wt, base } = await ensureWorktree(root);
-  const wtGit = boundedGit(wt); // #163: bounded — runs under the canonical-writer lock
-  await wtGit.raw('reset', '--hard', base); // sync to the base branch HEAD
-  await wtGit.raw('clean', '-fd', 'entities', 'claims'); // drop stray files from a prior aborted run
+/** The pure read+compute half of `linkOne` (#507 item 2): given ANY readable root reflecting the
+ *  canonical tree (the linked link-worktree post-reset, or the canonical worktree itself for an
+ *  off-lock check), works out whether the node needs anything done at all — with zero writes. Factored
+ *  out so the off-lock prefilter (`linkOneWouldChange`) and the real on-lock write path (`linkOne`)
+ *  share ONE implementation — they can never drift out of sync on what counts as "byte-stable". */
+interface LinkOnePlan {
+  nodeExists: boolean;
+  nodeChanged: boolean;
+  newMd: string; // meaningful only when nodeChanged
+  links: NodeLink[];
+  unresolved: string[]; // zero-match unknowns + reject-declined ambiguities → note (CONNECT-13)
+  toRaise: { hint: string; targetRel: string; nodeName: string; targetName: string; candidateNames: string }[];
+}
 
-  const nodePath = path.join(wt, nodeRel);
+async function planLinkOne(readRoot: string, nodeRel: string): Promise<LinkOnePlan> {
+  const nodePath = path.join(readRoot, nodeRel);
   let nodeMd: string;
   try {
     nodeMd = await fs.readFile(nodePath, 'utf8');
   } catch {
-    return { nodeRel, changed: false, links: 0, unresolved: [], reviewsRaised: 0 }; // node gone (merged away) — nothing to do
+    return { nodeExists: false, nodeChanged: false, newMd: '', links: [], unresolved: [], toRaise: [] }; // node gone (merged away)
   }
 
   // Collect this node's claims' relatesTo hints (de-duped, order-preserved).
-  const claims = await readClaims(wt);
+  const claims = await readClaims(readRoot);
   const hints = unionOrdered(
     [],
     claims.filter((c) => c.subject === nodeRel).flatMap((c) => c.relatesTo),
@@ -1089,7 +1082,7 @@ export async function linkOne(root: string, nodeRel: string, log: DevLog = noopD
   // ambiguous hint is deterministic across runs.
   const byName = new Map<string, string[]>();
   const nameByRel = new Map<string, string>();
-  for (const n of await readEntityNodes(wt)) {
+  for (const n of await readEntityNodes(readRoot)) {
     nameByRel.set(n.rel, n.name);
     if (n.rel === nodeRel) continue; // never self-link
     // COHERE-1: index canonical name AND aliases — a hint/woven link naming an entity by an alias
@@ -1108,14 +1101,14 @@ export async function linkOne(root: string, nodeRel: string, log: DevLog = noopD
   // CONNECT-15: this node's existing link-Reviews, keyed by hint — so an ambiguous hint already
   // asked is never re-raised, an answered one renders/declines, and an open one stays parked.
   const reviewByHint = new Map<string, Review>();
-  for (const r of await readAllReviews(wt)) {
+  for (const r of await readAllReviews(readRoot)) {
     const mk = r.raisedBy.markerKey;
     if (mk.kind === 'link' && mk.nodeRel === nodeRel && mk.hint) reviewByHint.set(mk.hint, r);
   }
 
   const links: NodeLink[] = [];
-  const unresolved: string[] = []; // zero-match unknowns + reject-declined ambiguities → note (CONNECT-13)
-  const toRaise: { hint: string; targetRel: string; candidateRels: string[] }[] = [];
+  const unresolved: string[] = [];
+  const toRaise: LinkOnePlan['toRaise'] = [];
   const linkedTargets = new Set<string>();
   const addLink = (rel: string): void => {
     if (!linkedTargets.has(rel)) {
@@ -1145,7 +1138,14 @@ export async function linkOne(root: string, nodeRel: string, log: DevLog = noopD
       } else if (existing?.status === 'open') {
         // parked — awaiting the Principal; render nothing, raise nothing
       } else {
-        toRaise.push({ hint, targetRel: matches[0], candidateRels: matches }); // first encounter → ask
+        // first encounter → ask (names resolved now so the write path never needs `nameByRel` again)
+        toRaise.push({
+          hint,
+          targetRel: matches[0],
+          nodeName: nameByRel.get(nodeRel) ?? nodeRel,
+          targetName: nameByRel.get(matches[0]) ?? matches[0],
+          candidateNames: matches.map((r) => nameByRel.get(r) ?? r).join(', '),
+        });
       }
     }
   }
@@ -1160,22 +1160,62 @@ export async function linkOne(root: string, nodeRel: string, log: DevLog = noopD
   };
   const proseResolved = resolveProseWikilinks(nodeMd, resolveBare);
   const newMd = applyLinksBlock(proseResolved, links);
-  const nodeChanged = newMd !== nodeMd;
-  if (!nodeChanged && toRaise.length === 0) {
-    return { nodeRel, changed: false, links: links.length, unresolved, reviewsRaised: 0 }; // byte-stable + nothing to ask
+  return { nodeExists: true, nodeChanged: newMd !== nodeMd, newMd, links, unresolved, toRaise };
+}
+
+/**
+ * #507 item 2: off-lock, read-only byte-stable check — is there ANYTHING for `linkOne` to actually do
+ * for this node? Reads directly from `root` (the canonical worktree, which always reflects the last-
+ * committed state — no worktree-ensure/reset needed since this never mutates). Lets a drain skip taking
+ * the shared lock entirely for a node that would just no-op, instead of paying a full worktree-ensure +
+ * O(N) entity/claims/review read UNDER the lock only to find nothing changed — the mechanism behind
+ * "capture queues behind the sweep" (PERF-E3). `linkOne` re-verifies fresh right before committing, so a
+ * stale off-lock read only ever costs a missed skip (still correct), never a wrong write.
+ */
+export async function linkOneWouldChange(root: string, nodeRel: string): Promise<boolean> {
+  const plan = await planLinkOne(path.resolve(root), nodeRel);
+  return plan.nodeExists && (plan.nodeChanged || plan.toRaise.length > 0);
+}
+
+/**
+ * Promote ONE canonical node's claims' `relatesTo` hints into a regenerated `[[wikilinks]]` block
+ * (CONNECT-12). DETERMINISTIC (no agent): each hint name is resolved by normalized name to a
+ * canonical node — exactly-one match → a wikilink; zero match (unknown) → a `note` signal, never a
+ * dangling guess (CONNECT-13). An **ambiguous** hint (>1 same-named entity) is never guessed: it
+ * escalates to a yes/no Review proposing the first match (CONNECT-15) and renders nothing until the
+ * Principal answers — confirm → render that target, reject → leave a `note`. The Review's plan rides
+ * in its `markerKey` ({kind:'link', nodeRel, hint, targetRel}); this pass is idempotent — it reads
+ * the node's existing link-Reviews and never re-raises a hint already asked. The block is
+ * regenerated WHOLE, so the node is byte-stable across re-pokes: nothing-to-do is a no-op.
+ * MUST be called serialized via the shared canonical-writer lock so the base branch is steady.
+ * NOTE: unlike the other stages, the link pass stays COARSE-LOCKED (whole cycle under the lock) —
+ * it CONSUMES Claims' `relatesTo` output, so making it optimistic/concurrent with Claims is a
+ * producer-consumer ordering concern that needs its own design (deferred slice-2 follow-up).
+ */
+export async function linkOne(root: string, nodeRel: string, log: DevLog = noopDevLog): Promise<LinkOneResult> {
+  root = path.resolve(root);
+  const { wt, base } = await ensureWorktree(root);
+  const wtGit = boundedGit(wt); // #163: bounded — runs under the canonical-writer lock
+  await wtGit.raw('reset', '--hard', base); // sync to the base branch HEAD
+  await wtGit.raw('clean', '-fd', 'entities', 'claims'); // drop stray files from a prior aborted run
+
+  const plan = await planLinkOne(wt, nodeRel);
+  if (!plan.nodeExists) {
+    return { nodeRel, changed: false, links: 0, unresolved: [], reviewsRaised: 0 }; // node gone (merged away) — nothing to do
+  }
+  if (!plan.nodeChanged && plan.toRaise.length === 0) {
+    return { nodeRel, changed: false, links: plan.links.length, unresolved: plan.unresolved, reviewsRaised: 0 }; // byte-stable + nothing to ask
   }
 
+  const nodePath = path.join(wt, nodeRel);
   const runId = ulid();
-  if (nodeChanged) await fs.writeFile(nodePath, newMd, 'utf8');
+  if (plan.nodeChanged) await fs.writeFile(nodePath, plan.newMd, 'utf8');
   let audit = auditLine({ runId, event: 'links-start', node: nodeRel });
 
   // Escalate each newly-ambiguous hint to a yes/no Review proposing the first match (CONNECT-15);
   // the markerKey carries the plan so a later (post-answer) link pass renders or declines it.
-  for (const { hint, targetRel, candidateRels } of toRaise) {
+  for (const { hint, targetRel, nodeName, targetName, candidateNames } of plan.toRaise) {
     const id = ulid();
-    const nodeName = nameByRel.get(nodeRel) ?? nodeRel;
-    const targetName = nameByRel.get(targetRel) ?? targetRel;
-    const candidateNames = candidateRels.map((r) => nameByRel.get(r) ?? r).join(', ');
     const review: Review = {
       id,
       status: 'open',
@@ -1188,14 +1228,14 @@ export async function linkOne(root: string, nodeRel: string, log: DevLog = noopD
     await writeReviewFile(path.join(wt, reviewRel(id)), review);
     audit += auditLine({ runId, event: 'link-review-raised', node: nodeRel, hint, target: targetRel, reviewId: id });
   }
-  for (const u of unresolved) {
+  for (const u of plan.unresolved) {
     audit += auditLine({ runId, event: 'signal', type: 'note', note: `unresolved link target: ${u}`, node: nodeRel });
   }
-  audit += auditLine({ runId, event: 'linked', node: nodeRel, links: links.length, unresolved: unresolved.length, reviewsRaised: toRaise.length });
+  audit += auditLine({ runId, event: 'linked', node: nodeRel, links: plan.links.length, unresolved: plan.unresolved.length, reviewsRaised: plan.toRaise.length });
   await appendAudit(wt, audit);
   await wtGit.raw('add', '-A');
   await wtGit.commit(
-    `connect: links ${nodeRel} → ${links.length} link(s)${toRaise.length ? `, ${toRaise.length} ambiguous→review` : ''}${unresolved.length ? `, ${unresolved.length} unresolved` : ''}`,
+    `connect: links ${nodeRel} → ${plan.links.length} link(s)${plan.toRaise.length ? `, ${plan.toRaise.length} ambiguous→review` : ''}${plan.unresolved.length ? `, ${plan.unresolved.length} unresolved` : ''}`,
   );
   // Serialized canonical advance through the SAME ORCH-27 discipline every other writer uses (#256
   // second symptom): a raw `merge --ff-only` here bypassed the stale-`index.lock` self-heal +
@@ -1204,7 +1244,7 @@ export async function linkOne(root: string, nodeRel: string, log: DevLog = noopD
   // head === checkpoint and advanceOrCollide takes the guarded ff path (heal-then-advance).
   const checkpoint = await canonicalHead(root);
   await advanceOrCollide(root, WORK_BRANCH, checkpoint, undefined, log);
-  return { nodeRel, changed: true, links: links.length, unresolved, reviewsRaised: toRaise.length };
+  return { nodeRel, changed: true, links: plan.links.length, unresolved: plan.unresolved, reviewsRaised: plan.toRaise.length };
 }
 
 /**
@@ -1391,6 +1431,19 @@ export class ConnectStage {
   // INGEST-PERF item 1: memoize the O(N) candidate/node walk against the canonical HEAD sha — both
   // call sites share it, and an idle sweep on an unchanged canonical skips the walk entirely.
   private readonly queueCache = new CanonicalQueueCache<CandidateSet[]>();
+  // #507: same HEAD-memo pattern for the link-promotion queue (readLinkQueue) — it's an O(N)
+  // claims+entities walk called at least once per sweep (plus again inside linkOrphansOnce's skip-set).
+  private readonly linkQueueCache = new CanonicalQueueCache<string[]>();
+  // #507: the canonical HEAD at which the link/orphan/dedup tail last found NOTHING to do. All three
+  // are pure functions of the canonical tree (same invariant as queueCache above) — every mutation any
+  // of them could make lands as a canonical commit, so an unchanged HEAD since the last fully-converged
+  // pass guarantees there is still nothing to do, and the WHOLE tail (readLinkQueue's O(N) walk +
+  // linkOrphansOnce/dedupClaimsOnce's own worktree-ensure+reads) can be skipped — not just cached, SKIPPED
+  // entirely (0 git spawns, 0 entity/claim reads) — the PERF-E3 fix (was ~600 spawns + ~1.2M reads per
+  // idle sweep at 1k entities, every 30s, forever).
+  private lastConvergedConnectSweepHead: string | null = null;
+  private tailSkips = 0; // #507 telemetry: sweeps that skipped the tail outright (see connectSweepTailStats)
+  private tailRuns = 0;
 
   /**
    * @param afterDrain optional hook run (serialized under the shared lock) after a drain that
@@ -1434,6 +1487,12 @@ export class ConnectStage {
    *  (`hits` = O(N) walks skipped) vs recomputed (`misses` = walks actually run). */
   queueCacheStats(): { hits: number; misses: number } {
     return { hits: this.queueCache.hits, misses: this.queueCache.misses };
+  }
+
+  /** #507 perf proof/telemetry: how many sweeps skipped the WHOLE link/orphan/dedup tail outright
+   *  (canonical HEAD unchanged since it last converged) vs actually ran it. */
+  connectSweepTailStats(): { skipped: number; ran: number } {
+    return { skipped: this.tailSkips, ran: this.tailRuns };
   }
 
   start(sweepMs = 30_000): void {
@@ -1528,63 +1587,107 @@ export class ConnectStage {
       this.log.error('connect.drain-error', { err });
       return;
     }
-    // Link-promotion pass (CONNECT-12): once blocks are resolved and Claims has left `relatesTo`
-    // hints, promote them into `[[wikilinks]]`. Process each queued node once; `linkOne` is a
-    // no-op when unchanged, so idle sweeps don't churn. Per-node failures are best-effort (a
-    // later poke/sweep retries) and never abort the whole pass.
-    for (const nodeRel of await readLinkQueue(this.root)) {
-      // A link write that hits the bounded-git BLOCK TIMEOUT under bulk-writer contention must NOT be
-      // silently dropped — that leaves the entity permanently unlinked (no `[[wikilink]]` edge) until a
-      // re-derive. Retry the node a bounded number of times in-pass (the lock is released between
-      // attempts, so a transient contention spike eases); on exhaustion surface it LOUDLY (`error`, not
-      // a swallowed `warn`) so it's visible + reconcilable (REFLECT-3/4). The node stays in the derived
-      // link queue while unlinked, so the next sweep retries it once load drops.
-      for (let attempt = 1; attempt <= LINK_WRITE_MAX_ATTEMPTS; attempt++) {
-        try {
-          const res = await this.lock.run(() => linkOne(this.root, nodeRel, this.log), 'connect:link');
-          if (res.changed) worked = true;
-          break; // landed (or a byte-stable no-op) — done with this node
-        } catch (err) {
-          if (attempt < LINK_WRITE_MAX_ATTEMPTS) {
-            this.log.warn('connect.link-retry', { itemId: nodeRel, attempt, err }); // transient (e.g. block timeout) → retry
-          } else {
-            this.log.error('connect.link-error', { itemId: nodeRel, attempt, err }); // exhausted; stays queued for the next sweep
+    // #507: HEAD-gate the ENTIRE link/orphan/dedup tail — skip it outright when the canonical HEAD is
+    // unchanged since the last pass that found nothing to do (see `lastConvergedConnectSweepHead`
+    // above). An idle vault then costs exactly one cheap HEAD read per sweep, not the full O(N)
+    // claims/entities walk + per-node worktree-ensure that PERF-E3 measured at ~600 spawns + ~1.2M
+    // reads every 30s at 1k entities.
+    let headForGate: string | null;
+    try {
+      headForGate = await canonicalHead(this.root);
+    } catch {
+      headForGate = null; // unreadable → don't trust the gate, run the tail
+    }
+    if (headForGate === null || headForGate !== this.lastConvergedConnectSweepHead) {
+      this.tailRuns += 1;
+      // Set only when a node/pass couldn't be completed (retry-exhausted or a caught error) — i.e. we
+      // genuinely don't know the post-pass state, so we must NOT cache a convergence point below and
+      // must re-run in full next time, regardless of HEAD. A COMPLETED pass — whether or not it
+      // committed anything — is always safe to cache: it fully re-derived + processed the ENTIRE queue
+      // this call saw, so the fresh post-pass HEAD (re-read below) truly reflects "nothing left to do".
+      let tailErrored = false;
+      // Link-promotion pass (CONNECT-12): once blocks are resolved and Claims has left `relatesTo`
+      // hints, promote them into `[[wikilinks]]`. Process each queued node once; `linkOne` is a
+      // no-op when unchanged, so idle sweeps don't churn. Per-node failures are best-effort (a
+      // later poke/sweep retries) and never abort the whole pass.
+      for (const nodeRel of await this.linkQueueCache.read(this.root, () => readLinkQueue(this.root))) {
+        // #507 item 2: off-lock byte-stable prefilter — most queued nodes are already fully linked
+        // (linkOne would just no-op), so check WITHOUT the lock first; only a node that actually has
+        // something to do pays for the lock hold. `linkOne` re-verifies fresh right before committing,
+        // so a stale prefilter read only ever costs a missed skip, never a wrong write.
+        if (!(await linkOneWouldChange(this.root, nodeRel))) continue;
+        // A link write that hits the bounded-git BLOCK TIMEOUT under bulk-writer contention must NOT be
+        // silently dropped — that leaves the entity permanently unlinked (no `[[wikilink]]` edge) until a
+        // re-derive. Retry the node a bounded number of times in-pass (the lock is released between
+        // attempts, so a transient contention spike eases); on exhaustion surface it LOUDLY (`error`, not
+        // a swallowed `warn`) so it's visible + reconcilable (REFLECT-3/4). The node stays in the derived
+        // link queue while unlinked, so the next sweep retries it once load drops.
+        let landed = false;
+        for (let attempt = 1; attempt <= LINK_WRITE_MAX_ATTEMPTS; attempt++) {
+          try {
+            const res = await this.lock.run(() => linkOne(this.root, nodeRel, this.log), 'connect:link');
+            if (res.changed) worked = true;
+            landed = true;
+            break; // landed (or a byte-stable no-op) — done with this node
+          } catch (err) {
+            if (attempt < LINK_WRITE_MAX_ATTEMPTS) {
+              this.log.warn('connect.link-retry', { itemId: nodeRel, attempt, err }); // transient (e.g. block timeout) → retry
+            } else {
+              this.log.error('connect.link-error', { itemId: nodeRel, attempt, err }); // exhausted; stays queued for the next sweep
+            }
           }
         }
+        if (!landed) tailErrored = true; // exhausted — this node still needs a retry, don't cache convergence
       }
-    }
-    // Orphan-RAG linker (SPEC-0051 slice-2): once `linkOne` has wired every stated relationship,
-    // recover the degree-0 tail by retrieving grounded candidate relations (co-mention + shared
-    // topic tags, rarity-weighted) and rendering them as `[[wikilinks]]`. Coarse-locked + bulk like
-    // dedup (one reset/commit/advance), deterministic, idempotent (a linked node is no longer an
-    // orphan → skipped next sweep). Best-effort: a failure is logged and a later sweep retries — it
-    // never aborts the rest of the drain.
-    try {
-      const orphan = await this.lock.run(() => linkOrphansOnce(this.root, this.log), 'connect:orphan-link');
-      if (orphan.committed) {
-        worked = true;
-        this.log.info('connect.orphan-link', { orphans: orphan.orphans, linked: orphan.linked, links: orphan.links });
+      // Orphan-RAG linker (SPEC-0051 slice-2): once `linkOne` has wired every stated relationship,
+      // recover the degree-0 tail by retrieving grounded candidate relations (co-mention + shared
+      // topic tags, rarity-weighted) and rendering them as `[[wikilinks]]`. Coarse-locked + bulk like
+      // dedup (one reset/commit/advance), deterministic, idempotent (a linked node is no longer an
+      // orphan → skipped next sweep). Best-effort: a failure is logged and a later sweep retries — it
+      // never aborts the rest of the drain.
+      try {
+        const orphan = await this.lock.run(() => linkOrphansOnce(this.root, this.log), 'connect:orphan-link');
+        if (orphan.committed) {
+          worked = true;
+          this.log.info('connect.orphan-link', { orphans: orphan.orphans, linked: orphan.linked, links: orphan.links });
+        }
+      } catch (err) {
+        tailErrored = true; // an error means we don't actually know convergence — don't cache a skip
+        this.log.warn('connect.orphan-link-error', { err }); // best-effort; a later poke/sweep retries
       }
-    } catch (err) {
-      this.log.warn('connect.orphan-link-error', { err }); // best-effort; a later poke/sweep retries
-    }
-    // Within-source claim dedup (CLAIMS-19): collapse the "same assertion restated per-entity"
-    // over-extraction once Claims has settled. Coarse-locked like link-promotion (it sweeps all
-    // claims), deterministic (no copilot slot), idempotent. A drop must promote (deletions mirror to
-    // `main` via the deletion-aware gate), so set `worked` when it committed. Best-effort: a failure
-    // is logged and a later poke/sweep retries — it never aborts the rest of the drain.
-    try {
-      const dedup = await this.lock.run(() => dedupClaimsOnce(this.root, this.log), 'connect:dedup');
-      if (dedup.committed) {
-        worked = true;
-        this.log.info('connect.claim-dedup', {
-          dropped: dedup.dropped,
-          affected: dedup.affectedSubjects.length,
-          relationalResidual: dedup.suspectedRelationalResidual,
-        });
+      // Within-source claim dedup (CLAIMS-19): collapse the "same assertion restated per-entity"
+      // over-extraction once Claims has settled. Coarse-locked like link-promotion (it sweeps all
+      // claims), deterministic (no copilot slot), idempotent. A drop must promote (deletions mirror to
+      // `main` via the deletion-aware gate), so set `worked` when it committed. Best-effort: a failure
+      // is logged and a later poke/sweep retries — it never aborts the rest of the drain.
+      try {
+        const dedup = await this.lock.run(() => dedupClaimsOnce(this.root, this.log), 'connect:dedup');
+        if (dedup.committed) {
+          worked = true;
+          this.log.info('connect.claim-dedup', {
+            dropped: dedup.dropped,
+            affected: dedup.affectedSubjects.length,
+            relationalResidual: dedup.suspectedRelationalResidual,
+          });
+        }
+      } catch (err) {
+        tailErrored = true; // an error means we don't actually know convergence — don't cache a skip
+        this.log.warn('connect.claim-dedup-error', { err }); // best-effort; a later poke/sweep retries
       }
-    } catch (err) {
-      this.log.warn('connect.claim-dedup-error', { err }); // best-effort; a later poke/sweep retries
+      if (tailErrored) {
+        this.lastConvergedConnectSweepHead = null; // don't trust a skip until a clean pass re-verifies
+      } else {
+        // A COMPLETE pass (committed or not) — the fresh post-pass HEAD (any of the three above may
+        // have advanced it) is the point we've converged to; cache it so an unchanged HEAD next sweep
+        // skips the ENTIRE tail outright.
+        try {
+          this.lastConvergedConnectSweepHead = await canonicalHead(this.root);
+        } catch {
+          this.lastConvergedConnectSweepHead = null;
+        }
+      }
+    } else {
+      this.tailSkips += 1;
     }
     // Publish the now-resolved evergreen entities (+ repointed claims + links) staging→main
     // (STAGING-3/11), serialized under the shared lock so promotion never races a stage ref

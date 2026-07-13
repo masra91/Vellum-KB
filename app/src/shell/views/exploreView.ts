@@ -13,7 +13,10 @@
 // uses a CSS animation that degrades to instant under prefers-reduced-motion (EXPLORE-13), the same
 // reduced-motion discipline as the rest of The Line.
 import { esc, emptyState } from '../html';
-import { renderLoadError, renderWarming, reportLoadFailure } from '../loadGuard';
+import { renderLoadError, renderWarming, reportLoadFailure, paintSkeleton } from '../loadGuard';
+import { NAVIGATE_EVENT, consumePendingFocus, setTopbarContext, type NavigateDetail } from '../nav';
+import { navIcon } from '../icons';
+import { VIEW_EXPLORE } from '../views';
 import type { ExploreClaim, ExploreContradiction, ExploreEntityRef, ExploreNeighbor, ExploreNeighborhood, ExploreProjection } from '../../kb/explorePanel';
 
 const HEADER = `<h1 class="explore-title viz-signage">Explore</h1><p class="explore-sub viz-body">Walk your knowledge graph — start at an entity and follow its relationships. Read-only.</p>`;
@@ -56,9 +59,33 @@ function kindKeyOf(n: ExploreNeighbor): string {
   return n.kind && n.kind.trim() ? n.kind : UNKINDED;
 }
 
+/** The active mount's `kb:navigate` listener (module-scoped so a re-mount, e.g. a vault switch, removes
+ *  the prior one first — mirrors shell.ts's navHandler pattern; never leaks / drives a stale closure). */
+let focusNavHandler: ((e: Event) => void) | null = null;
+
 export async function mountExplore(container: HTMLElement): Promise<void> {
   const state: ExploreState = { trail: [], filters: freshFilters(), expanded: new Set(), subCache: new Map() };
-  container.innerHTML = `<div class="explore viz-surface">${HEADER}<p class="viz-body">Loading…</p></div>`;
+  paintSkeleton(container, HEADER, 'rows');
+
+  // #519 §2 — a deep-link INTO Explore already-mounted (e.g. the ⌘K search overlay's Enter): the shell's
+  // own mount-once model (SHELL-8) means mountExplore only runs once, so a jump from another view can't
+  // rely on a re-mount to pick up the new focus. Listen for `kb:navigate` directly (mirrors how the shell
+  // itself listens) for subsequent jumps; `consumePendingFocus` below covers the race where THIS mount is
+  // itself the synchronous side effect of the very navigateTo() call that carried the focus (nav.ts).
+  if (focusNavHandler) document.removeEventListener(NAVIGATE_EVENT, focusNavHandler);
+  focusNavHandler = (e: Event): void => {
+    const detail = (e as CustomEvent<NavigateDetail>).detail;
+    const focus = detail?.view === VIEW_EXPLORE ? consumePendingFocus(VIEW_EXPLORE) : undefined;
+    if (focus) {
+      state.trail = [];
+      state.focus = focus;
+      void load(container, state);
+    }
+  };
+  document.addEventListener(NAVIGATE_EVENT, focusNavHandler);
+
+  const initialFocus = consumePendingFocus(VIEW_EXPLORE);
+  if (initialFocus) state.focus = initialFocus;
   await load(container, state);
 }
 
@@ -95,9 +122,26 @@ async function load(container: HTMLElement, state: ExploreState): Promise<void> 
   paint(container, state);
 }
 
+/** #519 §3 — the top-bar context fillers, verbatim markup from the mock (design-prototypes/vellum-v3.html
+ *  CTX.explore), with the first two chips' labels reflecting `state.filters` LIVE (the view already owns
+ *  this state — the slot is a projection of it, not a second store). Read-only status chips (unlike
+ *  Health/Agents' actionable ones) — informational, no click wiring. Called from `paint()` so it stays in
+ *  sync every time the view repaints (filter change, re-center, expand). */
+function topctxHtml(state: ExploreState): string {
+  const kindCount = state.filters.kinds.size;
+  const kindsLabel = kindCount === 0 ? 'All types' : `${kindCount} type${kindCount === 1 ? '' : 's'}`;
+  const confidenceLabel = state.filters.hideSpeculative ? 'Confidence ≥ 0.6' : 'All confidence levels';
+  return (
+    `<span class="topchip">${navIcon('filter')} Filters</span>` +
+    `<span class="topchip">${navIcon('category')} ${esc(kindsLabel)}</span>` +
+    `<span class="topchip">${esc(confidenceLabel)}</span>`
+  );
+}
+
 /** Render the current cached neighborhood as the UX v2 surface: a full-bleed radial graph (center +
  *  1-hop neighbors) on a drifting field, with a right rail carrying the focused entity's detail. No IPC. */
 function paint(container: HTMLElement, state: ExploreState): void {
+  setTopbarContext(topctxHtml(state));
   const cache = state.cache;
   if (!cache) return;
   const { nb, entities } = cache;

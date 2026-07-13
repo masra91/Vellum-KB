@@ -52,10 +52,10 @@
 
   /* 3. Motion tokens (§5 / Vellum §6) — durations + easings; one reduced-motion reset (below) zeroes them all. */
   --viz-dur-index: 220ms;     /* the signature "it moved" index hop */
-  --viz-dur-breathe: 1.8s;    /* the ambient breathe (sprout in-progress · the ember decision pulse) — slow, not a blink */
   --viz-dur-drift: 24s;       /* Vellum §6 ambient drift (20–30s loops) — node-fields + the gold connecting thread */
   --viz-dur-odometer: 400ms;  /* count/bar rolls */
-  --viz-dur-state: 240ms;     /* state-change crossfades */
+  /* The former per-namespace breathe/state duration duplicates are consolidated into the unified
+     --dur-* scale below (v3 :root) — one name each, no viz-prefixed shadow copy. */
   --viz-ease-index: cubic-bezier(0.2, 0.8, 0.2, 1); /* ease-out w/ a hint of stepper-seat overshoot */
   --viz-ease-state: ease-in-out;
 
@@ -72,10 +72,9 @@
   /* geometry — rounded, crafted (the ship's flat 0-radius instruments read as a terminal) */
   --viz-r-win: 16px; --viz-r-card: 13px; --viz-r-chip: 9px; --viz-r-pill: 22px;
 
-  /* v2 motion — a calm ease-out + a gentle spring (node-grow, stepper seat); --viz-dur-quick = the hover tick */
+  /* v2 motion — a calm ease-out + a gentle spring (node-grow, stepper seat); --dur-quick (below) = the hover tick */
   --viz-ease-out: cubic-bezier(0.2, 0.7, 0.3, 1);
   --viz-ease-spring: cubic-bezier(0.34, 1.56, 0.46, 1);
-  --viz-dur-quick: 0.18s;
   --viz-dur-field: 48s; /* v2 ambient field drift — slower, calmer than the 24s thread */
 
   /* paper-grain — a faint fractal-noise multiply layer for the vellum tooth (applied via .viz-grain::after) */
@@ -140,7 +139,7 @@
 }
 /* Hover-life (§3): a card that reacts — lifts, blooms a long shadow + a rationed gold radial sheen.
    Opt-in via .viz-card--lift so static cards don't all wiggle. Transform/shadow only (VIZ-9 safe). */
-.viz-card--lift { transition: transform var(--viz-dur-quick) var(--viz-ease-out), box-shadow var(--viz-dur-quick) var(--viz-ease-out), border-color var(--viz-dur-quick) var(--viz-ease-out); position: relative; }
+.viz-card--lift { transition: transform var(--dur-quick) var(--viz-ease-out), box-shadow var(--dur-quick) var(--viz-ease-out), border-color var(--dur-quick) var(--viz-ease-out); position: relative; }
 .viz-card--lift:hover { transform: translateY(-3px); box-shadow: var(--viz-shadow-raise); border-color: #d6cbad; }
 .viz-card--lift::before { content: ""; position: absolute; right: -14px; top: -14px; width: 54px; height: 54px; border-radius: 50%; background: var(--viz-sheen); opacity: 0; transition: opacity 0.3s var(--viz-ease-out); pointer-events: none; }
 .viz-card--lift:hover::before { opacity: 1; }
@@ -219,7 +218,7 @@
 .viz-btn--ghost:hover, .viz-btn--ghost.is-hover { color: var(--viz-accent); }
 /* busy / dispatching — opacity-only sprout breathe (§3 states; VIZ-9). Reduced-motion zeroes it (below),
    and busy still reads via the sprout hue + a static label, so nothing is lost. */
-.viz-btn--busy { animation: viz-breathe var(--viz-dur-breathe) ease-in-out infinite; color: var(--viz-sprout); border-color: var(--viz-sprout); }
+.viz-btn--busy { animation: viz-breathe var(--dur-breathe) ease-in-out infinite; color: var(--viz-sprout); border-color: var(--viz-sprout); }
 
 /* --- SegmentedControl (§4) — a spatial exposure/choice scale; a role=radiogroup of ghosted segments,
    ZERO radius (a ruled register, not a pill toggle). Replaces native <select> for small bounded enums.
@@ -311,7 +310,7 @@
    the breathe (higher floor) so it reads as a calm waiting-choice, not an alarm. Opacity-only. Reserve
    strictly for decision cues (pairs with --viz-ember, never sprout/idle). */
 @keyframes viz-decision-pulse { 0%, 100% { opacity: 0.72; } 50% { opacity: 1; } }
-.viz-decision-pulse { animation: viz-decision-pulse var(--viz-dur-breathe) ease-in-out infinite; }
+.viz-decision-pulse { animation: viz-decision-pulse var(--dur-breathe) ease-in-out infinite; }
 
 /* The one reduced-motion reset (§5) — full functional parity: every viz animation/transition becomes
    an instant state change (state still reads via glyph + hue + fill, so nothing is lost). */
@@ -343,7 +342,13 @@
   --r-win: 16px; --r-card: 13px; --r-chip: 9px; --r-pill: 22px;
   --e-out: cubic-bezier(0.2, 0.7, 0.3, 1);
   --e-spring: cubic-bezier(0.34, 1.56, 0.46, 1);
-  --t: 0.18s var(--e-out);
+  /* Consolidated duration scale (SPEC-0060 VUX-6, #520 §7) — single source of truth, replacing three
+     separately-named 0.18s/240ms/1.8s duplicates (one per namespace) plus the shellFadein 0.34s magic
+     number. Values are unchanged, only named once — every prior consumer repoints here. */
+  --dur-quick: 0.18s;   /* hover tick, card lift */
+  --dur-state: 240ms;   /* state-change crossfades */
+  --dur-settle: 340ms;  /* was the shellFadein 0.34s literal — view-enter, exit-motion settle */
+  --dur-breathe: 1.8s;  /* the ambient sprout/ember breathe */
 }
 
 /* Dark re-point (VUX-DARK #521) — finishes the re-point that already happened once for --viz-* above:
