@@ -2,7 +2,7 @@
 // (TEST-18). Two tiers: (1) hand-written audit files exercise the walker / cap / cache / freshness
 // / filter precisely; (2) an integration test runs REAL stages so the normalizer is proven against
 // the shapes the emitters actually write — not just hand-crafted ones.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -270,4 +270,95 @@ describe.skipIf(!gitAvailable)('integration — index over REAL stage emission (
       expect(archived.subjects.sourceId).toBe(path.basename(sourceRel));
     });
   }, 30_000);
+});
+
+// #508 item 3: audit files are append-only; a full re-read of every file on every rebuild was wasted
+// once we'd already parsed its earlier bytes. Prove the incremental cache: a byte-identical file costs
+// zero content reads, and a grown file re-reads only the bytes appended — never the whole vault.
+describe.skipIf(!gitAvailable)('readAllAuditEvents — incremental per-file cache, append-only (#508 item 3)', () => {
+  it('a byte-identical file costs ZERO content reads on a second call', async () => {
+    await withTempVault(async (root) => {
+      await createKb({ path: root, initGitIfNeeded: true });
+      await seedAudit(root);
+      const first = await readAllAuditEvents(root);
+      expect(first.length).toBeGreaterThan(0);
+
+      const spy = vi.spyOn(fs, 'open');
+      try {
+        const second = await readAllAuditEvents(root);
+        expect(second).toEqual(first); // identical result — the cache didn't drop or duplicate anything
+        expect(spy).not.toHaveBeenCalled(); // every file was byte-identical → fs.stat only, no content read
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  it('appending to ONE file among many re-reads only that file, not a full re-walk', async () => {
+    await withTempVault(async (root) => {
+      await createKb({ path: root, initGitIfNeeded: true });
+      const FILE_COUNT = 20;
+      for (let i = 0; i < FILE_COUNT; i++) {
+        await writeAudit(root, path.join('sources', '2026', '01', `S${i}`, 'audit.jsonl'), [
+          { action: 'archived', id: `S${i}`, archivedAt: '2026-01-01T00:00:00.000Z', decision: { route: 'keep' }, agent: { via: 'deterministic' } },
+        ]);
+      }
+      const first = await readAllAuditEvents(root);
+      expect(first).toHaveLength(FILE_COUNT);
+
+      // Append-only growth on exactly one file (the steady-state case every canonical advance produces).
+      await fs.appendFile(
+        path.join(root, 'sources', '2026', '01', 'S0', 'audit.jsonl'),
+        JSON.stringify({ ts: '2026-01-01T00:01:00.000Z', stage: 'decompose', runId: 'D1', sourceId: 'S0', model: 'm', event: 'decomposed', candidates: 1 }) + '\n',
+        'utf8',
+      );
+
+      const spy = vi.spyOn(fs, 'open');
+      try {
+        const second = await readAllAuditEvents(root);
+        expect(second).toHaveLength(FILE_COUNT + 1); // the new event is picked up
+        expect(spy).toHaveBeenCalledTimes(1); // exactly one file's content was re-read (the fixture: N files, append 1 → 1 re-read)
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  it('a torn (mid-write) line is never lost — picked up whole once the write completes', async () => {
+    await withTempVault(async (root) => {
+      await createKb({ path: root, initGitIfNeeded: true });
+      const rel = path.join('sources', '2026', '01', 'S1', 'audit.jsonl');
+      const abs = path.join(root, rel);
+      await fs.mkdir(path.dirname(abs), { recursive: true });
+      const line1 = JSON.stringify({ action: 'archived', id: 'S1', archivedAt: '2026-01-01T00:00:00.000Z', decision: { route: 'keep' }, agent: { via: 'deterministic' } });
+      // A complete first line, then a SECOND line written WITHOUT its trailing newline yet (simulates
+      // a read landing mid-append) — must not be counted as "consumed" (that would lose it forever).
+      await fs.writeFile(abs, `${line1}\n{"ts":"2026-01-01T00:01:00.000Z","stage":"decompose","sourceId":"S1"`, 'utf8');
+      const mid = await readAllAuditEvents(root);
+      expect(mid).toHaveLength(1); // only the complete line
+
+      // The write "completes" — the torn line gets its closing content + newline appended.
+      await fs.appendFile(abs, ',"model":"m","event":"decomposed","candidates":1}\n', 'utf8');
+      const after = await readAllAuditEvents(root);
+      expect(after).toHaveLength(2); // the previously-torn line is now picked up whole, not skipped
+      expect(after.map((e) => e.eventType).sort()).toEqual(['archived', 'decomposed']);
+    });
+  });
+
+  it('a new audit file appearing later is picked up alongside already-cached files', async () => {
+    await withTempVault(async (root) => {
+      await createKb({ path: root, initGitIfNeeded: true });
+      await writeAudit(root, path.join('sources', '2026', '01', 'S1', 'audit.jsonl'), [
+        { action: 'archived', id: 'S1', archivedAt: '2026-01-01T00:00:00.000Z', decision: { route: 'keep' }, agent: { via: 'deterministic' } },
+      ]);
+      expect(await readAllAuditEvents(root)).toHaveLength(1);
+
+      await writeAudit(root, path.join('sources', '2026', '01', 'S2', 'audit.jsonl'), [
+        { action: 'archived', id: 'S2', archivedAt: '2026-01-01T00:05:00.000Z', decision: { route: 'keep' }, agent: { via: 'deterministic' } },
+      ]);
+      const events = await readAllAuditEvents(root);
+      expect(events).toHaveLength(2);
+      expect(events.map((e) => e.subjects.sourceId).sort()).toEqual(['S1', 'S2']);
+    });
+  });
 });

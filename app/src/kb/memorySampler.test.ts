@@ -54,10 +54,15 @@ describe('detectLeak (OBS-21)', () => {
     expect(t!.rssSlopeMbPerMin).toBeGreaterThan(0);
   });
 
-  it('does NOT flag a plateau (a single flat step breaks monotonicity)', () => {
+  // #508 item 4: the OLD verdict required STRICTLY increasing RSS at every step — a single GC-timing
+  // plateau/dip anywhere in the window flipped a real, sustained leak to "not leaking," making the
+  // watchdog blind to it. The least-squares slope survives that noise: the overall window still climbs.
+  it('a single flat step amid sustained growth still reads as leaking', () => {
     const s = climbing(6, 100, 20);
-    s[3] = sampleAt((s[2].rss / MB), s[3].ts); // plateau at step 3
-    expect(detectLeak(s, { minSamples: 6, minGrowthMb: 50 })?.leaking).toBe(false);
+    s[3] = sampleAt(s[2].rss / MB, s[3].ts); // plateau at step 3 — the window still climbs overall
+    const t = detectLeak(s, { minSamples: 6, minGrowthMb: 50 });
+    expect(t?.leaking).toBe(true);
+    expect(t!.rssSlopeMbPerMin).toBeGreaterThan(0);
   });
 
   it('does NOT flag growth below the magnitude guard (noise)', () => {
@@ -65,10 +70,17 @@ describe('detectLeak (OBS-21)', () => {
     expect(t?.leaking).toBe(false);
   });
 
-  it('does NOT flag a dip (non-monotonic)', () => {
+  it('a single dip amid sustained growth still reads as leaking', () => {
     const s = climbing(6, 100, 20);
-    s[4] = sampleAt(80, s[4].ts);
-    expect(detectLeak(s, { minSamples: 6, minGrowthMb: 50 })?.leaking).toBe(false);
+    s[4] = sampleAt(80, s[4].ts); // one dip — the window still climbs overall
+    const t = detectLeak(s, { minSamples: 6, minGrowthMb: 50 });
+    expect(t?.leaking).toBe(true);
+  });
+
+  it('does NOT flag pure noise oscillating around a baseline (no sustained trend, tiny net delta)', () => {
+    const s = [100, 110, 95, 105, 98, 102].map((mb, i) => sampleAt(mb, `2026-06-08T00:0${i}:00.000Z`));
+    const t = detectLeak(s, { minSamples: 6, minGrowthMb: 50 });
+    expect(t?.leaking).toBe(false);
   });
 });
 

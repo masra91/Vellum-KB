@@ -3,7 +3,9 @@
 // handle (plain repo, linked worktree, packed-refs, detached HEAD), and that the fallback still
 // gives a CORRECT answer (never a wrong one) when a shape isn't the fast path's to parse.
 import { describe, it, expect } from 'vitest';
-import { promises as fs } from 'node:fs';
+import { promises as fs, mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 import simpleGit from 'simple-git';
 import { makeTempDir, rmTempDir } from '../../test/tempVault';
@@ -11,6 +13,22 @@ import { gitAvailable } from '../../test/gitEnv';
 import { ensureGitIdentity } from './vault';
 import { canonicalHead } from './canonicalAdvance';
 import { fastHeadSha, fastHeadBranch } from './gitHeadFast';
+
+/** Does this system's git support `--object-format=sha256`? Gates the fast-follow test below — an
+ *  older git (no sha256 support) should skip rather than fail. */
+function sha256GitSupported(): boolean {
+  let dir: string | undefined;
+  try {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'kb-sha256check-'));
+    execFileSync('git', ['init', '--object-format=sha256', dir], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
+}
+const sha256GitAvailable = gitAvailable && sha256GitSupported();
 
 async function makeRepo(dir: string): Promise<string> {
   const root = path.join(dir, 'repo');
@@ -128,6 +146,33 @@ describe.skipIf(!gitAvailable)('gitHeadFast (#506 — no git spawn for gating)',
       await simpleGit(root).checkout(await canonicalHead(root));
       expect(await fastHeadBranch(root)).toBe('HEAD');
       expect((await simpleGit(root).revparse(['--abbrev-ref', 'HEAD'])).trim()).toBe('HEAD');
+    } finally {
+      await rmTempDir(dir);
+    }
+  });
+});
+
+// #508 fast-follow from #542's QA review: the fallback path was only tested for TOTAL failure (a
+// non-repo directory, where canonicalHead also throws) — not the case where the fast path can't parse
+// a shape but the fallback SUCCEEDS and recovers the correct value. A SHA-256 object-format repo is
+// exactly that: `SHA_RE` (40-hex, SHA-1 only) rejects the 64-hex sha, so fastHeadSha falls through to
+// canonicalHead — which, being real git, handles either object format transparently.
+describe.skipIf(!sha256GitAvailable)('gitHeadFast — SHA-256 object-format repos (fallback recovers, not just fails)', () => {
+  it('fastHeadSha falls back to the git spawn and returns the CORRECT 64-char sha', async () => {
+    const dir = await makeTempDir('kb-githeadfast-sha256-');
+    try {
+      const root = path.join(dir, 'repo');
+      await fs.mkdir(root, { recursive: true });
+      const git = simpleGit(root);
+      await git.init(['--object-format=sha256', '--initial-branch=main']);
+      await ensureGitIdentity(git);
+      await fs.writeFile(path.join(root, 'seed.txt'), 'seed\n');
+      await git.raw('add', '-A');
+      await git.commit('seed');
+
+      const real = await canonicalHead(root);
+      expect(real).toHaveLength(64); // sanity: really a sha256 repo (sha1 would be 40)
+      expect(await fastHeadSha(root)).toBe(real); // the fast path's SHA_RE rejects it, falls back, recovers correctly
     } finally {
       await rmTempDir(dir);
     }

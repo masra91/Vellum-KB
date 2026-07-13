@@ -24,8 +24,11 @@ export interface ProjectionStoreDeps<T> {
   /** ISO clock for `builtAt` (injectable for tests). Default `new Date().toISOString()`. */
   now?: () => string;
   /** Load the persisted last-known-good payload (shown instantly on launch); null if none. Read at
-   *  `start()` so it reflects the now-active context. Best-effort (errors → null). */
-  load?: () => T | null;
+   *  `start()` so it reflects the now-active context. Best-effort (errors → null). May return a
+   *  Promise (#508 item 4 — a large persisted payload's disk read shouldn't block `start()` itself);
+   *  an async load races the first live `refreshNow()` `start()` already kicks off, and only seeds the
+   *  stale snapshot if the live refresh hasn't already landed one. */
+  load?: () => T | null | Promise<T | null>;
   /** Persist a freshly-computed payload as the new last-known-good. Best-effort (errors swallowed). */
   save?: (data: T) => void;
   /** Report a background compute failure (the last-known-good projection is retained, marked stale). */
@@ -115,10 +118,24 @@ export function createProjectionStore<T>(deps: ProjectionStoreDeps<T>): Projecti
     start() {
       if (timer !== null) return;
       // Seed instantly from the persisted last-known-good for the now-active context, then go live.
+      // `start()` itself stays SYNCHRONOUS even when `load` returns a Promise (#508 item 4): a seed
+      // that only lands after the disk read resolves is fine — `refreshNow()` below is already racing
+      // it for the live projection, and the seed is a no-op if the live one already won.
       if (deps.load) {
         try {
           const loaded = deps.load();
-          if (loaded !== null) projection = { data: loaded, builtAt: now(), stale: true }; // persisted = stale until first live refresh
+          if (loaded instanceof Promise) {
+            loaded.then(
+              (v) => {
+                if (v !== null && projection === null) projection = { data: v, builtAt: now(), stale: true };
+              },
+              () => {
+                /* best-effort seed — a failed async load just leaves projection null until the live refresh */
+              },
+            );
+          } else if (loaded !== null) {
+            projection = { data: loaded, builtAt: now(), stale: true }; // persisted = stale until first live refresh
+          }
         } catch {
           projection = null;
         }
