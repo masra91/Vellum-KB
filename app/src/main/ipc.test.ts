@@ -985,3 +985,35 @@ describe('SPEC-0058 Today — kb:getTodayProjection over the maintained store (R
     expect(res.data.subtitle).toContain('quiet and current');
   });
 });
+
+// #527 ENG-12 — IPC channel parity. Before this, preload.ts's invoke surface and ipc.ts's registered
+// handlers were held together by CONVENTION ONLY: a preload method with no matching `ipcMain.handle` (a
+// typo, a rename on one side but not the other, a handler deleted during a refactor) compiles clean —
+// TypeScript has no idea `ipcRenderer.invoke('kb:whatever')`'s string needs a live registration — and
+// only fails at runtime, as a broken feature in the packaged app. Preload channels are parsed statically
+// from `preload.ts`'s own SOURCE (not imported/executed — that needs a real `contextBridge`, a second
+// Electron surface not worth mocking just for a name list). Registered handlers come from `state.handlers`
+// — populated by the SAME `registerIpc()` call the top-level `beforeEach` above already makes on every
+// test, against the REAL handler set, not a hand-maintained mirror that could itself drift.
+describe('#527 ENG-12 — IPC channel parity (preload invokes ↔ registered handlers)', () => {
+  async function preloadInvokeChannels(): Promise<Set<string>> {
+    const preloadSrc = await fs.readFile(path.join(__dirname, '..', 'preload.ts'), 'utf8');
+    return new Set([...preloadSrc.matchAll(/ipcRenderer\.invoke\('([^']+)'/g)].map((m) => m[1]));
+  }
+
+  it('every ipcRenderer.invoke channel preload.ts declares has a REAL ipcMain.handle registration', async () => {
+    const preloadChannels = await preloadInvokeChannels();
+    expect(preloadChannels.size).toBeGreaterThan(0); // sanity: the regex actually matched something real
+    const registered = new Set(state.handlers.keys());
+    const missing = [...preloadChannels].filter((c) => !registered.has(c));
+    // FAILS-BEFORE: comment out any one `ipcMain.handle('kb:...', ...)` registration in ipc.ts and this
+    // reds — exactly the class of bug (a preload method with no live handler) this test exists to catch.
+    expect(missing).toEqual([]);
+  });
+
+  it('every REAL registered ipcMain.handle channel is reachable from preload (no dead/orphaned handler)', async () => {
+    const preloadChannels = await preloadInvokeChannels();
+    const orphaned = [...state.handlers.keys()].filter((c) => !preloadChannels.has(c));
+    expect(orphaned).toEqual([]);
+  });
+});

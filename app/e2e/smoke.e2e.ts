@@ -52,10 +52,11 @@ test.describe('SETUP-1 — first-run boot', () => {
     const window = await app.firstWindow();
     await window.waitForLoadState('domcontentloaded');
 
-    const heading = window.locator('#app h1');
-    await expect(heading).toBeVisible({ timeout: 15_000 });
-    // Clean userData ⇒ no configured vault ⇒ Setup wizard (SETUP-1 / SETUP-6).
-    await expect(heading).toHaveText('Set up your Library');
+    // #527 ENG-15: was `toHaveText('Set up your Library')` — an exact-copy assertion that breaks this
+    // e2e on any wording change with zero functional signal (a copy edit isn't a regression). Assert on
+    // a stable `data-testid` instead — the thing this test actually cares about (clean userData ⇒ no
+    // configured vault ⇒ the Setup wizard rendered, SETUP-1 / SETUP-6), not its wording.
+    await expect(window.locator('[data-testid="setup-heading"]')).toBeVisible({ timeout: 15_000 });
   });
 });
 

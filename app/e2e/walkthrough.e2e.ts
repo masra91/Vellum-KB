@@ -106,6 +106,21 @@ test.describe('LIVE WALKTHROUGH — every view, both themes, on a seeded vault (
       }, theme);
     };
 
+    // #527 ENG-15: was a fixed arbitrary-delay sleep after the view container appeared — a flat guess at how
+    // long async (IPC) content takes to paint. Too short = a mid-load capture race (the documented
+    // Agents "Loading… ~16s" flake on a degraded machine); too long = wasted time on every fast view.
+    // Every SPEC-0058 status face marks its OWN in-progress state, so wait for those to CLEAR instead:
+    // `aria-busy="true"` (loadGuard's shared VUX-6 skeleton — most views), `.load-warming` (loadGuard's
+    // calm cold-start face, which self-retries), and Health's own literal "Scanning…" state (predates the
+    // shared skeleton). Bounded + tolerant (`.catch`) — a GENUINELY stuck view still gets captured AS-IS
+    // once the bound trips, which is the whole point of this gate (never force a false "it settled").
+    const waitForViewSettled = (root: import('@playwright/test').Locator): Promise<void> =>
+      root
+        .locator('[aria-busy="true"], .health-scanning, .load-warming')
+        .first()
+        .waitFor({ state: 'detached', timeout: 12_000 })
+        .catch(() => {});
+
     // Capture every rail view in one theme: click its nav item, let it settle (so a stuck busy/error
     // state is captured as-is — that's the whole point), then a full-window PNG.
     const captureRailViews = async (theme: 'light' | 'dark'): Promise<string[]> => {
@@ -114,9 +129,9 @@ test.describe('LIVE WALKTHROUGH — every view, both themes, on a seeded vault (
         const nav = page.locator(`.nav-item[data-view="${v.id}"]`);
         if ((await nav.count()) === 0) continue; // not a rail entry in this build — skip, don't fail
         await nav.click();
-        // Wait for the view container to mount, then a fixed settle for async (IPC) content to paint.
-        await page.locator(`.view[data-view="${v.id}"]`).first().waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {});
-        await page.waitForTimeout(900);
+        const viewEl = page.locator(`.view[data-view="${v.id}"]`).first();
+        await viewEl.waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {});
+        await waitForViewSettled(viewEl);
         await page.screenshot({ path: path.join(SHOTS_DIR, `${v.id}-${theme}.png`) });
         written.push(`${v.id}-${theme}.png`);
       }
@@ -137,8 +152,9 @@ test.describe('LIVE WALKTHROUGH — every view, both themes, on a seeded vault (
       await page.evaluate(() => {
         window.location.hash = 'showcase';
       });
-      await page.locator('.showcase').first().waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {});
-      await page.waitForTimeout(500);
+      const showcaseEl = page.locator('.showcase').first();
+      await showcaseEl.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {});
+      await waitForViewSettled(showcaseEl); // showcase is static (no IPC read) — resolves immediately
       await page.screenshot({ path: path.join(SHOTS_DIR, `showcase-${theme}.png`) });
       showcase.push(`showcase-${theme}.png`);
     }
