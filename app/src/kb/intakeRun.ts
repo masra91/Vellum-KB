@@ -19,6 +19,7 @@ import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { captureToInbox } from './ingest';
 import { appendAuditEvent } from './audit';
+import type { Mutex } from './stageLock';
 import {
   DEFAULT_MAX_ITEMS_PER_PASS,
   isSafeConnectorId,
@@ -73,6 +74,10 @@ export interface RunIntakeDeps {
   fetch: IntakeFetchFn;
   /** Injectable ISO clock (deterministic tests). */
   now?: () => string;
+  /** #517: the shared canonical-writer lock — serializes each ingested item's `captureToInbox` commit
+   *  against stage advances/other writers on the same git index. Production (`IntakeScheduler`) always
+   *  supplies it; tests that don't exercise concurrent writers may omit it. */
+  lock?: Mutex;
 }
 
 export interface RunIntakeResult {
@@ -151,11 +156,14 @@ export async function runIntakeConnector(root: string, c: IntakeConnectorConfig,
       // source that re-enters the pipeline (Decompose→Connect→Claims) like any capture (INTAKE-3).
       // The connector-default scope/sensitivity ride the capture as the archivist's classification
       // hint (INTAKE-9 / SCOPE-14) so a `confidential` feed isn't down-classified to the default.
-      const out = await captureToInbox(root, `intake:${c.id}`, [{ kind: 'text', text: renderIntakeSourceBody(c, it, fetchedAt) }], stampMs, {
-        origin: 'external',
-        scope: c.scope,
-        sensitivity: c.sensitivity,
-      });
+      const doCapture = () =>
+        captureToInbox(root, `intake:${c.id}`, [{ kind: 'text', text: renderIntakeSourceBody(c, it, fetchedAt) }], stampMs, {
+          origin: 'external',
+          scope: c.scope,
+          sensitivity: c.sensitivity,
+        });
+      // #517: serialize ONLY this commit against other writers on the same git index.
+      const out = deps.lock ? await deps.lock.run(doCapture, `intake:${c.id}`) : await doCapture();
       sourceIds.push(...out.ids);
       ingestedKeys.push(intakeDedupKey(it));
       seen.add(intakeDedupKey(it));

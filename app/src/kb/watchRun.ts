@@ -11,6 +11,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { appendAuditEvent } from './audit';
 import { captureToInbox } from './ingest';
+import type { Mutex } from './stageLock';
 import {
   checkWatchLoopSafe,
   collectWatchedFiles,
@@ -53,6 +54,10 @@ export interface RunWatchDeps {
   vaultRoot: string;
   /** Injectable ISO clock (deterministic tests). */
   now?: () => string;
+  /** #517: the shared canonical-writer lock — serializes each ingested file's `captureToInbox` commit
+   *  against stage advances/other writers on the same git index. Production (`WatchScheduler`) always
+   *  supplies it; tests that don't exercise concurrent writers may omit it. */
+  lock?: Mutex;
 }
 
 export interface RunWatchResult {
@@ -102,14 +107,17 @@ export async function ingestWatchedFile(
   stampMs: number,
   fetchedAt: string,
   priorSourceId?: string,
+  lock?: Mutex,
 ): Promise<string> {
   const text = asText(data);
   const surface = `watch:${c.id}`;
   const opts = { origin: 'external' as const, scope: c.scope, sensitivity: c.sensitivity };
-  const out =
+  const doCapture = () =>
     text !== null
-      ? await captureToInbox(root, surface, [{ kind: 'text', text: renderWatchSourceBody(c, name, fetchedAt, { textContent: text, ...(priorSourceId ? { priorSourceId } : {}) }) }], stampMs, opts)
-      : await captureToInbox(root, surface, [{ kind: 'file', name, data }], stampMs, opts);
+      ? captureToInbox(root, surface, [{ kind: 'text', text: renderWatchSourceBody(c, name, fetchedAt, { textContent: text, ...(priorSourceId ? { priorSourceId } : {}) }) }], stampMs, opts)
+      : captureToInbox(root, surface, [{ kind: 'file', name, data }], stampMs, opts);
+  // #517: serialize ONLY this commit against other writers on the same git index.
+  const out = lock ? await lock.run(doCapture, surface) : await doCapture();
   return out.ids[0];
 }
 
@@ -199,7 +207,7 @@ export async function reconcileWatchFolder(root: string, c: WatchFolderConfig, d
       const fetchedAt = now();
       const stampMs = Date.parse(fetchedAt) || Date.now();
       // WATCH-14: copy into the KB FIRST — the source is committed/preserved before we ever touch the original.
-      const sourceId = await ingestWatchedFile(root, c, f.relPath, data, stampMs, fetchedAt, prior?.sourceId);
+      const sourceId = await ingestWatchedFile(root, c, f.relPath, data, stampMs, fetchedAt, prior?.sourceId, deps.lock);
       ledger[f.relPath] = { hash, sourceId };
       ledgerDirty = true;
       hashIndex.set(hash, sourceId);

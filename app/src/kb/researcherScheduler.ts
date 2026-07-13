@@ -62,14 +62,19 @@ export class ResearcherScheduler {
   // Not persisted (restart-safe by design: a cold process falls back to the audit-derived `isResearcherDue`).
   private readonly lastRunAt = new Map<string, number>();
 
+  private readonly lock: Mutex;
+
   /** `root` is the staging worktree (where the registry + audit live + researchers write). `opts`
    *  carries the injected cognition (self-nomination runner, Web SDK options, or a `researchFn`
    *  override for tests) — shared by BOTH the inline sweep (via the dispatcher) and the standing
-   *  passes (via `runResearcher`), so the same fake drives both in tests. `lock` reserved for future
-   *  serialization with stages; runResearcher's ingest commits are add-only (unique ULID units). */
-  constructor(root: string, opts: ResearchDepsOptions = {}, _lock: Mutex = new Mutex(), log: DevLog = noopDevLog) {
+   *  passes (via `runResearcher`), so the same fake drives both in tests. #517: `lock` is the shared
+   *  canonical-writer lock — threaded into every dispatched pass's ingest commit (never the
+   *  research()/egress call itself) so it's serialized against stage advances/other writers instead of
+   *  racing them on the same git index. */
+  constructor(root: string, opts: ResearchDepsOptions = {}, lock: Mutex = new Mutex(), log: DevLog = noopDevLog) {
     this.root = path.resolve(root);
     this.opts = opts;
+    this.lock = lock;
     this.log = log;
   }
 
@@ -129,7 +134,7 @@ export class ResearcherScheduler {
     if (this.sweeping) return;
     this.sweeping = true;
     try {
-      await runInlineResearchSweep(this.root, this.opts);
+      await runInlineResearchSweep(this.root, { ...this.opts, lock: this.lock });
     } catch (err) {
       this.log.child({ scope: 'researcher-scheduler' }).error('inline-sweep-failed', { err });
     } finally {
@@ -147,7 +152,7 @@ export class ResearcherScheduler {
       // Stamp the pass (provenance + the audit event the due-check reads) with the tick's logical
       // time, so cadence is computed against the scheduler clock, not wall-clock.
       // Template-aware cognition (Web/Code), same selection the inline dispatcher uses.
-      await runResearcher(this.root, r, standingRequest(r, ulid(now), ts), { research: selectResearchFn(this.root, r, this.opts), now: () => ts });
+      await runResearcher(this.root, r, standingRequest(r, ulid(now), ts), { research: selectResearchFn(this.root, r, this.opts), now: () => ts, lock: this.lock });
       this.lastRunAt.set(r.id, now); // #506: record completion for the next tick's in-process due-check
     } catch (err) {
       this.log.child({ scope: 'researcher-scheduler' }).error('standing-pass-failed', { itemId: r.id, err });

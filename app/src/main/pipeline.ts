@@ -505,12 +505,12 @@ export async function startPipeline(vaultPath: string): Promise<Orchestrator> {
   // path (origin:'external') — reusing the JOBS scheduling shape but NOT the JobBehavior write-sink
   // (the researcherScheduler seam; JOBS-10 intact). Read-only w.r.t. the world (INTAKE-7). Inert
   // until the Principal registers + enables a connector in `.kb/intake/registry.json`.
-  const intake = new IntakeScheduler(stagingWt, intakeDepsOptions(), log);
+  const intake = new IntakeScheduler(stagingWt, intakeDepsOptions(), lock, log);
   // SPEC-0037 WATCH: live folder watchers. Each enabled, loop-safe folder gets a startup reconcile +
   // a chokidar watcher whose stable-file events drive a non-destructive copy → INGEST. The loop-guard
   // checks watched folders against the REAL vault root (vaultPath), never staging. Inert until the
   // Principal registers + enables a folder in `.kb/watch/registry.json`.
-  const watch = new WatchScheduler(stagingWt, vaultPath, log);
+  const watch = new WatchScheduler(stagingWt, vaultPath, log, { lock });
   active = {
     vaultPath,
     stagingWt,
@@ -1131,7 +1131,7 @@ async function runAnsweredReviewEffects(a: ActivePipeline, id: string): Promise<
   // chain one level deeper, so "Continue researching X?" actually continues (no dead affordance).
   // Self-gating (no-op for any other review). Same cliPath+dev-log wiring as the scheduler/Run-now (#160).
   try {
-    const resumed = await resumeApprovedResearchEscalation(a.stagingWt, id, researchDepsOptions(a.log));
+    const resumed = await resumeApprovedResearchEscalation(a.stagingWt, id, researchDepsOptions(a.log), { lock: a.lock });
     if (resumed.resumed) a.log.child({ scope: 'research' }).info('research.resumed-after-confirm', { reviewId: id, sources: resumed.sourceIds?.length ?? 0 });
   } catch (err) {
     a.log.child({ scope: 'research' }).warn('research.resume-effect-failed', { reviewId: id, err });
@@ -1834,7 +1834,7 @@ export async function runActiveResearcherNow(id: string): Promise<RunResearcherR
   // Same cliPath+dev-log wiring + per-template cognition as the scheduler (one seam, #160) — so Run-now
   // can't silently no-op in the packaged app, and a code/m365 researcher tests its OWN adapter.
   const opts = researchDepsOptions(active.log);
-  const res = await runResearcher(root, r, req, { research: selectResearchFn(root, r, opts) });
+  const res = await runResearcher(root, r, req, { research: selectResearchFn(root, r, opts), lock: active.lock });
   await appendAuditEvent(root, {
     actor: 'panel',
     eventType: 'researcher-run-now',
@@ -2066,9 +2066,12 @@ export async function commitControlFile(root: string, absPath: string, message: 
   const git = boundedGit(root, timeoutMs); // #163: bounded — runs under the canonical-writer lock
   const rel = path.relative(root, absPath);
   await git.add(rel);
-  const staged = (await git.diff(['--cached', '--name-only'])).trim();
-  if (staged.length === 0) return; // nothing actually changed
-  await git.commit(`control-panel: ${message}`);
+  // #517 BUG-10: scope BOTH the staged-check and the commit to `rel` — an unscoped `diff --cached` /
+  // `commit` would (a) short-circuit `return` on someone ELSE's leftover staged file even when `rel`
+  // itself has no change, or (b) silently sweep that leftover into this "control-panel: ..." commit.
+  const staged = (await git.diff(['--cached', '--name-only', '--', rel])).trim();
+  if (staged.length === 0) return; // nothing actually changed for THIS file
+  await git.commit(`control-panel: ${message}`, rel);
 }
 
 /** Stop and clear the active pipeline (used on shutdown / vault switch). */
