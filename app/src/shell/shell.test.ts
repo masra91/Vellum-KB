@@ -6,7 +6,7 @@
 // is node-tested in reviewBadge.test.ts; this covers the shell's DOM wiring + graceful degradation.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mountShell } from './shell';
-import { VIEW_REVIEWS, VIEW_CAPTURE, VIEW_CONNECTORS } from './views';
+import { VIEW_REVIEWS, VIEW_CAPTURE, VIEW_CONNECTORS, VIEW_EXPLORE, VIEW_ACTIVITY, VIEW_HEALTH, VIEW_AGENTS } from './views';
 import { setTopbarContext } from './nav';
 import type { KbApi, ReviewSummary } from '../kb/types';
 
@@ -180,15 +180,29 @@ describe('v3 shell chrome (SPEC-0060 — top bar, brand-diamond motion, "you" ca
     vi.restoreAllMocks();
   });
 
-  it('renders the top bar: global ⌘K search, the contextual filter slot, and Quick-add', async () => {
+  it('renders the top bar: a REAL global ⌘K search input, the contextual filter slot, and Quick-add', async () => {
     mountShell(root, '/vault', 'KB');
     await tick();
     expect(root.querySelector('.bar')).not.toBeNull();
-    const search = root.querySelector('#globalSearch');
+    // #519 §2 — a real <input>, not a styled button: it accepts text.
+    const search = root.querySelector<HTMLInputElement>('#globalSearch');
     expect(search).not.toBeNull();
-    expect(search!.querySelector('.kbd')?.textContent).toBe('⌘K');
+    expect(search!.tagName).toBe('INPUT');
+    search!.value = 'Ada';
+    expect(search!.value).toBe('Ada');
+    expect(root.querySelector('.topsearch-shell .kbd')?.textContent).toBe('⌘K');
+    expect(root.querySelector('#searchResults')?.getAttribute('role')).toBe('listbox');
     expect(root.querySelector('#topctx')).not.toBeNull(); // the per-view contextual slot exists (VUX-3)
     expect(root.querySelector('.quickadd')).not.toBeNull();
+  });
+
+  it('⌘K focuses AND selects the search input (re-summon convention)', async () => {
+    mountShell(root, '/vault', 'KB');
+    await tick();
+    const search = root.querySelector<HTMLInputElement>('#globalSearch')!;
+    search.value = 'stale query';
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true, cancelable: true }));
+    expect(document.activeElement).toBe(search);
   });
 
   it('Quick-add navigates to Capture', async () => {
@@ -233,5 +247,121 @@ describe('v3 shell chrome (SPEC-0060 — top bar, brand-diamond motion, "you" ca
     document.dispatchEvent(new CustomEvent('kb:navigate', { detail: { view: 'status' } }));
     await tick();
     expect(root.querySelector('.view[data-view="status"]')).toBeNull(); // never mounts — dissolved
+  });
+});
+
+// #519 §3/§12 — per-view topctx fillers. Explore/Activity/Health/Agents fill #topctx (verbatim from the
+// mock); every other rail view is the documented empty list. A mount test per the AC, PLUS the revisit
+// case (shell.ts's lastTopctxByView cache, added because the shell's mount-once model otherwise leaves
+// the slot empty on a second visit to an already-mounted view — not just first activation).
+describe('#519 §3 — per-view topctx fillers (Explore/Activity/Health/Agents fill; the rest stay empty)', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="app"></div>';
+    root = document.getElementById('app')!;
+    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = {
+      listReviews: vi.fn(async () => []),
+      getTodayProjection: vi.fn(async () => ({ status: 'warming' as const, data: null, builtAt: null, stale: false })),
+      pipelineStatus: vi.fn(async () => ({ queueDepth: 0, processing: null, lastArchived: null, updatedAt: null })),
+      capture: vi.fn(),
+      exploreProjection: vi.fn(async () => ({
+        status: 'ready' as const,
+        data: { neighborhood: { found: false, claims: [], neighbors: [], shown: 0, total: 0, contradictions: [] }, entities: [] },
+        builtAt: 't',
+        stale: false,
+      })),
+      exploreEntities: vi.fn(async () => []),
+      activityFeed: vi.fn(async () => ({ entries: [], total: 0, truncated: false, knownActors: [] })),
+      healthReport: vi.fn(async () => ({ status: 'ready' as const, dimensions: [], builtAt: 't', stale: false }) as unknown as Awaited<ReturnType<KbApi['healthReport']>>),
+      listAgents: vi.fn(async () => []),
+      getModelCatalog: vi.fn(async () => ({ models: [], default: null }) as unknown as Awaited<ReturnType<KbApi['getModelCatalog']>>),
+      listJobs: vi.fn(async () => []),
+      listResearchers: vi.fn(async () => []),
+      workIqStatus: vi.fn(async () => ({ installed: false }) as unknown as Awaited<ReturnType<KbApi['workIqStatus']>>),
+    } as Partial<KbApi>;
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  const go = async (view: string): Promise<void> => {
+    document.dispatchEvent(new CustomEvent('kb:navigate', { detail: { view } }));
+    await tick();
+    await tick(); // a beat for the view's own async mount/load to resolve
+  };
+
+  it('Explore fills #topctx with the filter/type/confidence chips on first mount', async () => {
+    mountShell(root, '/vault', 'KB');
+    await tick();
+    await go(VIEW_EXPLORE);
+    const ctx = root.querySelector('#topctx')!;
+    expect(ctx.textContent).toContain('Filters');
+    expect(ctx.textContent).toContain('All types');
+  });
+
+  it('Activity fills #topctx with the "All activity" chip on first mount', async () => {
+    mountShell(root, '/vault', 'KB');
+    await tick();
+    await go(VIEW_ACTIVITY);
+    expect(root.querySelector('#topctx')?.textContent).toContain('All activity');
+  });
+
+  it('Health fills #topctx with the "Re-scan" chip on first mount', async () => {
+    mountShell(root, '/vault', 'KB');
+    await tick();
+    await go(VIEW_HEALTH);
+    expect(root.querySelector('#topctx')?.textContent).toContain('Re-scan');
+  });
+
+  it('Agents fills #topctx with the "Add a researcher" chip on first mount', async () => {
+    mountShell(root, '/vault', 'KB');
+    await tick();
+    await go(VIEW_AGENTS);
+    expect(root.querySelector('#topctx')?.textContent).toContain('Add a researcher');
+  });
+
+  it('the documented empty list (Today/Ask/Capture/Reviews/Connectors/Settings) never fills #topctx', async () => {
+    mountShell(root, '/vault', 'KB');
+    await tick(); // Today is the launch default
+    expect(root.querySelector('#topctx')?.textContent).toBe('');
+    for (const view of [VIEW_CAPTURE, VIEW_REVIEWS, VIEW_CONNECTORS]) {
+      await go(view);
+      expect(root.querySelector('#topctx')?.textContent).toBe('');
+    }
+  });
+
+  it('REVISITING an already-mounted filler view restores its chips (shell mount-once model, §3)', async () => {
+    mountShell(root, '/vault', 'KB');
+    await tick();
+    await go(VIEW_EXPLORE);
+    expect(root.querySelector('#topctx')?.textContent).toContain('Filters');
+
+    await go(VIEW_CAPTURE); // navigate away — the slot clears (Capture is on the empty list)
+    expect(root.querySelector('#topctx')?.textContent).toBe('');
+
+    await go(VIEW_EXPLORE); // revisit — Explore's mount code does NOT re-run (SHELL-8), yet the chips return
+    expect(root.querySelector('#topctx')?.textContent).toContain('Filters');
+  });
+
+  it('Health\'s "Re-scan" chip calls the SAME render path as the view\'s own Retry (identity, not a duplicate)', async () => {
+    mountShell(root, '/vault', 'KB');
+    await tick();
+    await go(VIEW_HEALTH);
+    const healthReport = (window as unknown as { kbApi: KbApi }).kbApi.healthReport as unknown as ReturnType<typeof vi.fn>;
+    const callsBefore = healthReport.mock.calls.length;
+    root.querySelector<HTMLElement>('[data-topctx-action="health-rescan"]')!.click();
+    await tick();
+    expect(healthReport.mock.calls.length).toBe(callsBefore + 1); // re-ran the identical fetch, no second code path
+  });
+
+  it('Agents\' "Add a researcher" chip focuses the SAME add-dock field the hub already renders (identity)', async () => {
+    mountShell(root, '/vault', 'KB');
+    await tick();
+    await go(VIEW_AGENTS);
+    const nameField = root.querySelector<HTMLInputElement>('.researcher-add-id')!;
+    expect(nameField).not.toBeNull();
+    root.querySelector<HTMLElement>('[data-topctx-action="add-researcher"]')!.click();
+    expect(document.activeElement).toBe(nameField);
   });
 });

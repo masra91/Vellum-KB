@@ -12,6 +12,8 @@
 // "couldn't scan — recheck". Thin DOM over the typed IPC; the transform is node-tested in `kb/healthProjection`.
 import { esc } from '../html';
 import { renderLoadError, renderWarming, loadGraphWithWarming, reportLoadFailure, isWarming } from '../loadGuard';
+import { setTopbarContext } from '../nav';
+import { navIcon } from '../icons';
 import { isDanglingFinding, type HealthProjection, type HealthDimension, type ProjectedHealthFinding, type HealthSeverity } from '../../kb/healthProjection';
 import type { HealthFinding, DanglingLink } from '../../kb/healthPanel';
 import type { HealthFindingClass } from '../../kb/healthFindingKey';
@@ -20,7 +22,22 @@ const HEADER = `<h1 class="health-title viz-voice">Health</h1><p class="health-s
 
 export async function mountHealth(container: HTMLElement): Promise<void> {
   container.innerHTML = `<div class="health viz-surface">${HEADER}<p class="health-scanning viz-body">Scanning…</p></div>`;
+  wireTopctxRescan(container);
   await render(container);
+}
+
+/**
+ * #519 §3 — the "Re-scan" chip, verbatim from the mock (CTX.health). Actionable: it must not silently
+ * duplicate state, so it calls the exact same `render(container)` the view's own load/retry paths call —
+ * one source of truth, no second copy of the re-scan logic. `#topctx` is a stable, persistent shell
+ * element (never destroyed across view switches, only its innerHTML changes), so ONE delegated listener
+ * bound here at mount survives every later `setTopbarContext`/cache-restore of this chip's markup.
+ */
+function wireTopctxRescan(container: HTMLElement): void {
+  setTopbarContext(`<span class="topchip topchip--action" data-topctx-action="health-rescan">${navIcon('refresh')} Re-scan</span>`);
+  document.querySelector('#topctx')?.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).closest('[data-topctx-action="health-rescan"]')) void render(container);
+  });
 }
 
 async function render(container: HTMLElement): Promise<void> {
@@ -182,10 +199,18 @@ function footnote(): string {
 function setRowWorking(row: HTMLElement, label: string): () => void {
   const status = row.querySelector<HTMLElement>('.health-row-status');
   const btns = Array.from(row.querySelectorAll<HTMLButtonElement>('.health-act, .health-dismiss'));
-  for (const b of btns) b.disabled = true;
+  // #520 §10: disable-only surfaces get the same .is-busy visual on top of the existing disable — a
+  // within-100ms visible state on the control itself, not just the row's status slot.
+  for (const b of btns) {
+    b.disabled = true;
+    b.classList.add('is-busy');
+  }
   if (status) status.innerHTML = `<span class="vmark loom" aria-hidden="true"></span> ${esc(label)}`;
   return () => {
-    for (const b of btns) b.disabled = false;
+    for (const b of btns) {
+      b.disabled = false;
+      b.classList.remove('is-busy');
+    }
     if (status) status.textContent = '';
   };
 }

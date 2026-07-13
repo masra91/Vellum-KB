@@ -228,7 +228,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
     setApi(list, answerReview);
     await mountReviews(root);
     root.querySelector<HTMLButtonElement>('.review-confirm')!.click();
-    await vi.advanceTimersByTimeAsync(0); // flush the answer + forced refresh
+    await vi.advanceTimersByTimeAsync(340); // flush the answer + forced refresh + the exit-motion settle (#520 §10)
     expect(answerReview).toHaveBeenCalledWith({ id: 'R1', verdict: 'confirm', note: undefined });
     expect(root.textContent).toContain('Nothing needs you');
   });
@@ -406,17 +406,24 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
       return { fn, resolve: (ok) => inner?.({ ok, message: ok ? 'answered' : 'failed' }) };
     }
 
-    it('removes the row IMMEDIATELY on click — before the answer IPC resolves (fails-before: old code awaited it)', async () => {
+    it('marks the row leaving IMMEDIATELY on click — before the answer IPC resolves (fails-before: old code awaited it)', async () => {
       const { fn: answerReview, resolve } = deferredAnswer();
       setApi(vi.fn(async () => [CLAIM_REVIEW]), answerReview);
       await mountReviews(root);
       expect(root.querySelector('.review[data-id="R1"]')).not.toBeNull();
 
       root.querySelector<HTMLButtonElement>('.review-confirm')!.click();
-      // Synchronously after the click — the row is gone though the IPC promise is still PENDING.
-      expect(root.querySelector('.review[data-id="R1"]')).toBeNull();
+      // Synchronously after the click — the row starts its exit (#520 §10) though the IPC promise is
+      // still PENDING; it isn't gone from the queue waiting on the backend (REVIEW-20's core guarantee).
+      expect(root.querySelector('.review[data-id="R1"]')?.classList.contains('is-leaving')).toBe(true);
       expect(answerReview).toHaveBeenCalledWith({ id: 'R1', verdict: 'confirm', note: undefined });
-      expect(root.textContent).toContain('Nothing needs you'); // last item → empty state instantly
+      expect(root.textContent).not.toContain('Nothing needs you'); // not yet — still settling out
+
+      // The exit-motion timer (not the backend) drives the actual removal — advance past --dur-settle
+      // WITHOUT resolving the IPC, proving removal doesn't wait on the backend either.
+      await vi.advanceTimersByTimeAsync(340);
+      expect(root.querySelector('.review[data-id="R1"]')).toBeNull();
+      expect(root.textContent).toContain('Nothing needs you'); // last item → empty state once settled
 
       resolve(true); // the backend finally acks — nothing more to paint, the item was already gone
       await vi.advanceTimersByTimeAsync(0);
@@ -430,9 +437,9 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
       setApi(vi.fn(async () => [CLAIM_REVIEW]), answerReview); // projection still has it
       await mountReviews(root);
       root.querySelector<HTMLButtonElement>('.review-confirm')!.click();
-      expect(root.querySelector('.review[data-id="R1"]')).toBeNull();
+      expect(root.querySelector('.review[data-id="R1"]')?.classList.contains('is-leaving')).toBe(true);
 
-      await vi.advanceTimersByTimeAsync(POLL_MS); // a reconcile poll fires while the answer is in flight
+      await vi.advanceTimersByTimeAsync(POLL_MS); // a reconcile poll fires while the answer is in flight (>> the exit-settle duration)
       expect(root.querySelector('.review[data-id="R1"]')).toBeNull(); // STILL gone — no flicker-back
       expect(root.textContent).toContain('Nothing needs you');
       resolve(true);
@@ -444,7 +451,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
       setApi(vi.fn(async () => [CLAIM_REVIEW]), answerReview); // still open on the backend (write failed)
       await mountReviews(root);
       root.querySelector<HTMLButtonElement>('.review-confirm')!.click();
-      expect(root.querySelector('.review[data-id="R1"]')).toBeNull(); // optimistically gone
+      expect(root.querySelector('.review[data-id="R1"]')?.classList.contains('is-leaving')).toBe(true); // optimistically leaving
 
       await vi.advanceTimersByTimeAsync(0); // flush the failed IPC + the reconcile refresh
       // Restored — the item is back, carries an honest alert, and stays actionable (retry).
@@ -477,9 +484,10 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
       expect(root.querySelector('.review-error')).not.toBeNull(); // failed → banner
 
       root.querySelector<HTMLButtonElement>('.review-confirm')!.click(); // retry
-      expect(root.querySelector('.review[data-id="R1"]')).toBeNull(); // optimistically gone again
-      expect(root.querySelector('.review-error')).toBeNull(); // banner cleared on the fresh attempt
-      await vi.advanceTimersByTimeAsync(0);
+      expect(root.querySelector('.review[data-id="R1"]')?.classList.contains('is-leaving')).toBe(true); // optimistically leaving again
+      await vi.advanceTimersByTimeAsync(340); // exit-motion settle (#520 §10) — row + its stale banner both clear
+      expect(root.querySelector('.review[data-id="R1"]')).toBeNull();
+      expect(root.querySelector('.review-error')).toBeNull(); // banner gone with the row on the fresh attempt
     });
 
     it('answering one of several items removes only that row — the others (and their notes) are untouched', async () => {
@@ -490,7 +498,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
       linkNote.value = 'half-written note on the link review';
 
       root.querySelector<HTMLButtonElement>('.review[data-id="R1"] .review-confirm')!.click();
-      expect(root.querySelector('.review[data-id="R1"]')).toBeNull(); // answered row gone
+      expect(root.querySelector('.review[data-id="R1"]')?.classList.contains('is-leaving')).toBe(true); // answered row leaving
       expect(root.querySelector('.review[data-id="L1"]')).not.toBeNull(); // sibling stays
       expect(root.querySelector<HTMLTextAreaElement>('.review[data-id="L1"] .review-note')!.value).toBe(
         'half-written note on the link review',

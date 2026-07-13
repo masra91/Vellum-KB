@@ -211,12 +211,23 @@ async function onCapture(container: HTMLElement): Promise<void> {
   // can still reject (handler unregistered, serialization error). Guard so a transport reject becomes an
   // honest, retryable note instead of a SILENT failure (#160) — and the typed text + staged files are
   // left intact (never lose a capture on a failed submit).
+  //
+  // #520 §10: "Keep it" is the headline double-capture-risk fix — the button showed nothing in flight,
+  // so a second click during the await could fire a duplicate capture. `.is-busy` (sprout breathe) +
+  // `disabled` close that window; both clear in `finally` so every exit path (resolve or reject) restores
+  // the button, matching the setNote(...) calls' own all-paths-covered contract.
+  const submitBtn = container.querySelector<HTMLButtonElement>('#capture');
+  submitBtn?.classList.add('is-busy');
+  if (submitBtn) submitBtn.disabled = true;
   let res: Awaited<ReturnType<typeof window.kbApi.capture>>;
   try {
     res = await window.kbApi.capture({ inputs });
   } catch {
     setNote(container, 'Couldn’t capture just now — your text is safe; try again.', 'error');
     return;
+  } finally {
+    submitBtn?.classList.remove('is-busy');
+    if (submitBtn) submitBtn.disabled = false;
   }
   if (res.ok) {
     textArea.value = '';

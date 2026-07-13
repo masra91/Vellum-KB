@@ -26,6 +26,14 @@ const createWindow = () => {
   mainWindow = new BrowserWindow({
     width: 880,
     height: 660,
+    // #519 §4 — ONE chrome band: without this, macOS draws its own native title bar directly above the
+    // themed `.bar` (index.css), reading as two stacked toolbars. `trafficLightPosition` centers the
+    // lights in the 3.1rem (49.6px @ 16px root — no root font-size override in index.css) `.bar`: y =
+    // (49.6 − 12px light diameter) / 2 ≈ 19; x = 14 matches `.bar`'s own `padding: 0 0.9rem` left inset.
+    // (Coupled to the window's `minWidth`/clipping fix, #518 — out of this spec's scope; land carefully
+    // if #518 touches this same BrowserWindow options block.)
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 14, y: 19 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },

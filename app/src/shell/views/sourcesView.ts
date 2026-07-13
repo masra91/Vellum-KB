@@ -5,7 +5,7 @@
 // INTAKE connectors; Watched folders manage WATCH folders (DEV-5's backend). Degrades gracefully — a
 // section whose IPC fails still renders the other (PANEL-9), never a broken canvas.
 import { esc, emptyState } from '../html';
-import { withTimeout, renderLoadError } from '../loadGuard';
+import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import {
   schedulePresetLabel,
   SCHEDULE_OPTIONS,
@@ -37,7 +37,7 @@ function armSwitch(cls: string, armed: boolean, active: boolean, label: string):
 const HEADER = `<h1 class="rdesk-title src-title viz-voice">Connectors</h1><p class="rdesk-sub viz-body">Feeds you subscribe to — new items arrive as sources in your library.</p>`;
 
 export async function mountSources(container: HTMLElement): Promise<void> {
-  container.innerHTML = `<div class="rdesk viz-surface src-v2">${HEADER}<p class="viz-body">Loading…</p></div>`;
+  paintSkeleton(container, HEADER, 'cards');
   await render(container);
 }
 

@@ -377,6 +377,67 @@ describe('captureView — pipeline poll resilience (#509)', () => {
   });
 });
 
+// #520 §10 — "Keep it" is the headline double-capture-risk fix: the button showed nothing in flight, so
+// a second click during the await could fire a duplicate capture. `.is-busy` + `disabled` close that gap.
+describe('captureView — busy-button state on "Keep it" (#520 §10, double-capture guard)', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    root = document.createElement('div');
+    document.body.appendChild(root);
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  /** A capture() whose promise we resolve by hand — to assert button state WHILE the IPC is pending. */
+  function deferredCapture(): { fn: KbApi['capture']; resolve: (r: CaptureResult) => void } {
+    let inner: ((v: CaptureResult) => void) | undefined;
+    const fn = vi.fn(() => new Promise<CaptureResult>((res) => { inner = res; })) as unknown as KbApi['capture'];
+    return { fn, resolve: (r) => inner?.(r) };
+  }
+
+  it('sets .is-busy + disabled within one tick of clicking, BEFORE the capture IPC resolves', async () => {
+    const { fn: capture, resolve } = deferredCapture();
+    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = {
+      capture,
+      pipelineStatus: vi.fn().mockResolvedValue({ queueDepth: 0, processing: null, lastArchived: null, updatedAt: null }),
+    };
+    mountCapture(root, '/v', 'KB');
+    const ta = root.querySelector<HTMLTextAreaElement>('#captureText')!;
+    ta.value = 'a thought worth keeping';
+    const btn = root.querySelector<HTMLButtonElement>('#capture')!;
+
+    btn.click();
+    await flush(); // let the click handler's synchronous prelude run (the IPC call itself still hangs)
+    expect(btn.classList.contains('is-busy')).toBe(true);
+    expect(btn.disabled).toBe(true);
+    expect(capture).toHaveBeenCalledTimes(1); // fired once — a second click right now must not double-submit
+
+    resolve(OK);
+    await flush();
+    expect(btn.classList.contains('is-busy')).toBe(false);
+    expect(btn.disabled).toBe(false);
+  });
+
+  it('clears .is-busy + re-enables even when the capture IPC rejects (finally, not just the happy path)', async () => {
+    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = {
+      capture: vi.fn().mockRejectedValue(new Error('transport died')),
+      pipelineStatus: vi.fn().mockResolvedValue({ queueDepth: 0, processing: null, lastArchived: null, updatedAt: null }),
+    };
+    mountCapture(root, '/v', 'KB');
+    const ta = root.querySelector<HTMLTextAreaElement>('#captureText')!;
+    ta.value = 'a thought worth keeping';
+    const btn = root.querySelector<HTMLButtonElement>('#capture')!;
+
+    btn.click();
+    await flush();
+    expect(btn.classList.contains('is-busy')).toBe(false);
+    expect(btn.disabled).toBe(false);
+    expect(root.querySelector('#captureNote')?.textContent).toContain('try again');
+  });
+});
+
 // SPEC-0060 VUX-1: the Capture CSS block migrates off the instrument-panel --viz-* names onto the
 // warm-vellum v3 tokens. NO ember (capture is input, not a decision). Guard on the CSS source.
 describe('VUX-1 v3 token migration (SPEC-0060 — off --viz-*)', () => {

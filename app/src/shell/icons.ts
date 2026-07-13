@@ -35,6 +35,14 @@ const ICON_PATHS: Record<string, string> = {
   split: '<circle cx="7" cy="6" r="1.8"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="9" r="1.8"/><path d="M7 7.8v8.4M7 12h6a4 4 0 0 0 4-4v-.2"/>', // decompose → branch
   'alert-triangle': '<path d="M12 4 2.5 20h19z"/><path d="M12 10v4M12 17h.01"/>', // failed → warning triangle (pairs with oxide)
   'circle-check': '<circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>', // settled / ok health row (pairs with patina)
+
+  // #519 §3 — top-bar context-chip glyphs (Explore/Activity/Health/Agents), verbatim keys from the mock's
+  // ti-filter/ti-category/ti-stack-2/ti-refresh/ti-plus, redrawn in this set's own line idiom.
+  filter: '<path d="M4 5h16l-6 7v6l-4 2v-8z"/>', // funnel
+  category: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>', // 2x2 grid (entity kinds)
+  'stack-2': '<rect x="4" y="4" width="16" height="6" rx="1"/><rect x="4" y="14" width="16" height="6" rx="1"/>', // stacked bands (activity feed)
+  refresh: '<path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/>', // one clockwise arrow → re-scan
+  plus: '<path d="M12 5v14M5 12h14"/>', // add-a-researcher
 };
 
 /** Render an inline line-icon SVG (1em, currentColor) for ANY ICON_PATHS key — nav OR activity event-kind.

@@ -437,7 +437,8 @@ describe('The Line — pivot toggle (VIZ-5) + secondary readout (OBS-6/7/15)', (
 
 describe('The Line — body states', () => {
   it('renders loading / no-KB / error states', () => {
-    expect(lineBodyHtml({ view: null, loading: true, errorMsg: '', expanded: new Set(), lens: 'stage' }, NOW)).toContain('Loading…');
+    expect(lineBodyHtml({ view: null, loading: true, errorMsg: '', expanded: new Set(), lens: 'stage' }, NOW)).not.toContain('Loading…'); // #520: shaped skeleton, never bare text
+    expect(lineBodyHtml({ view: null, loading: true, errorMsg: '', expanded: new Set(), lens: 'stage' }, NOW)).toContain('skel-row');
     expect(body(null)).toContain('No library open');
     expect(lineBodyHtml({ view: null, loading: false, errorMsg: 'boom', expanded: new Set(), lens: 'stage' }, NOW)).toContain('boom');
   });
@@ -631,7 +632,8 @@ describe('mountStatus · #145 hang resilience', () => {
     setApi(vi.fn(() => new Promise<PipelineStatusView>(() => {}))); // hangs
     mountStatus(root);
     await vi.advanceTimersByTimeAsync(0); // initial paint
-    expect(root.textContent).toContain('Loading…');
+    expect(root.querySelector('[aria-busy="true"]')).not.toBeNull(); // skeleton initially (#520)
+    expect(root.textContent).not.toContain('Loading…'); // never bare "Loading…" (#520 §8)
 
     await vi.advanceTimersByTimeAsync(LOAD_TIMEOUT_MS); // trip the timeout
     expect(root.textContent).not.toContain('Loading…'); // no infinite spinner
