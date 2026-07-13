@@ -256,21 +256,46 @@ export interface DevLogEntry {
   [k: string]: unknown;
 }
 
+/** Byte budget for the tail read (#506). At `devLogLevel: debug` a 5MB active file read whole on
+ *  EVERY 2.5s status tick was ≈7GB/hour of read amplification for `limit` (default 20) entries — the
+ *  tail comfortably covers many multiples of that even on a chatty log. Mirrors `perfIndex.readSpans`. */
+export const DEFAULT_DEVLOG_TAIL_BYTES = 64 * 1024;
+
 /**
  * Read recent dev-log entries from a vault's active `pipeline.log` (OBS-6), newest-first, filtered
  * to `minLevel` and up (default `warn` — the errors/warnings the Status view surfaces). Best-effort:
- * a missing/torn log yields what parses, never throws. Reads only the active file (rotated `.N`
- * files are older history); cross-links carry `runId`/`itemId` back to the audit (OBS-3).
+ * a missing/torn log yields what parses, never throws. Reads only the TAIL of the active file (the
+ * last `tailBytes`, #506 — was the WHOLE file every tick) since `limit` recent matches live near the
+ * end; rotated `.N` files are older history, never read here. Cross-links carry `runId`/`itemId` back
+ * to the audit (OBS-3).
  */
 export async function readRecentDevLogEntries(
   vaultPath: string,
-  opts: { minLevel?: LogLevel; limit?: number } = {},
+  opts: { minLevel?: LogLevel; limit?: number; tailBytes?: number } = {},
 ): Promise<DevLogEntry[]> {
   const minRank = RANK[opts.minLevel ?? 'warn'];
   const limit = opts.limit ?? 20;
+  const tailBytes = opts.tailBytes ?? DEFAULT_DEVLOG_TAIL_BYTES;
+  const file = path.join(vaultLogDir(vaultPath), 'pipeline.log');
   let raw: string;
   try {
-    raw = await fs.readFile(path.join(vaultLogDir(vaultPath), 'pipeline.log'), 'utf8');
+    const { size } = await fs.stat(file);
+    if (size <= tailBytes) {
+      raw = await fs.readFile(file, 'utf8');
+    } else {
+      // Read ONLY the last `tailBytes` — O(budget), not O(file). The first line is cut mid-record,
+      // so drop everything up to the first newline before parsing.
+      const fh = await fs.open(file, 'r');
+      try {
+        const buf = Buffer.alloc(tailBytes);
+        await fh.read(buf, 0, tailBytes, size - tailBytes);
+        const tail = buf.toString('utf8');
+        const nl = tail.indexOf('\n');
+        raw = nl >= 0 ? tail.slice(nl + 1) : '';
+      } finally {
+        await fh.close();
+      }
+    }
   } catch {
     return [];
   }

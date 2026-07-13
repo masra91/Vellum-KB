@@ -308,10 +308,29 @@ export class Orchestrator {
   }
 
   private async drainOnce(): Promise<void> {
-    // ORCH-14: adopt any foreign drops into canonical units before draining.
-    await this.lock.run(() => normalizeInbox(this.root), 'normalize');
-    let queue = await readQueue(this.root);
-    await this.updateStatus(queue.length, null);
+    // #506: an idle sweep took the canonical lock for `normalize` even with a totally empty inbox. A
+    // cheap unlocked readdir first: nothing on disk (no canonical units, no foreign drops) means
+    // normalize has nothing to adopt, so skip that lock.run + the (then-guaranteed-empty) queue read.
+    // afterDrain below is INTENTIONALLY still unconditional — it is the STAGING-8/9 promotion backstop
+    // (a restart's missed-promotion recovery runs with an empty inbox, e.g. stagingCrashRestart.test.ts
+    // 'orchestrator restart after a crashed promotion recovers main and does NOT re-archive') and has
+    // nothing to do with inbox contents; skipping it here would silently break that recovery path.
+    let precheck: string[];
+    try {
+      precheck = await fs.readdir(path.join(path.resolve(this.root), 'inbox'));
+    } catch {
+      precheck = [];
+    }
+    let queue: string[];
+    if (precheck.length === 0) {
+      queue = [];
+      await this.updateStatus(0, null);
+    } else {
+      // ORCH-14: adopt any foreign drops into canonical units before draining.
+      await this.lock.run(() => normalizeInbox(this.root), 'normalize');
+      queue = await readQueue(this.root);
+      await this.updateStatus(queue.length, null);
+    }
     while (queue.length > 0) {
       // ORCH-17/18/20: archive up to `cap` items concurrently — each prepares OFF the lock in its own
       // ephemeral worktree, advances UNDER the shared lock (cap=1 ⇒ serial). A failing item throws and

@@ -39,6 +39,12 @@ vi.mock('../kb/canonicalAdvance', async (orig) => ({ ...(await orig<typeof impor
 vi.mock('../kb/orchestrator', async (orig) => ({ ...(await orig<typeof import('../kb/orchestrator')>()), Orchestrator: h.StubStage }));
 vi.mock('../kb/decomposeStage', async (orig) => ({ ...(await orig<typeof import('../kb/decomposeStage')>()), DecomposeStage: h.StubStage }));
 vi.mock('../kb/connectStage', async (orig) => ({ ...(await orig<typeof import('../kb/connectStage')>()), ConnectStage: h.StubStage }));
+// ComposeStage was missing from this list — its real `start()` fires an unawaited `poke()` like every
+// other stage here, so leaving it real (unlike its siblings) made this suite's "settles almost
+// instantly" assumption depend on incidental timing. #506 gave it the same canonical-HEAD queue memo
+// its siblings already had, which — like the siblings' own memo — adds a real async step to that
+// unawaited poke; stub it too so the suite is deterministic per this file's own stated intent.
+vi.mock('../kb/composeStage', async (orig) => ({ ...(await orig<typeof import('../kb/composeStage')>()), ComposeStage: h.StubStage }));
 vi.mock('../kb/claimsStage', async (orig) => ({ ...(await orig<typeof import('../kb/claimsStage')>()), ClaimsStage: h.StubStage }));
 vi.mock('../kb/jobScheduler', async (orig) => ({ ...(await orig<typeof import('../kb/jobScheduler')>()), JobScheduler: h.StubScheduler }));
 vi.mock('../kb/researcherScheduler', async (orig) => ({ ...(await orig<typeof import('../kb/researcherScheduler')>()), ResearcherScheduler: h.StubScheduler }));

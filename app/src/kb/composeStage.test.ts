@@ -379,6 +379,45 @@ describe.skipIf(!gitAvailable)('reopenComposeSetAside (COMPOSE-9 one-shot trigge
   });
 });
 
+describe.skipIf(!gitAvailable)('#506 — compose gets the same canonical-HEAD queue memo its siblings already have', () => {
+  it('an idle re-poke on an UNCHANGED canonical skips the queue walk entirely', async () => {
+    await withTempVault(async (root) => {
+      await createKb({ path: root, initGitIfNeeded: true });
+      await composeReady(root, 'Apple Keynote Notes\n\nSteve co-founded Apple.', 'Steve Jobs');
+
+      const stage = new ComposeStage(root, composeDeciderFor(LEDE));
+      await stage.poke(); // drains the one entity — canonical advances mid-drain, so this is all misses
+      expect(await readComposeQueue(root)).toHaveLength(0);
+      const afterDrain = stage.queueCacheStats();
+      expect(afterDrain.misses).toBeGreaterThanOrEqual(1);
+      expect(afterDrain.hits).toBe(0);
+
+      // A later idle sweep (30s safety net) over the SAME canonical — no commit since, so the walk is
+      // served from the memo: exactly one hit, zero additional real walks.
+      await stage.poke();
+      const afterIdle = stage.queueCacheStats();
+      expect(afterIdle.hits).toBe(1);
+      expect(afterIdle.misses).toBe(afterDrain.misses);
+    });
+  });
+
+  it('recomputes after a new entity becomes compose-ready (HEAD moved) — no staleness', async () => {
+    await withTempVault(async (root) => {
+      await createKb({ path: root, initGitIfNeeded: true });
+      await composeReady(root, 'Apple Keynote Notes\n\nSteve co-founded Apple.', 'Steve Jobs');
+
+      const stage = new ComposeStage(root, composeDeciderFor(LEDE));
+      await stage.poke();
+      const afterFirst = stage.queueCacheStats();
+
+      await composeReady(root, 'Pixar Memo\n\nEd co-founded Pixar.', 'Ed Catmull');
+      await stage.poke();
+      expect(await readComposeQueue(root)).toHaveLength(0); // the newly-ready entity was picked up
+      expect(stage.queueCacheStats().misses).toBeGreaterThan(afterFirst.misses); // a real walk ran, not a stale hit
+    });
+  });
+});
+
 describe('linkedEntityNames (COMPOSE-4 weave input)', () => {
   it('pulls display names from the links block (alias form and bare path)', () => {
     const md = [
