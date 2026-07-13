@@ -129,10 +129,12 @@ describe('Ask view (SPEC-0026 ASK-1/2/8 · v3)', () => {
     expect(col.textContent).toContain('Who was Ada Lovelace?');
     expect(col.textContent).toContain('first computer programmer');
     expect(col.querySelector('.ask-refs')).toBeTruthy();
-    // #2: the reference shows the human label + capitalized kind; the raw vault path is in the tooltip, not inline.
+    // #2: the reference shows the human label + capitalized kind, never the raw vault path — VUX-CLIP
+    // #522 C6 extended this off "not inline" to "not even in the tooltip" (a raw ref in a title
+    // attribute is the same internal-id leak the terminology glossary bans, just less visible).
     expect(col.querySelector('.ask-ref')!.textContent).toContain('Claim');
     expect(col.querySelector('.ask-refs')!.textContent).not.toContain('claims/person/ada-lovelace.md');
-    expect(col.querySelector('.ask-ref')!.getAttribute('title')).toContain('claims/person/ada-lovelace.md');
+    expect(col.querySelector('.ask-ref')!.getAttribute('title')).not.toContain('claims/person/ada-lovelace.md');
     expect(ask).toHaveBeenCalledTimes(1); // pull-only: nothing asked before submit
   });
 
@@ -419,11 +421,13 @@ describe('Ask view · citation deep-links (SPEC-0026 ASK-14)', () => {
     expect(refs).toHaveLength(2);
     expect(root.querySelector('.ask-refs')?.textContent).toContain('References');
     expect(refs[0].querySelector('.num')?.textContent).toBe('1');
-    // #2: label-first + capitalized kind; the raw path lives in the tooltip, not the visible text.
+    // #2 + VUX-CLIP #522 C6: label-first + capitalized kind; the raw path lives NOWHERE visible or in
+    // the tooltip (a title="<raw ref>" is the same internal-id leak the terminology glossary bans).
     expect(refs[0].textContent).toContain('Ada Lovelace'); // the human label
     expect(refs[0].textContent).toContain('Entity'); // capitalized kind
     expect(refs[0].textContent).not.toContain('entities/person/ada-lovelace.md');
-    expect(refs[0].getAttribute('title')).toContain('entities/person/ada-lovelace.md');
+    expect(refs[0].getAttribute('title')).not.toContain('entities/person/ada-lovelace.md');
+    expect(refs[0].getAttribute('title')).toContain('Ada Lovelace');
     expect(refs[1].textContent).toContain('coined bug');
   });
 

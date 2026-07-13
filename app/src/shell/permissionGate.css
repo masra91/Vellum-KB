@@ -1,9 +1,8 @@
 /* === macOS folder-permission UX — "Asking for the keys" (SPEC-0034 MACOS-7) ==================== */
-/* Surface styles for the pre-prompt + blocked-recovery + iCloud note, built ON the shared
-   `_design-system` ("The Line") so this app chrome reads as the SAME instrument — not a generic OS
-   permission modal. Guardrails: flat ink, NO card chrome (a ruled panel, not a floating shadowed
-   modal), accent focus (from .viz-focusable), brass = needs-you (the blocked state is expected setup,
-   waiting on YOU — never oxide/broken), the exact folder in mono. Calm: effectively no motion. */
+/* VUX-RETIRE #523 §4: re-tokened off the flat-ruled --viz-* instrument language onto v3 warm-vellum —
+   this surface is a modal-style gate, not a composer/instrument row, so it maps to a v3 dialog: linen
+   card, hairline border, sentence-case Spectral heading. Brass/gold-deep = needs-you (the blocked state
+   is expected setup, waiting on YOU — never oxide/broken); the exact folder in mono. Calm: no motion. */
 
 .perm-surface {
   min-height: 100vh;
@@ -15,18 +14,18 @@
   padding: 2rem 1.5rem;
 }
 
-/* A ruled panel, not a card — no border-radius, no shadow/elevation, no glass (§ guardrails). */
 .perm-panel {
   width: 100%;
   max-width: 30rem;
-  border-top: 1px solid var(--viz-rule);
-  padding: 1.25rem 0 0;
+  background: var(--linen);
+  border: 1px solid var(--hair);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  padding: 1.5rem 1.6rem;
 }
-/* Blocked = brass left edge (large element → hue allowed); the body/consequence text stays ink. */
+/* Blocked = a gold-deep left rule (large element → hue allowed, clears AA); the consequence text stays ink. */
 .perm-blocked {
-  border-top: 0;
-  border-left: 3px solid var(--viz-brass);
-  padding: 0.25rem 0 0 0.9rem;
+  border-left: 3px solid var(--gold-deep);
 }
 
 .perm-head {
@@ -38,31 +37,34 @@
 .perm-glyph {
   font-size: 1.4rem;
   line-height: 1;
-  color: var(--viz-ink-muted);
+  color: var(--stone);
 }
-/* The blocked glyph carries the brass hue (large/glyph element — clears contrast). */
 .perm-glyph-blocked {
-  color: var(--viz-brass);
+  color: var(--gold-deep);
 }
 .perm-title {
-  font-size: 1.125rem;
-  color: var(--viz-ink);
+  font-family: var(--voice);
+  font-weight: 500;
+  font-size: 1.15rem;
+  color: var(--ink);
   margin: 0;
 }
 .perm-body,
 .perm-steps,
 .perm-note {
-  color: var(--viz-ink);
+  font-family: var(--ui);
+  color: var(--ink);
   line-height: 1.5;
   margin: 0 0 0.6rem;
 }
 .perm-note {
-  color: var(--viz-ink-muted);
+  color: var(--stone);
   font-size: 0.9rem;
 }
-/* The exact folder, in tabular mono — reads as a precise machine value, never reflows. */
+/* The exact folder, in tabular mono — reads as a precise value, never reflows. */
 .perm-path {
-  color: var(--viz-ink);
+  font-family: var(--mono);
+  color: var(--ink-2);
   word-break: break-all;
 }
 
@@ -71,21 +73,16 @@
   gap: 0.5rem;
   margin-top: 0.25rem;
 }
-/* The primary action leans --viz-accent (the interactive emphasis hue), without a filled card-button
-   look. (Was ember; ember is reserved for "needs your decision" only — Vellum UX v2 §4.) */
-.perm-primary {
-  border-color: var(--viz-accent);
-  color: var(--viz-accent);
-}
 
 /* iCloud detect-warn — quiet, non-blocking, muted info (never an alarm). */
 .perm-icloud {
   width: 100%;
   max-width: 30rem;
-  color: var(--viz-ink-muted);
+  font-family: var(--ui);
+  color: var(--stone);
   font-size: 0.85rem;
   line-height: 1.5;
 }
 .perm-glyph-icloud {
-  color: var(--viz-ink-muted);
+  color: var(--stone);
 }

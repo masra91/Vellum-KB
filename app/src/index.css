@@ -158,6 +158,37 @@ ul.checks li {
 }
 
 /* ════════════════════════════════════════════════════════════════════════════════════════════════
+   First-run setup (VUX-RETIRE #523 §3) — VELLUM v3. Was the OLDEST layer in the app: pre-v2 generic
+   chrome (.card/.primary/.field/.checkbox/.muted/.path are SHARED bare classes other surfaces still
+   use for plain message boxes — loadGuard's error/warming state, Reviews/Settings/Agents empty states
+   — so this scopes its re-token under .setup-view rather than redefining those selectors globally). */
+/* No layout rule on .setup-view itself — body/#app (above) already center + cap the width; this is
+   purely a scoping hook so the re-token below doesn't touch the shared bare .card/.field/etc. */
+.setup-view .card { background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 1.75rem 2rem; }
+.setup-view h1 { font-family: var(--voice); font-weight: 500; font-size: 1.6rem; color: var(--ink); letter-spacing: 0.01em; margin: 0 0 0.5rem; }
+.setup-view .muted { color: var(--stone); font-family: var(--ui); font-size: 0.9rem; line-height: 1.5; }
+.setup-view .path { font-family: var(--mono); font-size: 0.8rem; color: var(--ink-2); word-break: break-all; background: var(--parchment); padding: 0.4rem 0.6rem; border-radius: var(--r-chip); }
+.setup-view button.primary { appearance: none; border: 1px solid var(--viridian); border-radius: var(--r-pill); background: var(--viridian); color: var(--linen); font-family: var(--ui); font-size: 0.9rem; font-weight: 600; padding: 0.5rem 1.2rem; cursor: pointer; margin-top: 0.75rem; text-transform: none; letter-spacing: 0; transition: var(--dur-quick) var(--e-out); }
+.setup-view button.primary:hover, .setup-view button.primary:focus-visible { background: color-mix(in srgb, var(--viridian) 82%, black); border-color: color-mix(in srgb, var(--viridian) 82%, black); }
+.setup-view button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+/* EditableField text pattern (_design-system.md §6) — a bottom-rule input, not a boxed generic field. */
+.setup-view .field { display: block; margin: 1rem 0 0.5rem; font-family: var(--ui); font-size: 0.85rem; color: var(--stone); }
+.setup-view .field input { display: block; width: 100%; margin-top: 0.35rem; padding: 0.35rem 0.1rem; border: 0; border-bottom: 1px solid var(--hair); border-radius: 0; background: transparent; color: var(--ink); font-family: var(--ui); font-size: 0.95rem; transition: border-color var(--dur-quick) var(--e-out); }
+.setup-view .field input:focus-visible { outline: none; border-bottom-color: var(--slate); box-shadow: 0 1px 0 0 var(--slate); }
+.setup-view .checkbox { display: flex; align-items: center; gap: 0.5rem; font-family: var(--ui); font-size: 0.85rem; color: var(--stone); margin: 0.75rem 0; }
+.setup-view .checkbox input { accent-color: var(--slate); }
+.setup-view .error { color: var(--oxide); font-family: var(--ui); font-size: 0.85rem; }
+.setup-view ul.checks { list-style: none; padding: 0; margin: 1rem 0; }
+.setup-view ul.checks li { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0; font-family: var(--ui); font-size: 0.88rem; color: var(--ink); border-bottom: 1px solid var(--hair); }
+/* Monochrome status-marker glyph (terminology.md §3 — never coloured emoji): the hue rides the
+   glyph only, the adjacent text stays --ink (contrast contract). */
+.setup-mark { display: inline-flex; flex: none; }
+.setup-mark svg { width: 1rem; height: 1rem; }
+.setup-mark.ok svg { color: var(--sprout); }
+.setup-mark.warn svg { color: var(--gold-deep); }
+.setup-mark.bad svg { color: var(--oxide); }
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════════
    Capture view — VELLUM v3 (SPEC-0060 VUX-1). A calm centered composer on the warm-vellum tokens
    (retires --viz-*). The composer is its own surface (focus-within ring), not a v2 card. De-slopped
    copy (eyebrow + human title, plain placeholder). Colour: NO ember (capture is input, not a decision)
@@ -177,7 +208,18 @@ ul.checks li {
 .capture-toggle input { accent-color: var(--slate); } /* tokenized checkbox — checked = slate (interactive), not OS-blue */
 /* Primary CTA — filled viridian "Keep it" (the warm capture action); scoped so global .viz-btn--primary is untouched. */
 .capture-submit { margin-left: auto; background: var(--viridian); border-color: var(--viridian); color: #f6f2e6; border-radius: var(--r-pill); text-transform: none; letter-spacing: 0; font-family: var(--ui); font-weight: 600; padding: 0.45rem 1.2rem; }
-.capture-submit:hover, .capture-submit.is-hover, .capture-submit:focus-visible { background: #2a5f50; border-color: #2a5f50; color: #f6f2e6; }
+.capture-submit:hover, .capture-submit.is-hover, .capture-submit:focus-visible { background: color-mix(in srgb, var(--viridian) 82%, black); border-color: color-mix(in srgb, var(--viridian) 82%, black); color: #f6f2e6; }
+/* Shared v3 pill button (VUX-CONFORM #524 §3) — sentence-case, replaces bare .viz-btn on warm-vellum
+   surfaces. .viz-btn's uppercase is the correct instrument tell on Researchers/Jobs/Field Desk; v3
+   surfaces were hand-overriding text-transform per call site (.capture-submit, .review-confirm) —
+   this promotes that override to a reusable class so future v3 buttons don't re-derive it or forget it. */
+.v3-btn { appearance: none; font: inherit; font-family: var(--ui); font-weight: 600; text-transform: none; letter-spacing: 0; border-radius: var(--r-pill); padding: 0.45rem 1.2rem; cursor: pointer; transition: var(--dur-quick) var(--e-out); }
+.v3-btn:disabled { opacity: 0.5; cursor: default; }
+.v3-btn--primary { background: var(--viridian); border: 1px solid var(--viridian); color: #f6f2e6; }
+.v3-btn--primary:hover, .v3-btn--primary.is-hover, .v3-btn--primary:focus-visible { background: color-mix(in srgb, var(--viridian) 82%, black); border-color: color-mix(in srgb, var(--viridian) 82%, black); color: #f6f2e6; }
+.v3-btn--ghost { background: transparent; border: 1px solid transparent; color: var(--stone); }
+.v3-btn--ghost:hover, .v3-btn--ghost.is-hover, .v3-btn--ghost:focus-visible { color: var(--viridian); }
+.v3-btn--sm { font-size: 0.78rem; padding: 0.25rem 0.7rem; }
 /* Dropzone — a dashed region that hover-lifts; drag-over = a slate wash (interactive, NOT sprout/ember). */
 .capture-dropzone { margin-top: 0.9rem; padding: 1.1rem; border: 1px dashed var(--hair); border-radius: var(--r-chip); text-align: center; color: var(--stone); font-family: var(--ui); font-size: 0.85rem; transition: transform var(--dur-quick) var(--e-out), border-color var(--dur-quick) var(--e-out), background var(--dur-quick) var(--e-out); }
 .capture-dropzone:hover { transform: translateY(-1px); border-color: var(--stone); }
@@ -187,7 +229,10 @@ ul.checks li {
 .capture-staged { list-style: none; padding: 0; margin: 0.7rem 0 0; display: flex; flex-direction: column; gap: 0.15rem; }
 .capture-staged-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0.4rem; border-bottom: 1px solid var(--hair); font-family: var(--mono); font-size: 0.78rem; }
 .capture-staged-row:last-child { border-bottom: none; }
-.capture-staged-name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* VUX-CLIP #522 C3: flex child missing min-width:0 — the classic cause of "ellipsis CSS is present but
+   does nothing" (the flex default of min-width:auto defeats it). flex:1 1 auto lets it take the row's
+   available space and actually shrink. */
+.capture-staged-name { flex: 1 1 auto; min-width: 0; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .capture-size { color: var(--faint); }
 .capture-staged-rm { margin-left: auto; }
 /* Large-capture caution (RICHIN-11) — #184: label reads AA in --ink; the hue rides the gold ◆ glyph. */
@@ -253,7 +298,7 @@ body.shell-active #app {
 /* Top bar — themed warm (not aqua): global search · contextual filter slot · Quick-add. */
 .bar {
   flex: 0 0 3.1rem; display: flex; align-items: center; gap: 0.8rem; padding: 0 0.9rem;
-  background: linear-gradient(180deg, #f3ead6, #e9dec6);
+  background: linear-gradient(180deg, var(--linen), var(--parchment));
   border-bottom: 0.5px solid var(--hair); position: relative; z-index: 6;
   /* #519 §4 — the bar itself is the drag region (main.ts's hiddenInset titleBarStyle draws no native
      bar of its own); the three interactive controls opt back out so the window stays draggable
@@ -281,8 +326,10 @@ body.shell-active #app {
   color: var(--ink); font: inherit; font-size: 0.78rem; padding: 0;
 }
 .topsearch::placeholder { color: var(--faint); }
+/* VUX-DARK #521 §4: was a hand-hex literal (the pre-token --faint value) — the same survival-patch
+   class of bug the dark re-point sweep converted everywhere else. --stone re-points on dark for free. */
 .kbd {
-  flex: none; margin-left: auto; font-family: var(--mono); font-size: 0.68rem; color: #9a927e;
+  flex: none; margin-left: auto; font-family: var(--mono); font-size: 0.68rem; color: var(--stone);
   border: 0.5px solid var(--hair); border-radius: 5px; padding: 0.05rem 0.35rem; background: var(--linen);
   transition: visibility 0s, opacity var(--dur-quick) var(--e-out);
 }
@@ -321,7 +368,7 @@ body.shell-active #app {
 .topspacer { flex: 1 1 auto; }
 .quickadd {
   flex: none; display: inline-flex; align-items: center; gap: 0.45rem; font-family: var(--ui); font-size: 0.8rem;
-  font-weight: 600; color: #fff; cursor: pointer; border: 0.5px solid #296253; border-radius: var(--r-chip);
+  font-weight: 600; color: #fff; cursor: pointer; border: 0.5px solid color-mix(in srgb, var(--viridian) 78%, black); border-radius: var(--r-chip);
   padding: 0.45rem 0.85rem; background: linear-gradient(180deg, var(--viridian-2), var(--viridian));
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset, 0 8px 18px -10px rgba(47, 107, 91, 0.6);
   transition: transform var(--dur-quick) var(--e-out), box-shadow var(--dur-quick) var(--e-out), filter var(--dur-quick) var(--e-out);
@@ -331,27 +378,15 @@ body.shell-active #app {
 .quickadd:focus-visible { outline: none; box-shadow: var(--ring); }
 
 /* "You" identity card (SPEC-0060 §7, VUX-21) — the rail's first-class self, at the foot of the rail. */
-.user { margin-top: auto; display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem; border-radius: 11px; border: 0.5px solid var(--hair); background: #fbf6ea; cursor: default; transition: var(--dur-quick) var(--e-out); }
+/* VUX-DARK #521 §4: background was a hand-hex literal (the pre-token --linen value) — same survival-
+   patch class of bug the dark re-point sweep converted everywhere else. --linen re-points on dark for free. */
+.user { margin-top: auto; display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem; border-radius: 11px; border: 0.5px solid var(--hair); background: var(--linen); cursor: default; transition: var(--dur-quick) var(--e-out); }
 .user:hover { box-shadow: var(--shadow-card); transform: translateY(-1px); }
-.user-ini { width: 1.9rem; height: 1.9rem; flex: none; border-radius: 9px; background: radial-gradient(circle at 40% 35%, var(--viridian-2), #1e5443); color: #fff; display: flex; align-items: center; justify-content: center; border: 0.5px solid rgba(201, 163, 90, 0.5); }
+.user-ini { width: 1.9rem; height: 1.9rem; flex: none; border-radius: 9px; background: radial-gradient(circle at 40% 35%, var(--viridian-2), color-mix(in srgb, var(--viridian) 70%, black)); color: #fff; display: flex; align-items: center; justify-content: center; border: 0.5px solid rgba(201, 163, 90, 0.5); }
 .user-ini svg { width: 1rem; height: 1rem; }
 .user-id { min-width: 0; }
 .user-id b { display: block; font-size: 0.78rem; font-weight: 500; color: var(--ink); }
 .user-id span { display: block; font-size: 0.66rem; color: var(--stone); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-/* Dark SURVIVAL for the new v3 chrome (NOT the deferred v3 dark design pass, SPEC-0060 §2): the v3 tokens
-   are light literals, so the new top bar + "you" card would read light-on-dark under the opt-in #478
-   toggle. These few overrides keep them legible in dark (the rail + content already support dark via the
-   --viz-* re-point); the full v3 night-study language forks later. data-theme (never prefers-color-scheme,
-   themeCohesion). */
-:root[data-theme='dark'] .bar { background: linear-gradient(180deg, #1c2c35, #16242d); border-bottom-color: #2c4150; }
-:root[data-theme='dark'] .topsearch-shell { background: #1b2b34; border-color: #2c4150; }
-:root[data-theme='dark'] .topsearch-shell:hover { background: #1b2b34; border-color: #3a5366; }
-:root[data-theme='dark'] .search-results { background: #1b2b34; border-color: #2c4150; }
-:root[data-theme='dark'] .kbd { background: #16242d; border-color: #2c4150; }
-:root[data-theme='dark'] .topchip { background: #1b2b34; border-color: #2c4150; color: #cfc7b5; }
-:root[data-theme='dark'] .user { background: #1b2b34; border-color: #2c4150; }
-:root[data-theme='dark'] .user-id b { color: #ece4d2; }
 
 /* UX v2 sidebar (vellum-ux-v2-language "Shell language") — a gradient rail with the Vellum wordmark +
    crystalline glyph, grouped nav, a GOLD inset active accent (not a solid-blue fill), hover-life, and a
@@ -362,7 +397,7 @@ body.shell-active #app {
   flex-direction: column;
   gap: 0.15rem;
   padding: 1.1rem 0.85rem 0.85rem;
-  background: linear-gradient(160deg, #f0e7d3, #e7dcc3); /* linen → parchment */
+  background: linear-gradient(160deg, var(--linen), var(--parchment));
   border-right: 0.5px solid var(--border);
   position: relative;
   overflow: hidden;
@@ -507,7 +542,9 @@ dl.settings dd {
 .settings-v2 h2 { font-family: var(--voice); font-size: 1.08rem; font-weight: 500; letter-spacing: 0; color: var(--ink); margin: 0 0 0.5rem; }
 /* Vault path + the settings <dl> values stay Plex-Mono data. */
 .settings-v2 .settings dd, .settings-v2 .path { font-family: var(--mono); color: var(--ink); }
-.settings-v2 .settings dt { color: var(--stone); }
+/* VUX-RETIRE #523 §5 / VUX-CONFORM #524 §3 — the same uppercase-drift fix as Activity/Today: dl.settings
+   dt's base rule (above) borrows the instrument-correct uppercase, which is wrong on this v3 surface. */
+.settings-v2 .settings dt { color: var(--stone); text-transform: none; letter-spacing: normal; }
 /* Tokenized Copilot status dot — hue on the dot, label ink (the detail text also carries the state). */
 .settings-v2 .settings-copilot { display: flex; align-items: baseline; gap: 0.4rem; }
 .settings-v2 .settings-status-dot { font-size: 0.7em; line-height: 1; }
@@ -604,8 +641,8 @@ ul.review-list { list-style: none; padding: 0; margin: 1.1rem 0 0; display: flex
 .review-actions { display: flex; align-items: center; gap: 0.6rem; margin-top: 1rem; }
 /* Confirm = viridian (the resolving action); Reject = a calm outline. Overrides the .viz-btn base,
    scoped to Reviews (no design-system.css edit). */
-.reviews-v2 .review-confirm.viz-btn { background: var(--viridian); border-color: var(--viridian); color: #f6f2e6; border-radius: var(--r-pill); text-transform: none; letter-spacing: 0; font-weight: 600; }
-.reviews-v2 .review-confirm.viz-btn:hover, .reviews-v2 .review-confirm.viz-btn:focus-visible { background: #2a5f50; border-color: #2a5f50; color: #f6f2e6; }
+.reviews-v2 .review-confirm.viz-btn { background: var(--viridian); border-color: var(--viridian); color: var(--linen); border-radius: var(--r-pill); text-transform: none; letter-spacing: 0; font-weight: 600; }
+.reviews-v2 .review-confirm.viz-btn:hover, .reviews-v2 .review-confirm.viz-btn:focus-visible { background: color-mix(in srgb, var(--viridian) 82%, black); border-color: color-mix(in srgb, var(--viridian) 82%, black); color: var(--linen); }
 .reviews-v2 .review-reject.viz-btn { background: transparent; border-color: var(--hair); color: var(--ink-2); border-radius: var(--r-pill); text-transform: none; letter-spacing: 0; }
 .reviews-v2 .review-reject.viz-btn:hover, .reviews-v2 .review-reject.viz-btn:focus-visible { border-color: var(--stone); color: var(--ink); background: var(--linen); }
 /* An async-answer failure banner — oxide rides the glyph only (#184); the message stays readable ink. */
@@ -614,7 +651,9 @@ ul.review-list { list-style: none; padding: 0; margin: 1.1rem 0 0; display: flex
 /* REVIEW-16 disambiguation candidate cards — linen cards, one per candidate to tell apart. */
 ul.review-candidates { list-style: none; padding: 0; margin: 0.85rem 0 0; display: flex; flex-direction: column; gap: 0.5rem; }
 .review-candidate { display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.7rem; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0.6rem 0.75rem; }
-.review-candidate-name { flex: 0 0 auto; font-family: var(--ui); font-size: 0.66rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--stone); }
+/* VUX-CLIP #522 C2: was flex:0 0 auto with no overflow handling — overflowed the card with no
+   truncation. flex:1 1 auto + min-width:0 lets it shrink; .v3-clip (markup) does the ellipsis. */
+.review-candidate-name { flex: 1 1 auto; min-width: 0; font-family: var(--ui); font-size: 0.66rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--stone); }
 .review-candidate-gloss { flex: 1 1 12rem; font-family: var(--ui); font-size: 0.9rem; color: var(--ink); }
 .review-candidate-open { flex: 0 0 auto; font-size: 0.82rem; white-space: nowrap; }
 button:disabled {
@@ -653,7 +692,11 @@ button:disabled {
 .ask-act#askSaveChat.is-error { color: var(--oxide); }
 .ask-act#askSaveChat.is-error .ask-act-i { color: var(--oxide); }
 /* Past-chats panel — a dropdown of saved threads anchored under the actions (slice-2b). */
-.ask-pastpanel { position: absolute; top: calc(100% + 0.4rem); right: 0; z-index: 20; width: 22rem; max-height: 24rem; overflow-y: auto; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-raise); padding: 0.35rem; display: flex; flex-direction: column; gap: 0.15rem; }
+/* VUX-CLIP #522 C10: was a fixed 22rem while its .content ancestor sets overflow-x:hidden — below
+   ~22rem+content width the panel itself clipped (the left portion invisible, not just constrained).
+   min() caps it to the viewport so it shrinks with the window instead of overflowing off-clip; this is
+   a container fix independent of the §4 window-minimum floor, not papered over by it. */
+.ask-pastpanel { position: absolute; top: calc(100% + 0.4rem); right: 0; z-index: 20; width: min(22rem, calc(100vw - 3rem)); max-width: 100%; max-height: 24rem; overflow-y: auto; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-raise); padding: 0.35rem; display: flex; flex-direction: column; gap: 0.15rem; }
 .ask-pastpanel[hidden] { display: none; }
 .ask-past-status { font-family: var(--ui); font-size: 0.82rem; color: var(--stone); padding: 0.7rem 0.6rem; }
 .ask-past-status.error { color: var(--oxide); }
@@ -672,7 +715,7 @@ button:disabled {
 .ask-pastdel-no { color: var(--faint); }
 .ask-pastdel-no:hover, .ask-pastdel-no:focus-visible { color: var(--ink); background: var(--hover); }
 .ask-pasttitle { font-family: var(--ui); font-weight: 600; font-size: 0.86rem; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ask-pastmeta { font-family: var(--mono); font-size: 0.68rem; color: var(--faint); }
+.ask-pastmeta { font-family: var(--mono); font-size: 0.68rem; color: var(--stone); }
 .ask-pastprev { font-family: var(--ui); font-size: 0.78rem; color: var(--stone); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── Scrolling conversation column (reclaims full width; reading measure on .ask-col) ──────────── */
@@ -772,7 +815,7 @@ button:disabled {
 .ask-send:hover { filter: brightness(1.06); }
 .ask-send:disabled { opacity: 0.55; cursor: default; }
 .ask-send .ask-send-i { font-weight: 700; }
-.ask-hint { font-family: var(--mono); font-size: 0.66rem; color: var(--faint); margin-top: 0.45rem; }
+.ask-hint { font-family: var(--mono); font-size: 0.66rem; color: var(--stone); margin-top: 0.45rem; }
 
 /* Reduced-motion: the seal pulse collapses to calm static (state reads via colour). Skeleton shimmer
    reduced-motion is handled once, generically, by the shared .skel rule above. */
@@ -960,9 +1003,8 @@ button:disabled {
 .exp-node-dot[data-kind='claim'], .exp-dot[data-kind='claim'] { fill: var(--gold); background: var(--gold); }
 /* static crystalline center core (no animation, per Principal) */
 .exp-center-glow { fill: var(--linen); opacity: 0.4; }
-.exp-center-disc { fill: #23553f; stroke: var(--gold); stroke-width: 2; }
-:root[data-theme='dark'] .exp-center-disc { fill: #1e4a39; }
-.exp-center-lattice { fill: none; stroke: #e6ce86; stroke-width: 1.4; stroke-linejoin: round; }
+.exp-center-disc { fill: color-mix(in srgb, var(--viridian) 88%, black); stroke: var(--gold); stroke-width: 2; }
+.exp-center-lattice { fill: none; stroke: color-mix(in srgb, var(--gold) 70%, white); stroke-width: 1.4; stroke-linejoin: round; }
 .exp-center-dot { fill: var(--linen); }
 .exp-center-name { font-family: var(--voice); font-size: 15px; fill: var(--ink); }
 .exp-graph-empty { font-family: var(--ui); font-size: 12px; fill: var(--stone); }
@@ -1075,7 +1117,7 @@ button:disabled {
 .ag-card { position: relative; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 1rem 1.05rem 0.9rem; }
 .ag-card .path { font-family: var(--mono); color: var(--stone); }
 .ag-chead { display: flex; align-items: flex-start; gap: 0.75rem; }
-.ag-av { flex: none; width: 2.35rem; height: 2.35rem; border-radius: 0.7rem; display: flex; align-items: center; justify-content: center; font-family: var(--voice); font-weight: 600; font-size: 1.05rem; color: #f2eee2; background: radial-gradient(circle at 40% 35%, var(--viridian-2), #1e5443); box-shadow: 0 5px 13px -7px rgba(30, 53, 71, 0.55); }
+.ag-av { flex: none; width: 2.35rem; height: 2.35rem; border-radius: 0.7rem; display: flex; align-items: center; justify-content: center; font-family: var(--voice); font-weight: 600; font-size: 1.05rem; color: #f2eee2; background: radial-gradient(circle at 40% 35%, var(--viridian-2), color-mix(in srgb, var(--viridian) 70%, black)); box-shadow: 0 5px 13px -7px rgba(30, 53, 71, 0.55); }
 .ag-idblock { min-width: 0; flex: 1; }
 .ag-name { font-family: var(--voice); font-weight: 500; font-size: 1rem; color: var(--ink); margin: 0.05rem 0 0.15rem; line-height: 1.2; }
 .ag-kind { font-family: var(--ui); font-size: 0.78rem; color: var(--stone); line-height: 1.4; }
@@ -1087,7 +1129,9 @@ button:disabled {
 .ag-state.on .dot { background: var(--viridian); }
 .ag-foot { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.85rem; padding-top: 0.7rem; border-top: 1px solid var(--hair); }
 .ag-last { font-family: var(--mono); font-size: 0.7rem; color: var(--faint); display: inline-flex; align-items: center; gap: 0.4rem; min-width: 0; }
-.ag-last .path { font-size: inherit; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* VUX-CLIP #522 C1: removed the overflow:hidden/ellipsis/nowrap override — instructions read as prose;
+   clipping them hides the thing the user most needs to check. Falls back to base .path's wrap (:73-78). */
+.ag-last .path { font-size: inherit; color: var(--faint); }
 /* Per-card "Model" disclosure — quiet, rarely opened (observe-first). */
 .ag-adv { margin-top: 0.7rem; border-top: 1px solid var(--hair); padding-top: 0.2rem; }
 .ag-adv summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.1rem 0.3rem; font-family: var(--ui); font-size: 0.75rem; color: var(--stone); transition: color var(--dur-quick) var(--e-out); }
@@ -1370,12 +1414,41 @@ option { background: var(--card); color: var(--fg); }
 .activity-title { font-family: var(--voice); font-weight: 500; font-size: 1.6rem; color: var(--ink); letter-spacing: 0.01em; margin: 0; }
 .activity-feed, .lineage-timeline, .lineage-decisions ul { list-style: none; padding: 0; margin: 0.5rem 0 0; display: flex; flex-direction: column; gap: 0.4rem; }
 .activity-note { color: var(--stone); font-family: var(--ui); font-size: 0.86rem; line-height: 1.5; }
-/* Filter row: the stage select + search + trace fields sit on one baseline-aligned row. */
-.activity-controls { display: flex; gap: 0.8rem; align-items: flex-end; flex-wrap: wrap; margin: 0.9rem 0 0.6rem; }
-.activity-field { flex: 0 1 auto; }
-.activity-field .viz-field__input { min-width: 12rem; }
-.activity-trace-input { display: flex; gap: 0.4rem; align-items: stretch; }
-.activity-trace-go { flex: none; white-space: nowrap; }
+/* Activity controls (VUX-CONFORM #524 §2) — cited directly against vellum-v3.html:848-928. Primary
+   search+filter band on one row; trace-by-id is real shipped functionality with no mock equivalent,
+   so it gets its own secondary row rather than crowding the band the mock actually specifies. */
+.activity-controls { display: flex; flex-direction: column; gap: 0.6rem; margin: 0.9rem 0 0.6rem; }
+.act-band { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+.act-search { flex: 1 1 auto; min-width: 15rem; display: flex; align-items: center; gap: 0.6rem; background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-chip); padding: 0 0.8rem; height: 2.5rem; transition: border-color var(--dur-quick) var(--e-out), box-shadow var(--dur-quick) var(--e-out); }
+.act-search:focus-within { border-color: var(--slate); box-shadow: 0 0 0 3px rgba(58, 110, 136, 0.12); }
+.act-search svg { color: var(--faint); width: 1.05rem; height: 1.05rem; flex: none; }
+.act-search input { flex: 1 1 auto; min-width: 0; border: 0; background: transparent; outline: none; font: inherit; font-size: 0.85rem; color: var(--ink); }
+.act-search input::placeholder { color: var(--faint); }
+.act-search__clear { display: none; flex: none; border: 0; background: transparent; cursor: pointer; color: var(--faint); padding: 0.2rem; border-radius: 6px; }
+.act-search__clear svg { width: 0.95rem; height: 0.95rem; display: block; }
+.act-search__clear:hover, .act-search__clear:focus-visible { color: var(--ink-2); background: rgba(0, 0, 0, 0.04); }
+.act-search.has-val .act-search__clear { display: inline-flex; }
+.act-filter { position: relative; flex: none; }
+.act-filter select { appearance: none; cursor: pointer; height: 2.5rem; padding: 0 2.2rem 0 2.3rem; border-radius: var(--r-chip); background: var(--linen); border: 1px solid var(--hair); font: inherit; font-size: 0.82rem; color: var(--ink-2); font-weight: 500; transition: border-color var(--dur-quick) var(--e-out); }
+.act-filter select:hover { border-color: var(--stone); }
+.act-filter__lead, .act-filter__chev { position: absolute; top: 50%; transform: translateY(-50%); pointer-events: none; display: flex; }
+.act-filter__lead { left: 0.8rem; color: var(--stone); }
+.act-filter__lead svg { width: 1rem; height: 1rem; }
+.act-filter__chev { right: 0.8rem; color: var(--faint); }
+.act-filter__chev svg { width: 0.95rem; height: 0.95rem; }
+.act-trace { display: flex; align-items: center; gap: 0.5rem; }
+.act-trace__label { font-family: var(--ui); font-size: 0.75rem; color: var(--stone); flex: none; }
+.act-trace__input { flex: 1 1 auto; max-width: 22rem; border: 1px solid var(--hair); border-radius: var(--r-chip); background: var(--linen); padding: 0.4rem 0.7rem; font: inherit; font-size: 0.82rem; color: var(--ink); }
+.act-trace__input:focus-visible { outline: none; box-shadow: var(--ring); border-color: var(--slate); }
+.act-trace .activity-trace-go { flex: none; white-space: nowrap; }
+/* Search-to-zero-results empty state — distinct from the true "no activity yet" state (activity-empty
+   below): this one names the search term so the Principal knows WHY nothing matched. */
+.act-empty { padding: 2.9rem 1.5rem; text-align: center; }
+.act-empty svg { width: 1.9rem; height: 1.9rem; color: var(--gold); opacity: 0.7; }
+.act-empty b { display: block; font-family: var(--voice); font-weight: 500; font-size: 1.06rem; color: var(--deep); margin: 0.75rem 0 0.25rem; }
+.act-empty span { font-size: 0.82rem; color: var(--stone); }
+.act-empty .term { font-family: var(--mono); color: var(--ink-2); }
+.act-empty div { margin-top: 1rem; }
 /* Flat-ruled entry — a hairline top rule separates rows (no card chrome on the feed). */
 .activity-entry { border: 0; border-top: 1px solid var(--hair); border-radius: 0; background: transparent; overflow: hidden; }
 .activity-entry:first-child { border-top: 0; }
@@ -1436,7 +1509,7 @@ option { background: var(--card); color: var(--fg); }
 .activity-fw {
   flex: none;
   white-space: nowrap;
-  color: var(--faint);
+  color: var(--stone);
   font-size: 0.78rem;
   font-family: var(--mono);
 }
@@ -1466,7 +1539,7 @@ option { background: var(--card); color: var(--fg); }
 /* Slim flow-strip (VUX-10) — the dialed-down Line: a loom-marked lead + compact named stages with a
    done/working/waiting legend, on a linen surface. Replaces the v2 ribbon (Status dissolved, §4). */
 .today-flow { display: flex; align-items: center; flex-wrap: wrap; gap: 0.55rem 1.1rem; padding: 0.75rem 1.1rem; margin-bottom: 1.25rem;
-  background: linear-gradient(180deg, #fcf8ef, var(--linen)); border: 0.5px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
+  background: linear-gradient(180deg, color-mix(in srgb, var(--linen) 90%, white), var(--linen)); border: 0.5px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-card); }
 .today-flow-lead { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; color: var(--ink); }
 .today-flow-stations { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0.9rem; }
 .today-fs-st { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; color: var(--stone); white-space: nowrap; }

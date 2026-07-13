@@ -108,6 +108,9 @@ function wire(container: HTMLElement): void {
     if (t.id === 'activitySearch') {
       const v = (t as HTMLInputElement).value.trim();
       filter = { ...filter, text: v || undefined };
+      // The clear button's visibility (.has-val) tracks every keystroke, not the debounced reload —
+      // it's a pure UI affordance, no reason to lag behind what the Principal is typing.
+      t.closest('.act-search')?.classList.toggle('has-val', v.length > 0);
       // Debounced: coalesce a burst of keystrokes into one load once typing pauses (VUX-14).
       if (searchDebounce !== undefined) clearTimeout(searchDebounce);
       searchDebounce = setTimeout(() => {
@@ -150,6 +153,17 @@ function wire(container: HTMLElement): void {
       renderLineage(container);
     } else if (act === 'retry-load') {
       void load(container); // #145: re-run the feed load after a failure/timeout
+    } else if (act === 'clear-search') {
+      if (searchDebounce !== undefined) { clearTimeout(searchDebounce); searchDebounce = undefined; }
+      filter = { ...filter, text: undefined };
+      renderControls(container);
+      container.querySelector<HTMLInputElement>('#activitySearch')?.focus();
+      void load(container);
+    } else if (act === 'clear-filters') {
+      if (searchDebounce !== undefined) { clearTimeout(searchDebounce); searchDebounce = undefined; }
+      filter = {};
+      renderControls(container);
+      void load(container);
     }
   });
 }
@@ -193,7 +207,7 @@ function renderBody(container: HTMLElement): void {
   const el = container.querySelector<HTMLElement>('#activityBody');
   if (!el) return;
   el.setAttribute('aria-busy', String(loading));
-  el.innerHTML = bodyHtml({ entries, total, truncated, expanded, loading, errorMsg });
+  el.innerHTML = bodyHtml({ entries, total, truncated, expanded, loading, errorMsg, filterActive: hasActiveFilter(), searchTerm: filter.text ?? '' });
 }
 function renderLineage(container: HTMLElement): void {
   const el = container.querySelector<HTMLElement>('#activityLineage');
@@ -204,22 +218,25 @@ export function controlsHtml(actors: readonly string[], f: ActivityFilter): stri
   const opts = ['<option value="">All activity</option>']
     .concat(actors.map((a) => `<option value="${esc(a)}"${f.actors?.[0] === a ? ' selected' : ''}>${esc(a)}</option>`))
     .join('');
+  const hasVal = Boolean(f.text);
   return `
-    <label class="viz-field activity-field">
-      <span class="viz-field__label viz-signage">Filter</span>
-      <select id="activityActor" class="activity-actor viz-field__input viz-body viz-focusable" aria-label="Filter by stage or agent">${opts}</select>
-    </label>
-    <label class="viz-field activity-field">
-      <span class="viz-field__label viz-signage">search</span>
-      <input id="activitySearch" class="activity-search viz-field__input viz-body viz-focusable" type="search" placeholder="Search activity…" aria-label="Search activity" value="${esc(f.text ?? '')}" />
-    </label>
-    <label class="viz-field activity-field activity-trace-field">
-      <span class="viz-field__label viz-signage">trace</span>
-      <span class="activity-trace-input">
-        <input id="activityTraceId" class="activity-trace-id viz-field__input viz-body viz-focusable" type="text" placeholder="entity / source / claim id…" aria-label="Trace lineage by id" />
-        <button type="button" id="activityTraceGo" class="viz-btn viz-btn--sm viz-focusable activity-trace-go" data-act="trace-lookup" aria-label="Trace lineage of the entered id">trace</button>
-      </span>
-    </label>`;
+    <div class="act-band">
+      <label class="act-search${hasVal ? ' has-val' : ''}" id="actSearchBox">
+        ${navIcon('search')}
+        <input id="activitySearch" class="activity-search" type="search" placeholder="Search the day’s work — try “obsidian”, “claims”, “Atlas”…" aria-label="Search activity summaries" value="${esc(f.text ?? '')}" />
+        <button type="button" class="act-search__clear" id="actClear" data-act="clear-search" aria-label="Clear search">${navIcon('close')}</button>
+      </label>
+      <div class="act-filter">
+        <span class="act-filter__lead" aria-hidden="true">${navIcon('filter')}</span>
+        <select id="activityActor" class="activity-actor" aria-label="Filter by stage or agent">${opts}</select>
+        <span class="act-filter__chev" aria-hidden="true">${navIcon('chevron-down')}</span>
+      </div>
+    </div>
+    <div class="act-trace">
+      <label for="activityTraceId" class="act-trace__label">Trace by id</label>
+      <input id="activityTraceId" class="act-trace__input activity-trace-id" type="text" placeholder="entity / source / claim id…" aria-label="Trace lineage by id" />
+      <button type="button" id="activityTraceGo" class="v3-btn v3-btn--ghost v3-btn--sm activity-trace-go" data-act="trace-lookup" aria-label="Trace lineage of the entered id">Trace</button>
+    </div>`;
 }
 
 interface BodyState {
@@ -229,13 +246,21 @@ interface BodyState {
   expanded: Set<string>;
   loading: boolean;
   errorMsg: string;
+  /** True when a search/actor filter is active (VUX-CONFORM #524 §2) — an empty result set under an
+   *  active filter is "nothing matches your search", not "no activity yet"; they need different copy. */
+  filterActive: boolean;
+  searchTerm: string;
 }
 
 export function bodyHtml(s: BodyState): string {
   if (s.loading) return skeletonFragmentHtml('rows');
   // #145: a failed/timed-out load is retryable, never an infinite spinner. The view's header +
   // controls stay mounted around this body, so a button here (not a full renderLoadError) suffices.
-  if (s.errorMsg) return `<p class="activity-error error">Couldn’t load activity: ${esc(s.errorMsg)} <button type="button" class="viz-btn viz-btn--sm viz-focusable load-retry" data-act="retry-load">Retry</button></p>`;
+  if (s.errorMsg) return `<p class="activity-error error">Couldn’t load activity: ${esc(s.errorMsg)} <button type="button" class="v3-btn v3-btn--ghost v3-btn--sm load-retry" data-act="retry-load">Retry</button></p>`;
+  if (s.entries.length === 0 && s.filterActive) {
+    const term = s.searchTerm || 'that';
+    return `<div class="act-empty">${navIcon('search')}<b>Nothing matches <span class="term">${esc(term)}</span></b><span>No run summaries contain those words. Try a shorter term, an entity name, or a different source.</span><div><button type="button" class="v3-btn v3-btn--ghost v3-btn--sm" data-act="clear-filters">Clear filters</button></div></div>`;
+  }
   if (s.entries.length === 0) return `<p class="activity-note activity-empty">No activity yet — once your library starts processing, what it does shows up here.</p>`;
   const note = s.truncated
     ? `<p class="activity-note activity-truncation">Showing the ${s.entries.length} most recent of ${s.total} events.</p>`

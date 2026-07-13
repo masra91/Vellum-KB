@@ -236,6 +236,18 @@ describe('v3 shell chrome (SPEC-0060 — top bar, brand-diamond motion, "you" ca
     expect(root.querySelector('#topctx')?.textContent).toBe('');
   });
 
+  it('announces every route change via a shared aria-live=polite region (VUX-CONFORM #524 §6)', async () => {
+    mountShell(root, '/vault', 'KB');
+    await tick();
+    const announce = root.querySelector('#viewAnnounce');
+    expect(announce).not.toBeNull();
+    expect(announce!.getAttribute('aria-live')).toBe('polite');
+    expect(announce!.textContent).toBe('Today view'); // the launch default (SPEC-0058 STATE-7)
+    document.dispatchEvent(new CustomEvent('kb:navigate', { detail: { view: VIEW_REVIEWS } }));
+    await tick();
+    expect(root.querySelector('#viewAnnounce')?.textContent).toBe('Reviews view');
+  });
+
   it('IA: Connectors replaces Sources in the rail; Status is fully dissolved (no rail entry, not navigable)', async () => {
     mountShell(root, '/vault', 'KB');
     await tick();

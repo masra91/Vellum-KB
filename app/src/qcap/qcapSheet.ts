@@ -35,30 +35,30 @@ const SHOT_LABEL: Record<ScreenshotMode, string> = {
 
 export function mountQuickCaptureSheet(root: HTMLElement): void {
   root.innerHTML = `
-    <div class="qcap-sheet viz-surface">
+    <div class="qcap-sheet">
       <div class="qcap-head">
-        <span class="qcap-mark viz-signage">Capture</span>
+        <span class="qcap-mark">Capture</span>
         <span class="qcap-head__meta">
           <span id="qcapShots" class="qcap-shots" hidden>
-            <button id="qcapShotFull" type="button" class="viz-btn viz-btn--ghost viz-focusable qcap-shot" aria-label="${SHOT_LABEL.full}" title="${SHOT_LABEL.full}">${GLYPH.full}</button>
-            <button id="qcapShotRegion" type="button" class="viz-btn viz-btn--ghost viz-focusable qcap-shot" aria-label="${SHOT_LABEL.region}" title="${SHOT_LABEL.region}">${GLYPH.region}</button>
-            <button id="qcapShotWindow" type="button" class="viz-btn viz-btn--ghost viz-focusable qcap-shot" aria-label="${SHOT_LABEL.window}" title="${SHOT_LABEL.window}">${GLYPH.window}</button>
+            <button id="qcapShotFull" type="button" class="qcap-shot" aria-label="${SHOT_LABEL.full}" title="${SHOT_LABEL.full}">${GLYPH.full}</button>
+            <button id="qcapShotRegion" type="button" class="qcap-shot" aria-label="${SHOT_LABEL.region}" title="${SHOT_LABEL.region}">${GLYPH.region}</button>
+            <button id="qcapShotWindow" type="button" class="qcap-shot" aria-label="${SHOT_LABEL.window}" title="${SHOT_LABEL.window}">${GLYPH.window}</button>
           </span>
-          <span id="qcapClipTag" class="viz-chip qcap-cliptag" hidden>clipboard</span>
+          <span id="qcapClipTag" class="qcap-cliptag" hidden>clipboard</span>
           <button id="qcapAxEnable" type="button" class="qcap-ax" hidden
             title="Turn on Accessibility to capture the selected text from any app">selection capture off — enable</button>
           <button id="qcapShotEnable" type="button" class="qcap-ax" hidden
             title="Turn on Screen Recording to capture a screenshot">screen recording off — enable</button>
         </span>
       </div>
-      <div class="viz-field qcap-field">
-        <textarea id="qcapText" class="viz-field__input viz-field__input--multiline viz-focusable qcap-input"
+      <div class="qcap-field">
+        <textarea id="qcapText" class="qcap-input"
           rows="3" aria-label="Quick capture"></textarea>
       </div>
       <div class="qcap-row">
         <span class="qcap-hint viz-numeric">⏎ save · ⇧⏎ newline · esc dismiss</span>
         <span id="qcapNote" class="qcap-note viz-numeric" role="status" aria-live="assertive"></span>
-        <button id="qcapSave" type="button" class="viz-btn viz-btn--ghost qcap-save">⏎ save</button>
+        <button id="qcapSave" type="button" class="v3-btn v3-btn--ghost v3-btn--sm qcap-save">⏎ save</button>
       </div>
     </div>`;
 

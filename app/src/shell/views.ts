@@ -10,7 +10,6 @@ export const VIEW_TODAY = 'today'; // SPEC-0058 — the v2 command-center home (
 export const VIEW_CAPTURE = 'capture';
 export const VIEW_REVIEWS = 'reviews';
 export const VIEW_ACTIVITY = 'activity';
-export const VIEW_STATUS = 'status';
 export const VIEW_ASK = 'ask';
 export const VIEW_EXPLORE = 'explore'; // SPEC-0039 — read-only entity-neighborhood graph view
 export const VIEW_HEALTH = 'health'; // SPEC-0035 — read-only structural-health lint readout
@@ -38,9 +37,10 @@ export const GROUP_MANAGE = 'Manage';
  * Activity · Health — then a "Manage" section: Agents · Connectors · Settings.
  *
  * v3 IA moves (locked, SPEC-0060 §4):
- * - **Status DISSOLVED** — no standalone Status/"the Line" rail view. "What's moving" becomes a slim
- *   flow-strip on Today; deep diagnostics fold into Health; stuck items route to Reviews. `VIEW_STATUS`
- *   + its mount are retained for back-compat deep-links, but it is NOT a rail entry.
+ * - **Status DISSOLVED** — no standalone Status/"the Line" rail view, and no mount at all (VUX-RETIRE
+ *   #523 §7 deleted the dead statusView/lineMotion/theLineModel cluster — it was unreachable + tree-
+ *   shaken already). "What's moving" lives on Today's flow-strip; deep diagnostics fold into Health;
+ *   stuck items route to Reviews — both already shipped SPEC-0060 replacements.
  * - **Sources → Connectors** — the rail entry is now `connectors` (the Sources mount is aliased until
  *   the Connectors view rebuild lands as its own PR). Watched-folders move into Settings (view content).
  * - Jobs/Researchers remain folded into the Agents hub (SPEC-0053 WS-E); their ids are deep-link-only.

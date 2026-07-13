@@ -1,7 +1,9 @@
-/* SPEC-0038 QCAP — "the intake slot" (DESIGN-QCAP). A flat-ink instrument panel, NOT a card: the
-   frameless window IS the slot. Built on the _design-system viz tokens. Flat edge = a 1px --viz-rule
-   border + a 2px --viz-sprout "live" hairline on top (the instrument is powered/active) — no drop shadow.
-   (sprout = in-progress/active; ember is reserved for "needs your decision" only — Vellum UX v2 §4.) */
+/* SPEC-0038 QCAP — "the intake slot" (DESIGN-QCAP). VUX-RETIRE #523 §2: re-skinned onto the v3
+   warm-vellum tokens — qcap was disciplined in the INSTRUMENT language while in-app Capture is
+   disciplined in the WARM language (same verb, two visual identities); the grid/behavior below is
+   UNCHANGED (SPEC-0038's frameless-window/instant-launch constraints don't change), only the tokens.
+   Flat edge = a 1px --hair border + a 2px --sprout "live" hairline on top (capture is powered/
+   listening — the right state semantic, just re-pointed off --viz-sprout). No drop shadow. */
 /* QCAP-12: head / field / command-bar as a grid `auto 1fr auto` — the action row is its own fixed
    band that NEVER scrolls off; only the middle field row gives. (KB-Lead's steer: the grid is the
    clearest "the command bar is its own band".) */
@@ -12,30 +14,50 @@
   padding: 12px 14px;
   box-sizing: border-box;
   height: 100vh;
-  border: 1px solid var(--viz-rule);
-  border-top: 2px solid var(--viz-sprout); /* the live line — capture is powered + listening (active → sprout) */
+  background: var(--vellum);
+  color: var(--ink);
+  font-family: var(--ui);
+  border: 1px solid var(--hair);
+  border-top: 2px solid var(--sprout); /* the live line — capture is powered + listening (active → sprout) */
 }
 
+/* VUX-CLIP #522 C11: qcap is a frameless narrow window — a long permission-steer note pushing the head
+   WIDER is a layout bug (the sheet has no room to give), not a text-overflow one. flex-wrap lets the
+   head's own `auto` grid row grow TALLER to fit a wrapped note instead of forcing the sheet wider. */
 .qcap-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
-/* A whisper of signage, not a form label. */
+/* Sentence-case (VUX-CONFORM #524 §3 uppercase de-drift) — a whisper of label, not signage. */
 .qcap-mark {
-  font-size: 0.66rem;
-  color: var(--viz-ink-muted);
+  font-family: var(--ui);
+  font-size: 0.72rem;
+  color: var(--stone);
 }
 
 /* Right-side head cluster: the source tag + the (rare) permission steer share the trailing edge. */
 .qcap-head__meta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
   gap: 8px;
 }
 
+/* The loaded-material tag (was .viz-chip — uppercase instrument signage; sentence-case here per the
+   v3 uppercase de-drift, VUX-CONFORM #524 §3). */
+.qcap-cliptag {
+  font-family: var(--ui);
+  font-size: 0.7rem;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-chip);
+  padding: 0.05rem 0.4rem;
+  color: var(--stone);
+}
 .qcap-cliptag[hidden] {
   display: none;
 }
@@ -51,16 +73,25 @@
   display: none;
 }
 .qcap-shot {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 2px 4px;
   line-height: 0;
-  color: var(--viz-ink-muted);
+  color: var(--stone);
+  border-radius: var(--r-chip);
 }
-.qcap-shot:hover,
+.qcap-shot:hover {
+  color: var(--viridian); /* interactive hover/focus (ember reserved for "decide") */
+}
 .qcap-shot:focus-visible {
-  color: var(--viz-accent); /* interactive hover/focus → --viz-accent (ember reserved for "decide") */
+  color: var(--viridian);
+  outline: 2px solid var(--slate);
+  outline-offset: 1px;
 }
 
 /* QCAP-9 steer-to-Settings affordance: a quiet text button, never a loud blocking banner — a denied
@@ -73,8 +104,8 @@
   padding: 0;
   cursor: pointer;
   font: inherit;
-  font-size: 0.62rem;
-  color: var(--viz-accent); /* #184 a11y + #415: an ACTION → interactive accent (AA-safe), not brass (sub-AA state hue) */
+  font-size: 0.68rem;
+  color: var(--viridian); /* #184 a11y + #415: an ACTION → interactive (AA-safe), not gold (sub-AA state hue) */
 }
 .qcap-ax:hover {
   text-decoration: underline;
@@ -90,43 +121,62 @@
   min-height: 0;
 }
 
-/* The hero intake field fills the slot at instrument scale; overflow scrolls within the field (QCAP-12). */
+/* The hero intake field fills the slot; overflow scrolls within the field (QCAP-12). VUX-RETIRE #523
+   §2: the in-app Capture composer's chrome (linen surface, hairline, ring-on-focus) adapted to qcap's
+   own compact grid-fit sizing — not a literal .capture-composer copy (that recipe's fixed padding/
+   min-height doesn't fit a frameless popup), the same VISUAL LANGUAGE. */
 .qcap-field .qcap-input {
   width: 100%;
   height: 100%;
   box-sizing: border-box;
   resize: none;
   overflow-y: auto;
+  font-family: var(--voice);
   font-size: 15px;
   line-height: 1.45;
+  background: var(--linen);
+  color: var(--ink);
+  border: 1px solid var(--hair);
+  border-radius: var(--r-chip);
+  padding: 0.5rem 0.6rem;
+  outline: none;
+  transition: border-color var(--dur-quick) var(--e-out), box-shadow var(--dur-quick) var(--e-out);
+}
+.qcap-field .qcap-input::placeholder {
+  color: var(--faint);
+  font-style: italic;
+}
+.qcap-field .qcap-input:focus-visible {
+  border-color: var(--slate);
+  box-shadow: var(--ring);
 }
 
 /* Clipboard "loaded" state: a left rule tick so it reads as loaded material, not typed text. */
 .qcap-field.is-loaded .qcap-input {
-  border-left: 2px solid var(--viz-rule);
+  border-left: 2px solid var(--hair);
 }
 
 /* Save acknowledge — the rule takes the signature sprout heat as the billet enters the line (active
-   commit motion → sprout; ember reserved for "decide"). Pairs with the --viz-patina `preserved` tick. */
+   commit motion → sprout; ember reserved for "decide"). Pairs with the viridian `preserved` tick. */
 .qcap-field.is-saving .qcap-input {
-  border-color: var(--viz-sprout);
+  border-color: var(--sprout);
   animation: qcap-save-sweep var(--viz-dur-index, 220ms) ease-out 1;
 }
 @keyframes qcap-save-sweep {
   from {
-    box-shadow: inset 2px 0 0 var(--viz-sprout);
+    box-shadow: inset 2px 0 0 var(--sprout);
   }
   to {
-    box-shadow: inset 100% 0 0 -2px var(--viz-sprout);
+    box-shadow: inset 100% 0 0 -2px var(--sprout);
   }
 }
 
-/* Failure holds in oxide (border/glyph only — text stays --viz-ink per the contrast contract). */
+/* Failure holds in oxide (border/glyph only — text stays --ink per the contrast contract). */
 .qcap-field.is-error .qcap-input {
-  border-color: var(--viz-oxide);
+  border-color: var(--oxide);
 }
 
-/* QCAP-12: the pinned command-bar footer. A 1px --viz-rule hairline along its TOP (the footer rail of
+/* QCAP-12: the pinned command-bar footer. A 1px --hair hairline along its TOP (the footer rail of
    the instrument — mirrors the §2 top sprout "live" hairline at the head), flat (no shadow); the 8px grid gap
    sits above it, 8px padding below the rule. `flex: none`-equivalent: as the grid's last `auto` row it
    never grows, so Save/Cancel stay on-screen even when the field scrolls under it. */
@@ -136,21 +186,17 @@
   justify-content: space-between;
   gap: 12px;
   font-size: 12px;
-  border-top: 1px solid var(--viz-rule);
+  border-top: 1px solid var(--hair);
   padding-top: 8px;
 }
 
 .qcap-hint {
-  color: var(--viz-ink-muted);
+  color: var(--stone);
 }
 
 .qcap-note {
   margin-left: auto;
   white-space: nowrap;
-}
-
-.qcap-save {
-  font-size: 0.62rem;
 }
 
 /* Reduced-motion parity (§5): the save reads via the static sprout rule + the `preserved` word — the

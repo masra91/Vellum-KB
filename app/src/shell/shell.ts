@@ -150,17 +150,19 @@ export function mountShell(root: HTMLElement, vaultPath: string, name: string): 
           ${SIDEBAR_WMARK}
           <div class="user" title="You — your library identity">
             <span class="user-ini" aria-hidden="true">${navIcon('person')}</span>
-            <div class="user-id"><b>You</b><span>${esc(baseName(vaultPath))}</span></div>
+            <div class="user-id"><b>You</b><span title="${esc(baseName(vaultPath))}">${esc(baseName(vaultPath))}</span></div>
           </div>
         </nav>
         <main class="content" id="viewHost"></main>
       </div>
-    </div>`;
+    </div>
+    <div id="viewAnnounce" class="sr-only" aria-live="polite" role="status"></div>`;
 
   const host = root.querySelector('#viewHost') as HTMLElement;
   const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('.nav-item'));
   const brandDiamond = root.querySelector<HTMLElement>('.brand-mark');
   const topctx = root.querySelector<HTMLElement>('#topctx');
+  const viewAnnounce = root.querySelector<HTMLElement>('#viewAnnounce');
   const containers = new Map<string, HTMLElement>();
   // #519 §3 — the shell mounts each view ONCE (SHELL-8); a REVISIT to an already-mounted view just
   // toggles `.hidden` and runs no view code, so nothing would re-fill #topctx (cleared on the way out) —
@@ -223,6 +225,14 @@ export function mountShell(root: HTMLElement, vaultPath: string, name: string): 
     }
     if (topctx) topctx.innerHTML = lastTopctxByView.get(activeId) ?? '';
     host.scrollTop = 0;
+
+    // VUX-CONFORM #524 §6: announce every route change to screen readers — a silent view swap gives
+    // no cue the content region just changed. Mirrors the ConfirmInline aria-live="polite" convention
+    // (_design-system.md §5) rather than inventing a second live-region pattern.
+    if (viewAnnounce) {
+      const activeLabel = NAV_VIEWS.find((v) => v.id === activeId)?.label ?? activeId;
+      viewAnnounce.textContent = `${activeLabel} view`;
+    }
   }
 
   for (const b of buttons) {

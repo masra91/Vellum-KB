@@ -59,7 +59,7 @@ function renderStagedFiles(container: HTMLElement): void {
       // RICHIN-11 caution: monochrome brass ◆ mark (aria-hidden) + ink label (#184) — never the multicolor emoji.
       const big = f.data.byteLength > LARGE_FILE_BYTES ? ' <span class="capture-flag"><span class="capture-flag-mark" aria-hidden="true">◆</span> large</span>' : '';
       return `<li class="capture-staged-row">
-          <span class="capture-staged-name viz-numeric">${esc(f.name)}</span>
+          <span class="capture-staged-name viz-numeric" title="${esc(f.name)}">${esc(f.name)}</span>
           <span class="capture-size viz-numeric">${humanSize(f.data.byteLength)}</span>${big}
           <button class="viz-btn viz-btn--ghost viz-btn--sm viz-focusable capture-staged-rm" data-rm="${i}" aria-label="Remove ${esc(f.name)}">remove</button>
         </li>`;

@@ -217,7 +217,7 @@ function decisionCard(d: TodayDecision): string {
   return `<div class="today-decide" data-kind="${esc(d.kind)}">
     <span class="today-decide-ic" aria-hidden="true">${navIcon(DECISION_ICON[d.kind] ?? 'reviews')}</span>
     <div class="today-decide-tx">
-      <b class="viz-signage">${esc(d.title)}</b>
+      <b>${esc(d.title)}</b>
       <p class="viz-body">${esc(d.body)}</p>
     </div>
     <button type="button" class="today-go viz-focusable" data-target="${esc(d.targetView)}">${esc(d.action)} ›</button>
@@ -231,7 +231,7 @@ function healthPanel(rows: TodayHealthRow[]): string {
     .map(
       (r) => `<div class="today-hrow" data-status="${esc(r.status)}">
         <span class="today-hi" aria-hidden="true">${navIcon(HEALTH_ICON[r.status] ?? 'circle-check')}</span>
-        <div class="today-ht"><b class="viz-signage">${esc(r.label)}</b><span class="viz-body">${esc(r.sub)}</span></div>
+        <div class="today-ht"><b>${esc(r.label)}</b><span class="viz-body">${esc(r.sub)}</span></div>
         <span class="today-hn viz-numeric">${esc(r.value)}</span>
       </div>`,
     )

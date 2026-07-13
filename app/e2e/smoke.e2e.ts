@@ -55,7 +55,7 @@ test.describe('SETUP-1 — first-run boot', () => {
     const heading = window.locator('#app h1');
     await expect(heading).toBeVisible({ timeout: 15_000 });
     // Clean userData ⇒ no configured vault ⇒ Setup wizard (SETUP-1 / SETUP-6).
-    await expect(heading).toHaveText('Set up your Knowledge Base');
+    await expect(heading).toHaveText('Set up your Library');
   });
 });
 

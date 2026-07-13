@@ -69,6 +69,33 @@ describe('dark "night-study" is an OPT-IN data-theme variant (brand/DARK-MODE-AD
   });
 });
 
+describe('VUX-DARK #521 — every v3 token has a dark counterpart, hex-literal survival patches swept', () => {
+  const V3_TOKENS = [
+    'vellum', 'linen', 'parchment', 'viridian', 'viridian-2', 'deep', 'slate', 'mist',
+    'gold', 'gold-deep', 'sprout', 'ember', 'oxide', 'ink', 'ink-2', 'stone', 'faint', 'hair',
+  ];
+  const darkRegion = ds.slice(ds.indexOf("[data-theme='dark']"));
+
+  it('every v3 color token declared in the light :root is re-pointed under [data-theme="dark"] (§5 — fails loudly if a future token ships light-only)', () => {
+    for (const token of V3_TOKENS) {
+      expect(darkRegion, `--${token} has no dark counterpart`).toMatch(new RegExp(`--${token}:\\s`));
+    }
+  });
+
+  it('the ten hand-hex survival-patch sites are gone (§4 sweep) — no light-literal card ships light-on-dark', () => {
+    const SURVIVAL_HEXES = ['#f3ead6', '#e9dec6', '#f0e7d3', '#e7dcc3', '#fbf6ea', '#2a5f50', '#296253', '#23553f', '#1e4a39', '#e6ce86', '#1e5443', '#fcf8ef'];
+    for (const hex of SURVIVAL_HEXES) {
+      expect(css, `${hex} should have been converted to a token/color-mix`).not.toContain(hex);
+    }
+  });
+
+  it('--gold-deep dark clears AA (≥4.5:1) against --viz-panel dark (§5 AC — no shipped precedent to copy)', () => {
+    // #d9b872 on #1e3340 ≈ 6.9:1 (measured via WCAG relative-luminance contrast). Locks the literal so a
+    // future edit to either value re-triggers this check rather than silently drifting under AA.
+    expect(darkRegion).toMatch(/--gold-deep:\s*#d9b872/);
+  });
+});
+
 describe('.warning caution is tokenized (SPEC-0057 dark-coverage + #184)', () => {
   // .warning was a hardcoded amber (background:#fff8e1) that wouldn't flip under the [data-theme=dark]
   // role-token re-point → a glaring light island on the dark ground (it was also off-brand in light).

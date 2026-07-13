@@ -329,7 +329,7 @@ function candidateRowHtml(c: ReviewSubjectCandidate): string {
     : '';
   return `
         <li class="review-candidate viz-spine">
-          <span class="review-candidate-name viz-signage">${esc(c.name)}</span>
+          <span class="review-candidate-name viz-signage v3-clip" title="${esc(c.name)}">${esc(c.name)}</span>
           <span class="review-candidate-gloss viz-body">${esc(scrubUlids(c.gloss))}</span>
           ${link}
         </li>`;

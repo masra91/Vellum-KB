@@ -36,9 +36,13 @@ const ICON_PATHS: Record<string, string> = {
   'alert-triangle': '<path d="M12 4 2.5 20h19z"/><path d="M12 10v4M12 17h.01"/>', // failed → warning triangle (pairs with oxide)
   'circle-check': '<circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>', // settled / ok health row (pairs with patina)
 
+  // VUX-CONFORM #524 §2 — Activity controls (.act-search / .act-filter / .act-empty, vellum-v3.html:914-928).
+  'chevron-down': '<path d="M6 9l6 6 6-6"/>', // select caret
+  close: '<path d="M6 6l12 12M18 6L6 18"/>', // clear-search
+
   // #519 §3 — top-bar context-chip glyphs (Explore/Activity/Health/Agents), verbatim keys from the mock's
   // ti-filter/ti-category/ti-stack-2/ti-refresh/ti-plus, redrawn in this set's own line idiom.
-  filter: '<path d="M4 5h16l-6 7v6l-4 2v-8z"/>', // funnel
+  filter: '<path d="M4 5h16l-6 7v6l-4 2v-8z"/>', // funnel (also reused by VUX-CONFORM #524's .act-filter)
   category: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>', // 2x2 grid (entity kinds)
   'stack-2': '<rect x="4" y="4" width="16" height="6" rx="1"/><rect x="4" y="14" width="16" height="6" rx="1"/>', // stacked bands (activity feed)
   refresh: '<path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/>', // one clockwise arrow → re-scan

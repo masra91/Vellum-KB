@@ -22,9 +22,9 @@ describe('permissionGate render helpers (MACOS-7)', () => {
   it('prePromptHtml names the exact folder (mono) + steers to Allow, with the ⌖ glyph', () => {
     const h = prePromptHtml(FOLDER);
     expect(h).toContain('⌖');
-    expect(h).toContain('needs access to your vault folder');
+    expect(h).toContain('needs access to your library folder'); // VUX-RETIRE #523 §4: vault → library
     expect(h).toContain(FOLDER);
-    expect(h).toContain('perm-path viz-numeric'); // the path is tabular-mono
+    expect(h).toContain('perm-path'); // the path is tabular-mono
     expect(h).toContain('choose <strong>Allow</strong>');
     expect(h).toContain('id="perm-continue"');
   });
@@ -32,9 +32,9 @@ describe('permissionGate render helpers (MACOS-7)', () => {
   it('blockedHtml is brass + actionable (Settings path + Open System Settings + Retry) — never oxide', () => {
     const h = blockedHtml(FOLDER);
     expect(h).toContain('⚠');
-    expect(h).toContain('perm-glyph-blocked'); // brass glyph (CSS), not the oxide alarm
-    expect(h).not.toContain('viz-state-error'); // never the oxide/broken hue — it's brass (waiting on you)
-    expect(h).toContain('can’t reach your vault folder');
+    expect(h).toContain('perm-glyph-blocked'); // gold-deep glyph (CSS), not the oxide alarm
+    expect(h).not.toContain('viz-state-error'); // never the oxide/broken hue — it's gold-deep (waiting on you)
+    expect(h).toContain('can’t reach your library folder'); // VUX-RETIRE #523 §4: vault → library
     expect(h).toContain(FOLDER);
     expect(h).toContain('Privacy &amp; Security → Files and Folders');
     expect(h).toContain('id="perm-open-settings"');
