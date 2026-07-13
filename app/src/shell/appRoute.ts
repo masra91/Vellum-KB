@@ -36,7 +36,7 @@ function renderSetup(): void {
   root.innerHTML = `
     <div class="setup-view">
     <div class="card">
-      <h1>Set up your Library</h1>
+      <h1 data-testid="setup-heading">Set up your Library</h1>
       <p class="muted">
         Choose a folder to hold your library. It becomes a git-versioned folder you can also
         open directly in Obsidian.
