@@ -12,7 +12,7 @@
 // they apply + audit; read-only viewing needs none. PANEL-9: the view degrades to a friendly message
 // when no KB is active or IPC fails.
 import { esc } from '../html';
-import { withTimeout, renderLoadError } from '../loadGuard';
+import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import { schedulePresetLabel, SCHEDULE_OPTIONS, isRiskyJobChange } from '../../kb/jobsPanel';
 import type { JobView, JobConfigPatch } from '../../kb/types';
 
@@ -24,7 +24,7 @@ const POSTURE_LABEL: Record<string, string> = { guarded: 'Guarded', autonomous: 
 const HEADER = `<p class="job-sub viz-body">Recurring background tasks that keep your library healthy. Changes apply without a restart.</p>`;
 
 export async function mountJobs(container: HTMLElement): Promise<void> {
-  container.innerHTML = `<div class="jobs-view viz-surface">${HEADER}<p class="viz-body">Loading…</p></div>`;
+  paintSkeleton(container, HEADER, 'cards');
   await render(container);
 }
 

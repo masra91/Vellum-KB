@@ -353,13 +353,26 @@ async function answer(container: HTMLElement, id: string, verdict: 'confirm' | '
   await refresh(container); // forced repaint → the still-open item returns with its error banner
 }
 
-/** REVIEW-20: remove one answered row from the DOM IMMEDIATELY (before the verdict IPC resolves), so
- *  the queue reflects the click with zero backend wait. Shows the empty state if it was the last item,
- *  and keeps `renderedSig` consistent with what a refresh would compute now (so the next unchanged poll
- *  stays a no-op rather than repainting the item back). */
+/** REVIEW-20: mark one answered row as leaving IMMEDIATELY (before the verdict IPC resolves), so the
+ *  queue reflects the click with zero backend wait. #520 §10: the row exits via `.is-leaving` (fade+lift
+ *  over --dur-settle) rather than a synchronous `.remove()` — the actual DOM removal (+ empty-state check)
+ *  happens once the transition ends, with a matching-duration fallback timer so a reduced-motion run
+ *  (no transition, no `transitionend`) still removes the node. `renderedSig` updates immediately either
+ *  way, so the next unchanged poll stays a no-op rather than repainting the item back mid-exit. */
 function optimisticallyRemove(container: HTMLElement, id: string): void {
-  container.querySelector(`.review[data-id="${cssEscape(id)}"]`)?.remove();
-  if (!container.querySelector('.review')) paintEmpty(container);
+  const li = container.querySelector<HTMLElement>(`.review[data-id="${cssEscape(id)}"]`);
+  if (li) {
+    let done = false;
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      li.remove();
+      if (!container.querySelector('.review')) paintEmpty(container);
+    };
+    li.classList.add('is-leaving');
+    li.addEventListener('transitionend', finish, { once: true });
+    setTimeout(finish, 340); // matches --dur-settle; the reduced-motion path (no transition) relies on this
+  }
   renderedSig = sigFor(lastList);
 }
 

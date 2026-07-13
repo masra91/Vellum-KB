@@ -11,6 +11,8 @@
 import { mountAgents } from './agentsView';
 import { mountJobs } from './jobsView';
 import { mountResearchers } from './researchersView';
+import { setTopbarContext } from '../nav';
+import { navIcon } from '../icons';
 
 export async function mountAgentsHub(container: HTMLElement): Promise<void> {
   // v3 (SPEC-0060 VUX-1): the hub frame on the warm-vellum language — a calm top head + headed sections.
@@ -58,9 +60,27 @@ export async function mountAgentsHub(container: HTMLElement): Promise<void> {
     mount(sec(name)).catch(() => {
       sec(name).innerHTML = `<p class="agents-section-error viz-body">Couldn’t load this section — reopen Agents to retry.</p>`;
     });
+  wireTopctxAddResearcher(container);
   await Promise.all([
     mountSection('librarians', mountAgents),
     mountSection('schedules', mountJobs),
     mountSection('researchers', mountResearchers),
   ]);
+}
+
+/**
+ * #519 §3 — the "Add a researcher" chip, verbatim from the mock (CTX.agents). Actionable: researchersView
+ * (the Researchers sub-section) already renders an always-present add-dock (template tiles + name field,
+ * `researchersView.ts:addDock`) rather than a separate "Add" button to click — so "the hub's own button
+ * fires" is, honestly, bringing that dock into view and focusing its name field, not duplicating any
+ * create-researcher logic (there's exactly one: the dock itself, still the single source of truth).
+ */
+function wireTopctxAddResearcher(container: HTMLElement): void {
+  setTopbarContext(`<span class="topchip topchip--action" data-topctx-action="add-researcher">${navIcon('plus')} Add a researcher</span>`);
+  document.querySelector('#topctx')?.addEventListener('click', (e) => {
+    if (!(e.target as HTMLElement).closest('[data-topctx-action="add-researcher"]')) return;
+    const nameField = container.querySelector<HTMLInputElement>('.researcher-add-id');
+    nameField?.scrollIntoView({ block: 'center' });
+    nameField?.focus();
+  });
 }

@@ -106,7 +106,7 @@ export async function loadGraphWithWarming<T>(
  * static header (not user data), so it is intentionally not escaped — same contract as {@link renderLoadError}.
  */
 export function renderWarming(container: HTMLElement, headerHtml: string, onRetry: () => void): void {
-  container.innerHTML = `<div class="card">${headerHtml}<p class="load-warming viz-body">Still preparing your knowledge graph — this can take a moment the first time on a large library. <button type="button" class="btn load-retry">Retry</button></p></div>`;
+  container.innerHTML = `<div class="load-face viz-surface">${headerHtml}<p class="load-warming viz-body"><span class="vmark churn load-face-mark" aria-hidden="true"></span> Still preparing your library — this can take a moment the first time on a large one. <button type="button" class="load-face-btn load-retry">Retry</button></p></div>`;
   container.querySelector<HTMLButtonElement>('.load-retry')?.addEventListener('click', () => onRetry());
 }
 
@@ -118,6 +118,59 @@ export function renderWarming(container: HTMLElement, headerHtml: string, onRetr
  * data), so it is intentionally not escaped.
  */
 export function renderLoadError(container: HTMLElement, headerHtml: string, onRetry: () => void): void {
-  container.innerHTML = `<div class="card">${headerHtml}<p class="error load-error">Couldn’t load — the app may be busy or still starting up. <button type="button" class="btn load-retry">Retry</button></p></div>`;
+  container.innerHTML = `<div class="load-face load-face-error viz-surface">${headerHtml}<p class="error load-error">Couldn’t load — the app may be busy or still starting up. <button type="button" class="load-face-btn load-retry">Retry</button></p></div>`;
   container.querySelector<HTMLButtonElement>('.load-retry')?.addEventListener('click', () => onRetry());
+}
+
+/** Skeleton shapes the shared primitive can paint (#520 §8) — pick the one matching the view's real
+ *  loaded layout: `cards` for a card list (Sources/Connectors, Agents-hub sub-sections, Settings),
+ *  `rows` for a flat table/list (Activity, Jobs/Schedules), `prose` for flowing text (Today, Ask). */
+export type SkeletonShape = 'cards' | 'rows' | 'prose';
+
+function skeletonShapeHtml(shape: SkeletonShape): string {
+  if (shape === 'cards') {
+    const card =
+      '<div class="skel-card" aria-hidden="true"><span class="skel skel-ln"></span>' +
+      '<span class="skel skel-ln skel-ln--short"></span><span class="skel skel-ln skel-ln--sub"></span></div>';
+    return `<div class="skel-cards">${card}${card}</div>`;
+  }
+  if (shape === 'rows') {
+    const row =
+      '<div class="skel-row" aria-hidden="true"><span class="skel skel-ln skel-ln--short"></span>' +
+      '<span class="skel skel-ln"></span></div>';
+    return `<div class="skel-rows">${row}${row}${row}</div>`;
+  }
+  return (
+    '<div class="skel-prose" aria-hidden="true"><span class="skel skel-ln skel-ln--w1"></span>' +
+    '<span class="skel skel-ln skel-ln--w2"></span><span class="skel skel-ln skel-ln--w3"></span></div>'
+  );
+}
+
+/**
+ * A bare status-line + shaped skeleton fragment, with no wrapping surface/header — for a view that
+ * already owns its own container chrome and just needs its inner slot filled (e.g. Activity's
+ * `#activityBody`, Health's `.line` body). Caller's slot element should carry `aria-busy="true"` itself
+ * (it isn't set here, since there's no single wrapper this function controls).
+ */
+export function skeletonFragmentHtml(shape: SkeletonShape = 'cards'): string {
+  return (
+    '<div class="skel-status" aria-hidden="true"><span class="vmark loom"></span> Reading your library…</div>' +
+    skeletonShapeHtml(shape)
+  );
+}
+
+/**
+ * Paint the shared VUX-6 skeleton — a shaped placeholder (never bare "Loading…" text), synchronously on
+ * the first frame at mount, before the async read starts. `headerHtml` is the view's own trusted static
+ * header (kept so the surface still looks like itself while warming — same contract as
+ * {@link renderWarming}/{@link renderLoadError}); `shape` matches the view's real loaded layout (§8).
+ * `aria-busy="true"` sits on the swapped wrapper, so it clears automatically the moment the view replaces
+ * `container.innerHTML` with real content — no manual cleanup needed at the call site.
+ */
+export function skeletonHtml(headerHtml: string, shape: SkeletonShape = 'cards'): string {
+  return `<div class="viz-surface" aria-busy="true">${headerHtml}${skeletonFragmentHtml(shape)}</div>`;
+}
+
+export function paintSkeleton(container: HTMLElement, headerHtml: string, shape: SkeletonShape = 'cards'): void {
+  container.innerHTML = skeletonHtml(headerHtml, shape);
 }

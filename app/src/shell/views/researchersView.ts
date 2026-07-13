@@ -14,7 +14,7 @@
 //   failure/blocked never masquerade as empty (#160/#180; RESEARCH-11).
 // - schedule/autonomy + the add-kind picker are custom segmented/tile controls, never native <select>.
 import { esc } from '../html';
-import { withTimeout, renderLoadError } from '../loadGuard';
+import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import { formatTimestamp } from '../formatTime';
 import {
   schedulePresetLabel,
@@ -55,7 +55,7 @@ const templateDesc = (t: ResearcherView['template']): string => TEMPLATE_BY_KEY.
 const HEADER = `<p class="rdesk-sub viz-body">Agents you brief and dispatch outside your library — they bring back cited sources. Clearance shows how far each one's data can travel.</p>`;
 
 export async function mountResearchers(container: HTMLElement): Promise<void> {
-  container.innerHTML = `<div class="rdesk viz-surface">${HEADER}<p class="viz-body">Loading…</p></div>`;
+  paintSkeleton(container, HEADER, 'cards');
   await render(container);
 }
 

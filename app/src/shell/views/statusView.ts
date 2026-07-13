@@ -15,7 +15,7 @@
 // pure (data → HTML string) so they unit-test without a DOM; the funnel/stepper math lives in
 // `theLineModel.ts` (also pure).
 import { esc } from '../html';
-import { withTimeout } from '../loadGuard';
+import { withTimeout, skeletonFragmentHtml } from '../loadGuard';
 import { formatTimestamp } from '../formatTime';
 import { stageDisplayName } from '../stageLabels';
 import {
@@ -204,6 +204,7 @@ function renderBody(container: HTMLElement): void {
   // VIZ-9 change-guard: only touch the DOM when the markup actually changed, so an unchanged poll
   // doesn't restart the ember-breathe / stepper animations (and saves layout on the calm idle).
   if (html !== lastHtml) {
+    el.setAttribute('aria-busy', String(loading && view === null));
     el.innerHTML = html;
     lastHtml = html;
     // §5 motion (VIZ-1/signature): roll the funnel/in-flight counts from their prior values + index
@@ -232,7 +233,7 @@ export function lineBodyHtml(s: BodyState, nowMs: number): string {
   // but must NOT wipe a healthy Line (the poll auto-retries + self-heals). With a view present we keep
   // rendering it; only a cold failure (no last-known) shows the banner.
   if (s.errorMsg && s.view === null) return `<p class="line-error viz-body" role="alert">Couldn’t load status: ${esc(s.errorMsg)}</p>`;
-  if (s.loading && s.view === null) return `<p class="line-loading viz-body">Loading…</p>`;
+  if (s.loading && s.view === null) return skeletonFragmentHtml('rows');
   if (s.view === null) return `<p class="line-empty viz-body">No library open.</p>`;
   const stations = buildStations(s.view);
   // ENG-15/16: a legacy/partial status payload may omit `inFlight`/`setAsideItems`; coalesce here to match

@@ -22,6 +22,7 @@ import {
 import { esc, baseName } from './html';
 import { navIcon } from './icons';
 import { NAVIGATE_EVENT, TOPBAR_CONTEXT_EVENT, type NavigateDetail, type TopbarContextDetail } from './nav';
+import { wireTopbarSearch } from './topbarSearch';
 import { reviewBadgeText, reviewBadgeAria } from './reviewBadge';
 import { createVisibilityPoll, type VisibilityPoll } from './visibilityPoll';
 import { mountToday } from './views/todayView';
@@ -45,14 +46,22 @@ const BRAND_DIAMOND =
   `<polygon class="d-mid" points="12,7 17,12 12,17 7,12" stroke-width="1.1"/></g>` +
   `<circle class="d-core" cx="12" cy="12" r="1.9" fill="var(--gold)"/></svg></span>`;
 
-// The v3 top bar (SPEC-0060 §4, VUX-3): a warm-themed bar with global ⌘K search, the per-view contextual
-// filter slot (#topctx — filled by each view via setTopbarContext, cleared on view change), and the
-// viridian Quick-add (→ Capture). Search is a command-surface affordance (⌘K focuses it); a results
-// backend is a later feature, so it stays an honest entry point, not a dead control.
+// The v3 top bar (SPEC-0060 §4, VUX-3): a warm-themed bar with a REAL global ⌘K search (#519 §2 — a
+// live `<input>` + a `role="listbox"` results overlay, wired by topbarSearch.ts), the per-view
+// contextual filter slot (#topctx — filled by each view via setTopbarContext, cleared on view change),
+// and the viridian Quick-add (→ Capture). The glyph + ⌘K hint are siblings of the input (an `<input>`
+// can't hold child elements) inside `.topsearch-shell`, which carries the pill visual `.topsearch` used
+// to own directly.
 const TOP_BAR =
   `<div class="bar">` +
-  `<button type="button" class="topsearch" id="globalSearch" title="Search everything (⌘K)" aria-label="Search everything">` +
-  `${navIcon('search')}<span class="ts-ph">Search entities, claims, sources…</span><span class="kbd">⌘K</span></button>` +
+  `<div class="topsearch-shell">` +
+  `<span class="ts-glyph" aria-hidden="true">${navIcon('search')}</span>` +
+  `<input type="text" class="topsearch" id="globalSearch" placeholder="Search entities, claims, sources…" ` +
+  `aria-label="Search everything" autocomplete="off" role="combobox" aria-expanded="false" ` +
+  `aria-controls="searchResults" aria-autocomplete="list" />` +
+  `<span class="kbd" aria-hidden="true">⌘K</span>` +
+  `<div class="search-results" id="searchResults" role="listbox" aria-label="Search results" hidden></div>` +
+  `</div>` +
   `<div class="topctx" id="topctx"></div>` +
   `<div class="topspacer"></div>` +
   `<button type="button" class="quickadd" data-goto="${VIEW_CAPTURE}">${navIcon('capture')} Quick add</button>` +
@@ -155,6 +164,12 @@ export function mountShell(root: HTMLElement, vaultPath: string, name: string): 
   const brandDiamond = root.querySelector<HTMLElement>('.brand-mark');
   const topctx = root.querySelector<HTMLElement>('#topctx');
   const containers = new Map<string, HTMLElement>();
+  // #519 §3 — the shell mounts each view ONCE (SHELL-8); a REVISIT to an already-mounted view just
+  // toggles `.hidden` and runs no view code, so nothing would re-fill #topctx (cleared on the way out) —
+  // it'd read empty on the second visit even though the view "fills" it per the AC. Caching the last HTML
+  // each view handed to setTopbarContext, keyed by view id, and restoring it on every activation (not just
+  // first mount) fixes this centrally, for every current AND future filler-view, no per-view code needed.
+  const lastTopctxByView = new Map<string, string>();
 
   function render(): void {
     const activeId = model.activeId;
@@ -178,13 +193,14 @@ export function mountShell(root: HTMLElement, vaultPath: string, name: string): 
     }
 
     // v3 (SPEC-0060 §5): the brand diamond CHURNS briefly as the new view settles in; the per-view
-    // contextual filter slot resets (the activated view re-fills it via setTopbarContext). Reduced-motion
-    // collapses the churn (design-system.css). The host scrolls back to top on a view change.
+    // contextual filter slot restores the activated view's last-known filler (or empties, for a view on
+    // the documented empty list) — see the `lastTopctxByView` note above. Reduced-motion collapses the
+    // churn (design-system.css). The host scrolls back to top on a view change.
     if (brandDiamond) {
       brandDiamond.classList.add('is-thinking');
       window.setTimeout(() => brandDiamond.classList.remove('is-thinking'), 1100);
     }
-    if (topctx) topctx.textContent = '';
+    if (topctx) topctx.innerHTML = lastTopctxByView.get(activeId) ?? '';
     host.scrollTop = 0;
   }
 
@@ -192,28 +208,32 @@ export function mountShell(root: HTMLElement, vaultPath: string, name: string): 
     b.addEventListener('click', () => model.select(b.dataset.view!));
   }
 
-  // Top-bar wiring (SPEC-0060 §4): Quick-add → Capture; ⌘K focuses the global search (a results backend
-  // is a later feature — for now an honest, focusable command surface); views fill the contextual filter
-  // slot via setTopbarContext. Quick-add is a per-mount element (wired directly, no leak); the ⌘K + context
+  // Top-bar wiring (#519 §2/§4): Quick-add → Capture; ⌘K focuses + selects the REAL search input (topbarSearch.ts
+  // owns the input/type-ahead/Enter-to-navigate wiring); views fill the contextual filter slot via
+  // setTopbarContext. Quick-add is a per-mount element (wired directly, no leak); the ⌘K + context
   // handlers are document-level → cleaned up + rebound per mount (mirrors navHandler).
   const quickAdd = root.querySelector<HTMLButtonElement>('.quickadd');
   quickAdd?.addEventListener('click', () => model.select(VIEW_CAPTURE));
-  const search = root.querySelector<HTMLButtonElement>('#globalSearch');
-  search?.addEventListener('click', () => search.focus());
+  const search = wireTopbarSearch(root);
 
   if (cmdkHandler) document.removeEventListener('keydown', cmdkHandler);
   cmdkHandler = (e: KeyboardEvent): void => {
     if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
       e.preventDefault();
       search?.focus();
+      search?.select(); // re-summon convention: a repeat ⌘K re-selects for a fresh query
     }
   };
   document.addEventListener('keydown', cmdkHandler);
 
   if (ctxHandler) document.removeEventListener(TOPBAR_CONTEXT_EVENT, ctxHandler);
   ctxHandler = (e: Event): void => {
-    // detail.html is the active view's own trusted filter markup (code-supplied, not user data).
-    if (topctx) topctx.innerHTML = (e as CustomEvent<TopbarContextDetail>).detail?.html ?? '';
+    // detail.html is the active view's own trusted filter markup (code-supplied, not user data). Cached
+    // under the CURRENTLY active view so a later revisit (no view code re-runs) restores it — see
+    // `lastTopctxByView` above.
+    const html = (e as CustomEvent<TopbarContextDetail>).detail?.html ?? '';
+    lastTopctxByView.set(model.activeId, html);
+    if (topctx) topctx.innerHTML = html;
   };
   document.addEventListener(TOPBAR_CONTEXT_EVENT, ctxHandler);
 

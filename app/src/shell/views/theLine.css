@@ -179,7 +179,7 @@
    `.viz-surface *`) zeroes this to a static sprout fill — full parity, state still reads via glyph+hue. */
 .line-station-running .line-station-glyph,
 .line-cell-breathe {
-  animation: viz-breathe var(--viz-dur-breathe) var(--viz-ease-state) infinite;
+  animation: viz-breathe var(--dur-breathe) var(--viz-ease-state) infinite;
 }
 /* §5 signature "index" — when a carriage advances a station, its now-current cell seats forward with a
    weighted settle (a hint of overshoot, like a stepper motor). `lineMotion.applyIndex` adds the class
@@ -307,7 +307,7 @@
      sprout fill stays distinct by hue + segment + the `▣ active` count). No height transition — animating
      a height change triggers layout (VIZ-9 wants transform/opacity-only motion); the bar snaps to its
      new fill on each push. */
-  animation: viz-breathe var(--viz-dur-breathe) var(--viz-ease-state) infinite;
+  animation: viz-breathe var(--dur-breathe) var(--viz-ease-state) infinite;
 }
 .line-pending-queued {
   width: 100%;

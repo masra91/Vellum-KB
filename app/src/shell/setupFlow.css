@@ -19,7 +19,7 @@
    sprout, enlarged, with a halo ring — so the active step is legible without distinguishing sprout
    from patina (color-blind safe). Position is also conveyed by the heading + progressbar aria-value. */
 .setup-rail { display: flex; gap: 0.6rem; align-items: center; }
-.setup-dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: transparent; border: 1px solid var(--viz-rule); transition: background var(--viz-dur-state) var(--viz-ease-state), border-color var(--viz-dur-state) var(--viz-ease-state), transform var(--viz-dur-state) var(--viz-ease-state); }
+.setup-dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: transparent; border: 1px solid var(--viz-rule); transition: background var(--dur-state) var(--viz-ease-state), border-color var(--dur-state) var(--viz-ease-state), transform var(--dur-state) var(--viz-ease-state); }
 .setup-dot--done { background: var(--viz-patina); border-color: var(--viz-patina); }
 /* current step = active/in-progress → --viz-sprout (SPEC-0057 ember migration: active→sprout, ember reserved for "decide"). */
 .setup-dot--on { background: var(--viz-sprout); border-color: var(--viz-sprout); transform: scale(1.4); box-shadow: 0 0 0 2px var(--viz-field), 0 0 0 3px var(--viz-sprout); } /* enlarged + halo ring = non-color position cue */

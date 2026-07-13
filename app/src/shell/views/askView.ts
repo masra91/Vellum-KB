@@ -14,6 +14,7 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { esc } from '../html';
+import { skeletonFragmentHtml } from '../loadGuard';
 import type { AskResult, Citation, RecallTurn, Conversation, ConversationSummary, ConversationTurn, AskProgressEvent } from '../../kb/types';
 
 /**
@@ -416,7 +417,7 @@ async function openPastPanel(container: HTMLElement): Promise<void> {
   pastOpen = true;
   container.querySelector<HTMLElement>('#askPast')?.setAttribute('aria-expanded', 'true');
   panel.hidden = false;
-  panel.innerHTML = `<div class="ask-past-status">Loading…</div>`;
+  panel.innerHTML = `<div class="ask-past-status" aria-busy="true">${skeletonFragmentHtml('rows')}</div>`;
   let list: ConversationSummary[];
   try {
     list = await window.kbApi.listConversations();
@@ -572,7 +573,7 @@ function renderThinking(): string {
   return `<div class="ask-ans is-thinking">
     <span class="seal" aria-hidden="true">✦</span>
     <div class="ask-status"><span class="what">Searching your library…</span></div>
-    <div class="ask-skel" aria-hidden="true"><span class="ln w1"></span><span class="ln w2"></span><span class="ln w3"></span></div>
+    <div class="ask-skel" aria-hidden="true"><span class="ln skel w1"></span><span class="ln skel w2"></span><span class="ln skel w3"></span></div>
   </div>`;
 }
 

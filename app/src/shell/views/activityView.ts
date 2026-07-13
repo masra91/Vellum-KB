@@ -11,11 +11,12 @@
 // audit domain modules' node:fs/simple-git runtime deps (STACK-6). The actor filter options are
 // derived from the loaded data, not imported from AUDIT_ACTORS (a runtime value).
 import { esc } from '../html';
-import { withTimeout } from '../loadGuard';
+import { withTimeout, skeletonFragmentHtml } from '../loadGuard';
 import { formatTimestamp, relativeCompact } from '../formatTime';
 import { stageDisplayName } from '../stageLabels';
 import { glyphFor } from './activityGlyph';
 import { navIcon } from '../icons';
+import { setTopbarContext } from '../nav';
 import type { ActivityFeedEntry, AuditEvent, Lineage, ActivityFilter, AuditActor, SourceSensitivity } from '../../kb/types';
 
 // View-local, ephemeral state (the shell mounts once + toggles visibility).
@@ -45,6 +46,9 @@ export function mountActivity(container: HTMLElement): void {
   sourceSensitivities = {};
   loading = true;
   errorMsg = '';
+  // #519 §3 — verbatim from the mock (design-prototypes/vellum-v3.html CTX.activity). One static chip;
+  // Activity's own in-view controls (actor/search filters) already live in `.activity-controls`.
+  setTopbarContext(`<span class="topchip">${navIcon('stack-2')} All activity</span>`);
   container.innerHTML = `
     <div class="activity-view">
       <h1 class="activity-title viz-voice">Activity</h1>
@@ -178,7 +182,9 @@ function renderControls(container: HTMLElement): void {
 }
 function renderBody(container: HTMLElement): void {
   const el = container.querySelector<HTMLElement>('#activityBody');
-  if (el) el.innerHTML = bodyHtml({ entries, total, truncated, expanded, loading, errorMsg });
+  if (!el) return;
+  el.setAttribute('aria-busy', String(loading));
+  el.innerHTML = bodyHtml({ entries, total, truncated, expanded, loading, errorMsg });
 }
 function renderLineage(container: HTMLElement): void {
   const el = container.querySelector<HTMLElement>('#activityLineage');
@@ -217,7 +223,7 @@ interface BodyState {
 }
 
 export function bodyHtml(s: BodyState): string {
-  if (s.loading) return `<p class="activity-note">Loading…</p>`;
+  if (s.loading) return skeletonFragmentHtml('rows');
   // #145: a failed/timed-out load is retryable, never an infinite spinner. The view's header +
   // controls stay mounted around this body, so a button here (not a full renderLoadError) suffices.
   if (s.errorMsg) return `<p class="activity-error error">Couldn’t load activity: ${esc(s.errorMsg)} <button type="button" class="viz-btn viz-btn--sm viz-focusable load-retry" data-act="retry-load">Retry</button></p>`;
