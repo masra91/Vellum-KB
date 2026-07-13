@@ -8,6 +8,9 @@ import simpleGit from 'simple-git';
 import { buildRecallVault, type RecallVault } from '../../test/recallVault';
 import { rmTempDir, pathExists, makeTempDir } from '../../test/tempVault';
 import { recall, makeReadOnlyTools, buildRecallToolDefs, recallBudget, countEntityNodes, RECALL_BUDGET, finalizeCitations, type RecallClient, type RecallSessionConfig, type Citation } from './recall';
+import { makeFakeLibraryIndexStore } from './libraryIndexFake';
+import { rebuildLibraryIndexFull } from './libraryIndexBuild';
+import { makeIndexTools } from './libraryIndexTools';
 import { CopilotCapacityTimeoutError } from './copilotConcurrency';
 import { DEFAULT_RECALL_BUDGET_MS } from './instanceConfig';
 import { createKb } from './vault';
@@ -796,5 +799,65 @@ describe('recall — trace records the model + effort that actually ran (#514)',
     const { client, lastConfig } = fakeClient([{ tool: 'submitAnswer', args: { answer: 'x', citations: [], grounded: false } }]);
     await recall(v.root, 'q', { client, now: fixedNow, reasoningEffort: 'low' });
     expect(lastConfig()?.reasoningEffort).toBe('low');
+  });
+});
+
+// SPEC-0061 T1 follow-up (#538) — `search` is capability-gated: registered + allowed ONLY when the
+// injected `tools` implements it (the index-backed surface). This is what makes a focused question
+// completable in far fewer tool calls than the granular entity→claims→links hop sequence.
+describe('recall — composite search tool wiring (#538)', () => {
+  let v: RecallVault | undefined;
+  afterEach(async () => {
+    if (v) await rmTempDir(v.root);
+    v = undefined;
+  });
+
+  it('the live vault-walker tools (no search) never register/allow a search tool — unchanged default behavior', async () => {
+    v = await buildRecallVault();
+    const { client, lastConfig } = fakeClient([{ tool: 'submitAnswer', args: { answer: 'x', citations: [], grounded: false } }]);
+    await recall(v.root, 'q', { client, now: fixedNow, tools: makeReadOnlyTools(v.root) });
+    const cfg = lastConfig();
+    expect(cfg?.tools?.some((t) => t.name === 'search')).toBe(false);
+    expect(cfg?.allowedTools).not.toContain('search');
+  });
+
+  it('index-backed tools register + allow a search tool', async () => {
+    v = await buildRecallVault();
+    const store = makeFakeLibraryIndexStore();
+    await rebuildLibraryIndexFull(store, v.root, 'HEAD1');
+    const indexTools = makeIndexTools(store);
+    const { client, lastConfig } = fakeClient([{ tool: 'submitAnswer', args: { answer: 'x', citations: [], grounded: false } }]);
+    await recall(v.root, 'q', { client, now: fixedNow, tools: indexTools });
+    const cfg = lastConfig();
+    expect(cfg?.tools?.some((t) => t.name === 'search')).toBe(true);
+    expect(cfg?.allowedTools).toContain('search');
+  });
+
+  it('ONE search call reaches a grounded answer where the granular method needed THREE (the #538 win, concretely)', async () => {
+    v = await buildRecallVault();
+    const store = makeFakeLibraryIndexStore();
+    await rebuildLibraryIndexFull(store, v.root, 'HEAD1');
+    const indexTools = makeIndexTools(store);
+
+    // Before (granular, still fully supported): entityLookup → claimsForEntity → submitAnswer = 2 retrieval calls.
+    const granular = fakeClient([
+      { tool: 'entityLookup', args: { query: 'Ada' } },
+      { tool: 'claimsForEntity', args: { entity: v.adaRel } },
+      { tool: 'submitAnswer', args: { answer: 'Ada Lovelace, the first programmer [1].', citations: [{ kind: 'claim', ref: v.claimRel }], grounded: true } },
+    ]);
+    const before = await recall(v.root, 'Who was Ada Lovelace?', { client: granular.client, now: fixedNow, tools: indexTools });
+    expect(before.toolCalls).toBe(2);
+
+    // After: ONE search call returns the entity + its claims + backlinks already folded in — the agent
+    // can cite straight from that single result.
+    const composite = fakeClient([
+      { tool: 'search', args: { query: 'Lovelace' } },
+      { tool: 'submitAnswer', args: { answer: 'Ada Lovelace, the first programmer [1].', citations: [{ kind: 'claim', ref: v.claimRel }], grounded: true } },
+    ]);
+    const after = await recall(v.root, 'Who was Ada Lovelace?', { client: composite.client, now: fixedNow, tools: indexTools });
+    expect(after.toolCalls).toBe(1);
+    expect(after.grounded).toBe(true);
+    expect(after.citations[0].ref).toBe(v.claimRel);
+    expect(after.toolCalls).toBeLessThan(before.toolCalls);
   });
 });
