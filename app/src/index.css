@@ -460,18 +460,20 @@ body.shell-active #app {
 .nav-icon svg { display: block; } /* inline line glyph; inherits currentColor → gilds gold on hover/active */
 .nav-label { flex: 1 1 auto; }
 
-/* Faint fractal-lattice watermark, low in the rail (gold, very low opacity; ambient drift). #402 §3:
-   `color` was `var(--viz-brass)` — the "needs you / caution" semantic state hue (terminology.md §3),
-   wrong for silent decorative chrome; the motif itself is gold-only (BRAND-GUIDELINES §3). */
-.sidebar-wmark { position: absolute; left: -2.5rem; bottom: 4.5rem; opacity: 0.1; pointer-events: none; color: var(--gold); animation: viz-drift var(--viz-dur-field) ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .sidebar-wmark { animation: none; } }
+/* Faint fractal-lattice watermark, low in the rail (gold, very low opacity). #402 §3: `color` was
+   `var(--viz-brass)` — the "needs you / caution" semantic state hue (terminology.md §3), wrong for
+   silent decorative chrome; the motif itself is gold-only (BRAND-GUIDELINES §3). #580 §6.3: no longer
+   runs its own `viz-drift` pan — it's now a `.dmk` instance (shell.ts), meshing via its own child rings
+   at the ambient rate override below; the motion itself lives on `.d-out`/`.d-mid` (design-system.css). */
+.sidebar-wmark { position: absolute; left: -2.5rem; bottom: 4.5rem; opacity: 0.1; pointer-events: none; color: var(--gold); }
 /* #402 §4 (DARK-MODE-ADDENDUM "Field/watermark opacity: raise ~0.16 so the faint fractal field reads on
    dark") — the light-mode opacities above are too faint against a dark ground; raised uniformly here. */
 :root[data-theme='dark'] .sidebar-wmark { opacity: 0.16; }
-/* #512 PERF-R8: this is persistent shell chrome (present the whole session, not view-scoped) — a
-   perpetual compositor-active animation with zero purpose while the window is blurred/hidden.
-   `.shell-idle` is toggled by shell.ts on blur/focus/visibilitychange. */
-body.shell-idle .sidebar-wmark { animation-play-state: paused; }
+/* #580 §6.3: the watermark's own ambient MESH rate — slower than the brand mark's (48s/33s vs 28s/19s),
+   since it's wallpaper, not a focal working-indicator. Overrides design-system.css's `.dmk` base rate;
+   3-class specificity (.sidebar-wmark.dmk.is-working) beats the 2-class base rule (.dmk.is-working). */
+.sidebar-wmark.dmk.is-working .d-out { animation-duration: 48s; }
+.sidebar-wmark.dmk.is-working .d-mid { animation-duration: 33s; }
 
 /* Scroll host (the view region). v3 VUX-2: the global 34rem width clamp is REMOVED — spatial views adapt
    to the window and reading views keep their own comfortable column (each view owns its width now; the v2

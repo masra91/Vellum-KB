@@ -40,9 +40,10 @@ import { mountSettings } from './views/settingsView';
 import type { MountFn, ViewHandle } from './viewLifecycle';
 import type { TodayProjectionView } from '../kb/types';
 
-// The Vellum crystalline mark as the v3 MOTION brand-diamond (SPEC-0060 §5): `.dmk` with `.is-working`
-// (the inner core looms — the "always working" signature) + the shell adds `.is-thinking` (the mid frame
-// churns) briefly on every view change. Gold-stroked via the v3 --gold token. Inlined; decorative.
+// The Vellum crystalline mark as the v3 MOTION brand-diamond (SPEC-0060 §5, mechanics per #580 §6):
+// `.dmk` with `.is-working` (the rings continuously MESH — counter-rotate — the "always working"
+// signature) + the shell adds `.is-thinking` (a one-shot RECURSE: both rings snap one nesting level
+// deeper then reset) briefly on every view change. Gold-stroked via the v3 --gold token. Inlined; decorative.
 const BRAND_DIAMOND =
   `<span class="dmk sidebar-brand-glyph brand-mark is-working" aria-hidden="true">` +
   latticeMotif({ size: 24, depth: 2, stroke: 'var(--gold)', strokeWidths: [1.4, 1.1], levelClassNames: ['d-out', 'd-mid'], core: 'dot', coreClassName: 'd-core' }) +
@@ -72,17 +73,21 @@ const TOP_BAR =
 // #402 §3: was `var(--viz-brass)` — the "needs you / caution" semantic state hue, wrong for a silent
 // decorative watermark (terminology.md §3: never for reassurance/informational chrome). The motif is
 // gold-only per BRAND-GUIDELINES §3; this now matches BRAND_DIAMOND's stroke + the source SVG's gradient.
+// #580 §6.3: also a `.dmk`/`is-working` instance now (self-similarity — same MESH mechanism as
+// BRAND_DIAMOND, just at its own slower ambient rate via design-system.css's `.sidebar-wmark.dmk`
+// override) — no longer runs the generic `viz-drift` pan it used to.
 const SIDEBAR_WMARK =
-  `<div class="sidebar-wmark" aria-hidden="true">` +
-  latticeMotif({ size: 220, depth: 2, stroke: 'var(--gold)', strokeWidths: [0.5, 0.5], crosshair: true, crosshairStrokeWidth: 0.5 }) +
+  `<div class="sidebar-wmark dmk is-working" aria-hidden="true">` +
+  latticeMotif({ size: 220, depth: 2, stroke: 'var(--gold)', strokeWidths: [0.5, 0.5], levelClassNames: ['d-out', 'd-mid'], crosshair: true, crosshairStrokeWidth: 0.5 }) +
   `</div>`;
 
-// #512 PERF-R8: SIDEBAR_WMARK's ambient `viz-drift` animation used to run unconditionally the ENTIRE
-// time the app is open (it's persistent shell chrome, not tied to any view) — pure decoration keeping
-// the compositor from ever going idle in the background/unfocused. `body.shell-idle` (index.css) pauses
-// it via `animation-play-state`; toggled here, once, on blur/focus/visibilitychange. No per-mount
-// closure state (unlike navHandler/cmdkHandler/ctxHandler below), so — unlike those — this registers
-// once at module load rather than re-binding on every `mountShell` call.
+// #512 PERF-R8 / #580 §6.1: both `.dmk` instances (BRAND_DIAMOND + the sidebar watermark) are persistent
+// shell chrome (present the whole session, not view-scoped) — perpetual compositor-active MESH rotation
+// with zero purpose while the window is blurred/hidden. `body.shell-idle` (design-system.css) pauses both
+// via `animation-play-state` on their `.d-out`/`.d-mid` children; toggled here, once, on
+// blur/focus/visibilitychange. No per-mount closure state (unlike navHandler/cmdkHandler/ctxHandler
+// below), so — unlike those — this registers once at module load rather than re-binding on every
+// `mountShell` call.
 function updateShellIdleClass(): void {
   document.body.classList.toggle('shell-idle', document.hidden || !document.hasFocus());
 }
