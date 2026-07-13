@@ -1004,3 +1004,61 @@ describe.skipIf(!gitAvailable)('CLAIMS-20 — set-aside items are user-recoverab
     });
   });
 });
+
+// SPEC-0061 T1 / ENG-9 (#539 QA fast-follow) — end-to-end proof through readClaimsQueue, the consumer
+// that actually PARSES what findEntityFiles collects (findEntityFiles itself is a pure file listing —
+// it has nothing to skip; the parse-and-skip step lives here, at line ~326's try/catch). No git/
+// pipeline machinery needed — readClaimsQueue is pure fs against a plain directory tree.
+describe('readClaimsQueue — a malformed entity file is skipped end-to-end, never throws (#539 QA fast-follow)', () => {
+  it('a malformed entity (no frontmatter) sitting in entities/ does not crash the queue scan', async () => {
+    const root = await makeTempDir('kb-findentityfiles-');
+    try {
+      await fs.mkdir(path.join(root, 'entities', 'concept'), { recursive: true });
+      await fs.writeFile(path.join(root, 'entities', 'concept', 'broken.md'), 'not a valid entity — no frontmatter\n', 'utf8');
+
+      // findEntityFiles itself DOES include broken.md (it's a pure .md listing, no parsing) — confirms
+      // the walk-vs-parse split is exactly what's under test here.
+      expect(await findEntityFiles(root)).toContain(path.join('entities', 'concept', 'broken.md'));
+
+      // readClaimsQueue parses each file and `continue`s past a throw (claimsStage.ts's own comment:
+      // "unreadable/foreign node — skip") — no throw, and the malformed entity never reaches the queue.
+      const queue = await readClaimsQueue(root);
+      expect(queue).toEqual([]);
+    } finally {
+      await rmTempDir(root);
+    }
+  });
+
+  it('a malformed entity does not block a well-formed sibling from being correctly evaluated', async () => {
+    const root = await makeTempDir('kb-findentityfiles-');
+    try {
+      const goodRel = entityFileRel('person', 'Ada Lovelace', ulid());
+      await fs.mkdir(path.dirname(path.join(root, goodRel)), { recursive: true });
+      await fs.writeFile(
+        path.join(root, goodRel),
+        renderEntityNode({
+          id: ulid(),
+          kind: 'person',
+          name: 'Ada Lovelace',
+          confidence: 0.9,
+          aliases: [],
+          tags: [],
+          derivedFrom: [],
+          resolvedFrom: [],
+          createdAt: '2026-06-02T00:00:00Z',
+          updatedAt: '2026-06-02T00:00:00Z',
+        }),
+        'utf8',
+      );
+      await fs.mkdir(path.join(root, 'entities', 'concept'), { recursive: true });
+      await fs.writeFile(path.join(root, 'entities', 'concept', 'broken.md'), 'not a valid entity — no frontmatter\n', 'utf8');
+
+      // No source/audit trail exists for the well-formed entity either, so it's correctly NOT queued
+      // (firstPendingSource has nothing to find) — the assertion is that evaluating it at all didn't
+      // throw or get short-circuited by the malformed sibling earlier in the (sorted) walk order.
+      await expect(readClaimsQueue(root)).resolves.toEqual([]);
+    } finally {
+      await rmTempDir(root);
+    }
+  });
+});

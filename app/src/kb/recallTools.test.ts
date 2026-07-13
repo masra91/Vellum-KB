@@ -232,3 +232,36 @@ describe('entity resolution — deterministic + confidence-ranked (#513)', () =>
     expect(claims.every((c) => c.subject === hiRel)).toBe(true); // never blended with the other candidates
   });
 });
+
+// SPEC-0061 T1 / ENG-9 (#539 QA fast-follow) — end-to-end proof that a malformed file on disk is
+// silently skipped by the retired walker (walkVaultFiles + a downstream parse), not just that the
+// PARSER throws in isolation (that's already covered by parseClaimMd/parseEntityNode's own unit
+// tests). This drives a REAL malformed file through makeReadOnlyTools' full call surface.
+describe('recall read-only tools — a malformed file on disk is skipped end-to-end, never throws (#539 QA fast-follow)', () => {
+  let v: RecallVault;
+  afterAll(async () => {
+    if (v) await rmTempDir(v.root);
+  });
+
+  it('a malformed entity file (no frontmatter) is excluded from entityLookup, and the well-formed one still resolves', async () => {
+    v = await buildRecallVault();
+    await fsp.mkdir(path.join(v.root, 'entities', 'concept'), { recursive: true });
+    await fsp.writeFile(path.join(v.root, 'entities', 'concept', 'broken.md'), 'not a valid entity — no frontmatter at all\n', 'utf8');
+    const tools = makeReadOnlyTools(v.root);
+    const all = await tools.entityLookup({ query: '' });
+    expect(all.some((e) => e.rel === path.join('entities', 'concept', 'broken.md'))).toBe(false);
+    expect(all.some((e) => e.rel === v.adaRel)).toBe(true); // the well-formed sibling still resolves
+  });
+
+  it('a malformed claim file (no frontmatter) is excluded from claimsForEntity, no throw', async () => {
+    v = await buildRecallVault();
+    await fsp.mkdir(path.join(v.root, 'claims', 'person'), { recursive: true });
+    await fsp.writeFile(path.join(v.root, 'claims', 'person', 'broken.md'), 'garbage claim body, no frontmatter\n', 'utf8');
+    const tools = makeReadOnlyTools(v.root);
+    // No try/catch here on purpose: if the walker/parse split let a malformed file throw instead of
+    // being skipped, this `await` itself would reject and fail the test — that IS the assertion.
+    const claims = await tools.claimsForEntity({ entity: v.adaRel });
+    expect(claims.map((c) => c.rel)).not.toContain(path.join('claims', 'person', 'broken.md'));
+    expect(claims.map((c) => c.rel)).toContain(v.claimRel); // the well-formed sibling still present
+  });
+});

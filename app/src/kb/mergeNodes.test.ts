@@ -137,4 +137,29 @@ describe('mergeNodes (CONNECT-10/11)', () => {
       await rmTempDir(dir);
     }
   });
+
+  // SPEC-0061 T1 / ENG-9 (#539 QA fast-follow) — end-to-end proof for readClaims (mergeNodes.ts's own
+  // private walker): a malformed claim file sitting alongside the real ones must not crash the merge,
+  // and the well-formed repoint must still happen correctly.
+  it('a malformed claim file (no frontmatter) does not crash the merge — the well-formed repoint still happens (#539 QA fast-follow)', async () => {
+    const dir = await makeTempDir();
+    try {
+      const root = path.join(dir, 'wt');
+      const canonical = 'entities/person/steve-jobs.md';
+      const loser = 'entities/person/steven-jobs.md';
+      await write(root, canonical, node('Steve Jobs'));
+      await write(root, loser, node('Steven Jobs'));
+      await write(root, 'claims/2026/05/31/01C.md', claim(loser, 'Co-founded Apple.'));
+      await write(root, 'claims/2026/05/31/broken.md', 'not a valid claim — no frontmatter at all\n');
+
+      const res = await mergeNodes(root, canonical, [loser]); // no throw on the malformed sibling — the assertion
+      expect(res.deleted).toEqual([loser]);
+      const canonMd = await fs.readFile(path.join(root, canonical), 'utf8');
+      expect(canonMd).toContain('Co-founded Apple.'); // the well-formed claim was still repointed + regenerated
+      // the malformed file was never touched (mergeNodes only writes claims whose subject it recognizes)
+      expect(await fs.readFile(path.join(root, 'claims/2026/05/31/broken.md'), 'utf8')).toBe('not a valid claim — no frontmatter at all\n');
+    } finally {
+      await rmTempDir(dir);
+    }
+  });
 });
