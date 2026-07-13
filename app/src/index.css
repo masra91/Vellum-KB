@@ -158,6 +158,37 @@ ul.checks li {
 }
 
 /* ════════════════════════════════════════════════════════════════════════════════════════════════
+   First-run setup (VUX-RETIRE #523 §3) — VELLUM v3. Was the OLDEST layer in the app: pre-v2 generic
+   chrome (.card/.primary/.field/.checkbox/.muted/.path are SHARED bare classes other surfaces still
+   use for plain message boxes — loadGuard's error/warming state, Reviews/Settings/Agents empty states
+   — so this scopes its re-token under .setup-view rather than redefining those selectors globally). */
+/* No layout rule on .setup-view itself — body/#app (above) already center + cap the width; this is
+   purely a scoping hook so the re-token below doesn't touch the shared bare .card/.field/etc. */
+.setup-view .card { background: var(--linen); border: 1px solid var(--hair); border-radius: var(--r-card); box-shadow: var(--shadow-card); padding: 1.75rem 2rem; }
+.setup-view h1 { font-family: var(--voice); font-weight: 500; font-size: 1.6rem; color: var(--ink); letter-spacing: 0.01em; margin: 0 0 0.5rem; }
+.setup-view .muted { color: var(--stone); font-family: var(--ui); font-size: 0.9rem; line-height: 1.5; }
+.setup-view .path { font-family: var(--mono); font-size: 0.8rem; color: var(--ink-2); word-break: break-all; background: var(--parchment); padding: 0.4rem 0.6rem; border-radius: var(--r-chip); }
+.setup-view button.primary { appearance: none; border: 1px solid var(--viridian); border-radius: var(--r-pill); background: var(--viridian); color: var(--linen); font-family: var(--ui); font-size: 0.9rem; font-weight: 600; padding: 0.5rem 1.2rem; cursor: pointer; margin-top: 0.75rem; text-transform: none; letter-spacing: 0; transition: var(--t); }
+.setup-view button.primary:hover, .setup-view button.primary:focus-visible { background: color-mix(in srgb, var(--viridian) 82%, black); border-color: color-mix(in srgb, var(--viridian) 82%, black); }
+.setup-view button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+/* EditableField text pattern (_design-system.md §6) — a bottom-rule input, not a boxed generic field. */
+.setup-view .field { display: block; margin: 1rem 0 0.5rem; font-family: var(--ui); font-size: 0.85rem; color: var(--stone); }
+.setup-view .field input { display: block; width: 100%; margin-top: 0.35rem; padding: 0.35rem 0.1rem; border: 0; border-bottom: 1px solid var(--hair); border-radius: 0; background: transparent; color: var(--ink); font-family: var(--ui); font-size: 0.95rem; transition: border-color var(--t); }
+.setup-view .field input:focus-visible { outline: none; border-bottom-color: var(--slate); box-shadow: 0 1px 0 0 var(--slate); }
+.setup-view .checkbox { display: flex; align-items: center; gap: 0.5rem; font-family: var(--ui); font-size: 0.85rem; color: var(--stone); margin: 0.75rem 0; }
+.setup-view .checkbox input { accent-color: var(--slate); }
+.setup-view .error { color: var(--oxide); font-family: var(--ui); font-size: 0.85rem; }
+.setup-view ul.checks { list-style: none; padding: 0; margin: 1rem 0; }
+.setup-view ul.checks li { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0; font-family: var(--ui); font-size: 0.88rem; color: var(--ink); border-bottom: 1px solid var(--hair); }
+/* Monochrome status-marker glyph (terminology.md §3 — never coloured emoji): the hue rides the
+   glyph only, the adjacent text stays --ink (contrast contract). */
+.setup-mark { display: inline-flex; flex: none; }
+.setup-mark svg { width: 1rem; height: 1rem; }
+.setup-mark.ok svg { color: var(--sprout); }
+.setup-mark.warn svg { color: var(--gold-deep); }
+.setup-mark.bad svg { color: var(--oxide); }
+
+/* ════════════════════════════════════════════════════════════════════════════════════════════════
    Capture view — VELLUM v3 (SPEC-0060 VUX-1). A calm centered composer on the warm-vellum tokens
    (retires --viz-*). The composer is its own surface (focus-within ring), not a v2 card. De-slopped
    copy (eyebrow + human title, plain placeholder). Colour: NO ember (capture is input, not a decision)
@@ -444,7 +475,9 @@ dl.settings dd {
 .settings-v2 h2 { font-family: var(--voice); font-size: 1.08rem; font-weight: 500; letter-spacing: 0; color: var(--ink); margin: 0 0 0.5rem; }
 /* Vault path + the settings <dl> values stay Plex-Mono data. */
 .settings-v2 .settings dd, .settings-v2 .path { font-family: var(--mono); color: var(--ink); }
-.settings-v2 .settings dt { color: var(--stone); }
+/* VUX-RETIRE #523 §5 / VUX-CONFORM #524 §3 — the same uppercase-drift fix as Activity/Today: dl.settings
+   dt's base rule (above) borrows the instrument-correct uppercase, which is wrong on this v3 surface. */
+.settings-v2 .settings dt { color: var(--stone); text-transform: none; letter-spacing: normal; }
 /* Tokenized Copilot status dot — hue on the dot, label ink (the detail text also carries the state). */
 .settings-v2 .settings-copilot { display: flex; align-items: baseline; gap: 0.4rem; }
 .settings-v2 .settings-status-dot { font-size: 0.7em; line-height: 1; }

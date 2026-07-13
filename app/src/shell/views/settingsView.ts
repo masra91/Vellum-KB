@@ -138,7 +138,7 @@ export async function mountSettings(container: HTMLElement): Promise<void> {
         <dl class="settings">
           <dt>Library</dt>
           <dd>${esc(name)}</dd>
-          <dt>Vault path</dt>
+          <dt>Library path</dt>
           <dd><span class="path">${esc(vaultPath ?? '—')}</span></dd>
         </dl>
         <ul class="checks">

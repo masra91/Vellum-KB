@@ -1,7 +1,11 @@
 /* About Vellum (#406 part-2 / SPEC-0057) — the brand-face modal. The hero is a DARK gradient island in
    the cream app, so its text deliberately INVERTS to parchment/linen (the one sanctioned exception to
    "body text stays --viz-ink", per DL-1) — everything BELOW the hero is on cream and returns to --viz-ink.
-   Gold stays rationed: a single thin --viz-brass rule under the wordmark, never a fill. */
+   Gold stays rationed: a single thin --gold rule under the wordmark, never a fill.
+   VUX-RETIRE #523 §6: re-pointed the --viz-* references to their v3 unprefixed equivalents (same values —
+   the same v2-instrument-look-becoming-v3-native this whole batch does elsewhere, not a redesign). The
+   inverted-hero cream literals below (#fbf7ec/#f4efe3) are the sanctioned exception and stay AS-IS —
+   re-tokening this file means re-pointing token NAMES, not "fixing" the hero back to ink-on-cream. */
 
 .about-scrim {
   position: fixed;
@@ -11,18 +15,19 @@
   align-items: center;
   justify-content: center;
   padding: 1.5rem;
-  background: color-mix(in srgb, var(--viz-deep) 55%, transparent); /* tokenized deep-blue scrim */
+  background: color-mix(in srgb, var(--deep) 55%, transparent); /* tokenized deep-blue scrim */
 }
 .about-modal {
   width: min(30rem, 100%);
   max-height: 90vh;
   overflow: auto;
-  border: 1px solid var(--viz-rule);
+  border: 1px solid var(--hair);
   border-radius: 4px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.35);
 }
 
-/* Hero — the full signature gradient (reserved for identity moments). */
+/* Hero — the full signature gradient (reserved for identity moments). No v3-unprefixed equivalent for
+   the gradient itself exists, so this one stays --viz-field-gradient (per the spec's own carve-out). */
 .about-hero {
   background: var(--viz-field-gradient);
   background-size: 200% 200%; /* width for the ambient drift glide */
@@ -36,13 +41,13 @@
 .about-mark { color: #fbf7ec; } /* cream on the dark hero (inverted exception) */
 .about-mark svg { width: 2.5rem; height: 2.5rem; display: block; }
 .about-wordmark { font-size: 2.4rem; line-height: 1; color: #fbf7ec; } /* Spectral voice, cream */
-.about-rule { width: 2.5rem; height: 2px; background: var(--viz-brass); opacity: 0.85; } /* the ONE rationed gold note */
+.about-rule { width: 2.5rem; height: 2px; background: var(--gold); opacity: 0.85; } /* the ONE rationed gold note */
 .about-tagline { font-size: 0.95rem; line-height: 1.5; color: #f4efe3; max-width: 34ch; margin: 0.3rem 0 0; } /* cream, sentence-case (copy) */
 
 /* Body — on cream; text returns to --viz-ink / muted. */
 .about-body { padding: 1.3rem 1.6rem 1.6rem; display: flex; flex-direction: column; gap: 0.7rem; }
-.about-version { font-size: 0.82rem; color: var(--viz-ink-muted); margin: 0; } /* Plex Mono (numeric), muted */
-.about-credits { font-size: 0.8rem; line-height: 1.5; color: var(--viz-ink-muted); margin: 0; }
+.about-version { font-size: 0.82rem; color: var(--stone); margin: 0; } /* Plex Mono (numeric), muted */
+.about-credits { font-size: 0.8rem; line-height: 1.5; color: var(--stone); margin: 0; }
 .about-actions { display: flex; justify-content: flex-end; margin-top: 0.4rem; }
 
 /* Reduced-motion: the gradient drift goes static (the .viz-drift animation is otherwise applied to the hero). */

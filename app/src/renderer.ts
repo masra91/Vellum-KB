@@ -14,7 +14,6 @@ import '@fontsource/spectral/600.css';
 import '@fontsource/ibm-plex-mono/400.css';
 import '@fontsource/ibm-plex-mono/500.css';
 import './shell/design-system.css'; // shared visual foundation — tokens/type-roles/primitives/motion
-import './shell/views/theLine.css'; // SPEC-0032 "The Line" surface — pipeline-visualization Status view
 import './shell/permissionGate.css'; // SPEC-0034 MACOS-7 "Asking for the keys" — folder-permission UX
 import './shell/setupFlow.css'; // SPEC-0009 SETUP — guided first-run (model → sample seed → tour)
 import './shell/views/showcase.css'; // DESIGN-SHOWCASE — dev-only primitive gallery layout (?showcase)
@@ -23,6 +22,7 @@ import './shell/aboutPanel.css'; // SPEC-0057 #406 — the About Vellum identity
 import './index.css';
 import type { PathInspection, RendererErrorReport } from './kb/types';
 import { esc, baseName } from './shell/html';
+import { navIcon } from './shell/icons';
 import { mountShell } from './shell/shell';
 import { runGuidedSetup } from './shell/setupFlow';
 import { mountShowcase } from './shell/views/showcaseView';
@@ -41,20 +41,29 @@ const root = document.getElementById('app')!;
 let chosenPath: string | null = null;
 let inspection: PathInspection | null = null;
 
+// VUX-RETIRE #523 §3: the terminology glossary bans colored status emoji ("Status markers are
+// monochrome glyphs, never coloured emoji") — a monochrome glyph carries the state hue instead
+// (contrast contract: small text stays --ink, only the glyph rides the hue), plus an sr-only label
+// since the glyph is the only visual signal a screen reader would otherwise miss.
 function mark(ok: boolean, warnIfFalse = false): string {
-  return ok ? '✅' : warnIfFalse ? '⚠️' : '❌';
+  if (ok) return `<span class="setup-mark ok">${navIcon('circle-check')}<span class="sr-only">OK</span></span>`;
+  const cls = warnIfFalse ? 'warn' : 'bad';
+  const label = warnIfFalse ? 'Warning' : 'Error';
+  return `<span class="setup-mark ${cls}">${navIcon('alert-triangle')}<span class="sr-only">${label}</span></span>`;
 }
 
 function renderSetup(): void {
   root.innerHTML = `
+    <div class="setup-view">
     <div class="card">
-      <h1>Set up your Knowledge Base</h1>
+      <h1>Set up your Library</h1>
       <p class="muted">
-        Choose a folder to hold your library. It becomes a git-versioned vault you can also
+        Choose a folder to hold your library. It becomes a git-versioned folder you can also
         open directly in Obsidian.
       </p>
       <button id="choose" class="primary">Choose folder…</button>
       <div id="details"></div>
+    </div>
     </div>`;
   document.getElementById('choose')!.addEventListener('click', onChoose);
 }
@@ -76,7 +85,7 @@ function renderDetails(): void {
       <li>${mark(ins.gitInstalled)} git installed</li>
       <li>${mark(ins.isGitRepo)} git repository ${ins.isGitRepo ? '' : '<span class="muted">(will initialize)</span>'}</li>
       <li>${mark(ins.copilot.available, true)} Copilot &mdash; <span class="muted">${esc(ins.copilot.detail)}</span></li>
-      ${ins.alreadyKb ? '<li>⚠️ This folder already contains a Vellum config (will be reused).</li>' : ''}
+      ${ins.alreadyKb ? `<li>${mark(false, true)} This folder already contains a Vellum config (will be reused).</li>` : ''}
     </ul>
     ${
       isICloudVault(ins.tccProtectedDir)
