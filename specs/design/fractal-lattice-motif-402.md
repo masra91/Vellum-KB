@@ -3,10 +3,10 @@ design: DESIGN-LATTICE
 implements: SPEC-0057
 title: Fractal-Lattice Motif — Reusable Generator + Color-Law Fix (#402)
 type: design
-status: draft   # awaiting SPEC-0033 gates: GATE 1 (AI-Detector) + GATE 2 (KB-QD)
+status: draft   # §6 is NEW Principal-directed motion work — re-opens GATE 1 for a real (not light) pass
 owners: [KB-Design-Lead, KB-Lead, Principal]
 created: 2026-07-13
-updated: 2026-07-13
+updated: 2026-07-13b
 related: [SPEC-0057, _design-system, brand/BRAND-GUIDELINES, brand/DARK-MODE-ADDENDUM]
 gates:
   ai-patterns: pending      # GATE 1 — KB-AI-Detector; expect a LIGHT pass, this rides ratified identity
@@ -129,17 +129,18 @@ if a single flat value reads wrong at review — DL-1 visual call, not a numeric
 Per the dispatch's own instruction ("If SPEC-0057 §2 + the mockup don't give you enough to resolve an
 open question... flag here or ping the Principal directly — this was explicitly co-designed with them"):
 
-### 5.1 — Does Explore's center node get to breathe?
+### 5.1 — RESOLVED (Principal, via PM, 2026-07-13): not actually a conflict, and a bigger ruling besides
 
-`BRAND-GUIDELINES.md` §6 states a general principle: *"focused node gently breathes."* But
-`exploreView.ts:232-233`'s comment attributes a **specific, contrary ruling to the Principal**: *"STATIC
-center crystalline node (Principal: no breathing ring)."* These read as a direct conflict on this exact
-element. I am not overriding a cited Principal ruling on my own judgment — this needs an explicit word:
-does §6's general "breathes" language apply here after all (superseding the code comment), or does the
-code comment correctly capture a deliberate, standing exception for Explore's center specifically (in
-which case §6 should perhaps gain a footnote carving out this exception, so the next spec author doesn't
-hit the same apparent contradiction)? **No design work in this spec depends on this answer** — flagging
-it now so it doesn't silently resurface as a "gap" in a future audit the way #406's false positives did.
+The cited `exploreView.ts:232-233`/`:268` comment is scoped specifically to **SPEC-0039 EXPLORE-2** —
+Explore center-node *readability* behavior in that older spec — not a general brand-motion rule. Since
+Explore's center node is already out of this spec's scope (§2, §4's migration table), there was never an
+actual contradiction with BRAND-GUIDELINES §6. No change to Explore.
+
+**The bigger ruling, for #402's actual in-scope motion (`BRAND_DIAMOND`/`SIDEBAR_WMARK`):** organic
+"breathing" is rejected outright — the Principal wants **mechanical/clockwork** motion instead: a fractal
+loop (self-similar recursive zoom), gear-like meshing/turning, folding/unfolding. This is genuine new
+creative direction, not a constraint to design around — **see §6**, which finalizes this as real primitive
+specs rather than leaving it as an open question.
 
 ### 5.2 — Is the gradient-wash "field" the intended node-field, or does #402 want the literal pattern?
 
@@ -161,9 +162,102 @@ on-brand-colored gradient. Two paths, meaningfully different cost:
 I'd lean toward (a) for now — the gradient wash already reads as calm/on-brand and re-theming it is a
 larger, separate effort — but this is explicitly the kind of visual call SPEC-0057 §2 reserves for the
 Principal, and the guidelines' own wording ("fractal field") is genuinely ambiguous between the two
-readings. Flagging rather than deciding.
+readings. Flagging rather than deciding. **Still open** as of this update — no answer yet.
 
-## 6. Test cases (for KB-QD gate-2 / dev test authoring, scoped to §2-§4 only — §5 is unscheduled)
+## 6. Mechanical motion — Principal-directed (NEW, resolves §5.1)
+
+`BRAND_DIAMOND`/`SIDEBAR_WMARK` currently run `dLoom`/`dChurn` (`design-system.css:412-415`) — an organic
+opacity/scale pulse and a rotate-scale-dip flip. Per §5.1, these are **rejected outright**: no breathing,
+in either direction. This section defines their mechanical replacements. **Scope discipline:** this
+touches only `.dmk` (the brand-diamond/watermark instances) — the general-purpose `.vmark.loom`/
+`.vmark.churn` primitive (used for loading/warming faces elsewhere, #520) is a **different consumer of
+the same semantic names** and is explicitly untouched; the Principal's direction is a brand-identity
+statement about the mark itself, not a request to re-theme every loading spinner in the app.
+
+**The information architecture stays exactly as-is** — only the *look* of each signature changes, not
+*when* it fires: continuous "always working" vs. episodic "something just happened" is still the right
+split (design-system.css:396-398's own framing), just re-authored in clockwork vocabulary instead of
+organic pulse/flip.
+
+### 6.1 — MESH (replaces LOOM — continuous, `.dmk.is-working`)
+
+The clearest literal "clockwork" primitive available on a 2-ring diamond lattice: **the two rings
+continuously counter-rotate at different constant speeds**, like meshed gears turning against each other.
+
+- `.d-out` (outer ring): `rotate` 0→360°, linear, infinite, **28s** (slow — this is the ambient "always on"
+  layer, should read as barely-there unless watched closely, matching the existing LOOM's low-key
+  presence).
+- `.d-mid` (mid ring): `rotate` 360°→0° (**opposite direction**), linear, infinite, **19s** — a different,
+  non-integer-multiple period so the two rings' relative alignment keeps drifting rather than resolving
+  into a repeating beat; the differential speed + opposing direction is what reads as *meshing* rather
+  than "one thing spinning."
+- `.d-core` (center dot): **stays static** — no continuous animation at all. A steady, unmoving luminous
+  center while structure turns around it is thematically apt ("the fragment that linked itself into
+  structure," `BRAND-GUIDELINES.md` §2) and is the cleanest way to honor "no breathing in either
+  direction" — zero ambiguity about whether a static-but-present pulse still counts as breathing.
+- Both rotations are pure `transform: rotate(...)`, `linear` timing (no ease — constant angular velocity
+  is what makes it read as *mechanical* rather than organic; easing back toward 0 velocity at the loop
+  seam is exactly the "breathing" quality being rejected). A `linear infinite` rotation has no seam to
+  begin with — this is also the simplest possible seamless loop, a bonus.
+- Compatible with the existing `.shell-idle`/`animation-play-state` perf pause (`index.css:469`,
+  #512 PERF-R8) with no changes needed — that mechanism pauses whatever animation is running on the
+  selector, generically.
+
+### 6.2 — RECURSE (replaces CHURN — episodic, `.dmk.is-thinking`)
+
+The literal "fractal loop / recursive zoom" the Principal named: **one bounded step of the lattice
+recursing one level deeper into itself, then resetting** — not a smooth organic ease, a quantized
+mechanical *step*.
+
+- `.d-out`: scales from 1 → 0.5 over the first ~45% of the animation (0.5 is deliberately exact — the
+  generator's own halving ratio between nesting levels, §2, so the outer ring visually arrives at
+  *exactly* where the mid ring already sits — the self-similar "one level deeper" read), holds briefly,
+  then **snaps back to 1 in a single frame** (a hard cut, not an eased return) — the reset that makes it
+  loop-ready, reading as a mechanical tick/reset rather than a bounce-back.
+- `.d-mid`: runs the same shape, phase-delayed (starts its own scale-down slightly after `.d-out` begins,
+  so the recursion visibly propagates outward-to-inward rather than both rings moving in lockstep) —
+  concretely, `.d-mid`'s keyframe percentages shift ~10% later than `.d-out`'s.
+- `.d-core`: unchanged (stays static, per §6.1 — the episodic gesture is carried entirely by the two rings
+  recursing, the center never moves).
+- Total duration: **~900ms**, one-shot (`animation-iteration-count: 1`), not looping — this needs to
+  complete cleanly within whichever window the shell's `is-thinking` toggle holds the class (currently
+  ~1100ms per `shell.ts`'s view-change handler; the dev should confirm that window comfortably covers the
+  full ~900ms cycle rather than cutting it mid-step, since a chopped mechanical snap reads far worse than
+  a chopped organic ease did).
+- Timing function: a stepped/snapped curve for the scale-down phase (e.g. `cubic-bezier(0.5, 0, 0.9, 0.4)`
+  — a curve that arrives fast and holds, not a smooth ease-in-out), then the reset frame is instant (0%
+  duration, a literal keyframe jump). Exact curve is a DL-1 tuning call, not a hard requirement — the
+  *shape* (arrive-hold-snap, not ease-there-ease-back) is the requirement.
+
+### 6.3 — SIDEBAR_WMARK gets MESH too, at its existing ambient rate
+
+Per BRAND-GUIDELINES §5's self-similarity principle ("the icon, the Explore center node, and the whole
+graph are the same lattice motif at different zoom"), the ambient background watermark should read as
+the **same mechanism**, not a different motion vocabulary — it currently runs the generic `viz-drift`
+pan/alpha utility (`index.css:382-383`), unrelated to the lattice's own geometry. Retarget it onto §6.1's
+MESH counter-rotation, at its existing slow ambient cadence (**48s**/**33s** outer/mid — scaling §6.1's
+28s/19s brand-mark rate down proportionally to match the watermark's current `--viz-dur-field` 48s
+baseline) rather than the brand mark's faster rate — it's wallpaper, not a focal working-indicator, and
+should stay closer to unnoticeable. No RECURSE analog for the watermark — it has no episodic
+"something-just-happened" trigger the way the brand mark's `.is-thinking` does.
+
+### 6.4 — Reduced motion
+
+Both MESH and RECURSE collapse to a fully static lattice under `prefers-reduced-motion: reduce` — extend
+the existing `.dmk` reduced-motion reset (`design-system.css:359-361`, currently resetting
+`dLoom`/`dChurn`) to the new keyframe names. No functional loss: the work-state semantics (LOOM = "in
+progress," CHURN = "just changed") are carried by *triggering* the class at all, not by the animation
+itself — same contract every other reduced-motion reset in this codebase already honors.
+
+### 6.5 — Distinctiveness note (for GATE 1 — this section genuinely needs the real pass)
+
+Unlike §2-§4 (adoption-only, light gate-1), this section **is** new visual language and should be
+reviewed as such: a continuous counter-rotating gear-mesh + a quantized recursive-zoom-and-snap are a
+real departure from the generic "pulse/glow/spin-forever" AI-app idiom (no breathing, no soft glow pulse,
+no smooth infinite spin in one direction, no gratuitous bounce/spring easing) — pull-quote-worthy vocabulary
+words to check against: *mechanical, clockwork, gear-mesh, fractal-loop, recursive-zoom, light arcane*.
+
+## 7. Test cases (for KB-QD gate-2 / dev test authoring — §2-§4 scope + new §6 coverage)
 
 - `latticeMotif()` unit tests: depth 1/2/3 produce the expected nested-polygon count; `stroke`/`className`
   params thread through to the output markup; a snapshot test pinning `BRAND_DIAMOND`'s and
@@ -175,8 +269,15 @@ readings. Flagging rather than deciding.
   dark-mode opacity next to the existing `.exp-center-disc` dark override, without over-brightening.
 - Reduced-motion: unchanged behavior for all three (already correctly reset today) — regression-only,
   not new coverage.
+- **New for §6:** a fake-timer test asserting `.d-out`/`.d-mid` rotate in *opposite* directions under
+  `.is-working` (not just "some rotation exists"); a RECURSE test asserting the one-shot completes within
+  its own duration and does not repeat (`animation-iteration-count: 1`, or the JS-driven equivalent);
+  a visual DL-1 comparing MESH/RECURSE side-by-side with the old `dLoom`/`dChurn` to confirm the "no
+  breathing" bar is actually met (no opacity pulse anywhere in the new keyframes — a grep guard on the
+  `.dmk`-scoped CSS for a bare `opacity:` animation property would catch a regression back toward pulsing);
+  reduced-motion parity test for the new keyframe names, mirroring the existing one for the old names.
 
-## 7. Changelog
+## 8. Changelog
 
 - 2026-07-13 — created. Audited current tree against the mock/BRAND-GUIDELINES before drafting (per the
   #406 sibling-spec lesson on trusting claimed gaps without verification) — found most of #402 already
@@ -184,3 +285,17 @@ readings. Flagging rather than deciding.
   SVGs (§2), a color-law token bug on `SIDEBAR_WMARK` (§3), and a dark-mode opacity gap (§4). Flagged two
   open questions for the Principal (§5) rather than resolving them unilaterally. Routing to KB-AI-Detector
   for a gate-1 pass — expected light, since §2-§4 add no new visual language.
+- 2026-07-13b — **§6 added.** PM relayed the Principal's ruling on both §5 open questions: 5.1 wasn't
+  actually a conflict (the cited ruling is scoped to Explore's center node specifically, already
+  out-of-scope here); 5.2 is still open, no answer yet. The Principal also gave new, unprompted direction
+  for #402's actual in-scope motion (`BRAND_DIAMOND`/`SIDEBAR_WMARK`): reject organic "breathing" outright,
+  go mechanical/clockwork instead. §6 finalizes that as two concrete primitives — **MESH** (continuous,
+  replaces LOOM: two counter-rotating rings at differential constant speed, gear-mesh vocabulary) and
+  **RECURSE** (episodic, replaces CHURN: a bounded, snapped one-level fractal zoom-and-reset) — plus
+  extending MESH to `SIDEBAR_WMARK` at its existing ambient rate for self-similarity across instances.
+  Scope discipline: only `.dmk` (this component), not the general `.vmark.loom`/`.vmark.churn` primitive
+  used elsewhere (#520) — a brand-identity motion statement about the mark itself, not an app-wide
+  re-theme. This is genuinely new visual language (unlike §2-§4's adoption-only scope) — **re-opening
+  GATE 1 for a real pass on §6 specifically**, not the light one §2-§4 already cleared. PR #578 (the
+  §2-§4 implementation) is unaffected and can proceed/merge independently — this is additive scope on the
+  same spec/PR #573 (still open at time of writing), not a blocker on already-reviewed work.
