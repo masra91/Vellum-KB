@@ -18,7 +18,9 @@
     "test:e2e": "playwright test",
     "walkthrough": "ALLOW_LOCAL_E2E=1 playwright test walkthrough.e2e.ts",
     "eval": "vitest run --config eval/vitest.config.ts",
-    "eval:enrich": "vitest run --config eval/vitest.config.ts"
+    "eval:enrich": "vitest run --config eval/vitest.config.ts",
+    "eval:scorecard": "vitest run --config eval/vitest.config.ts scorecard.eval.ts",
+    "knip": "knip"
   },
   "keywords": [],
   "author": {
@@ -48,6 +50,7 @@
     "eslint": "9.39.4",
     "happy-dom": "20.9.0",
     "js-yaml": "4.1.0",
+    "knip": "^6.26.0",
     "typescript": "^5.9.3",
     "vite": "^5.4.21",
     "vitest": "3.2.4"

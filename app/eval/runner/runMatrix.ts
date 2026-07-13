@@ -20,6 +20,9 @@ export interface RunMatrixOptions extends RunScenarioOptions {
   /** Persist each variant's scorecard as the new baseline (the `--update-baseline` path). Default false —
    *  never silently overwrite a last-known-good. */
   updateBaseline?: boolean;
+  /** Which baseline store to diff/save against — the ad-hoc gitignored `BASELINE_DIR` (default, local
+   *  tweak-and-compare) or `COMMITTED_BASELINE_DIR` (the CI nightly scorecard job, issue #525). */
+  baselineDir?: string;
   /** Injected clock for the manifest timestamp (tests); defaults to the wall clock. */
   now?: () => string;
 }
@@ -37,9 +40,9 @@ export async function runMatrix(scenario: Scenario, opts: RunMatrixOptions = {})
         ...(resolved.recallMaxToolCalls ? { recallMaxToolCalls: resolved.recallMaxToolCalls } : {}),
       });
       const manifest = buildManifest(scenario.id, resolved.label, now());
-      const baseline = await loadBaseline(scenario.id, resolved.label);
+      const baseline = await loadBaseline(scenario.id, resolved.label, opts.baselineDir);
       const diff = diffScorecards(scorecard, baseline);
-      if (opts.updateBaseline) await saveBaseline(scorecard);
+      if (opts.updateBaseline) await saveBaseline(scorecard, opts.baselineDir);
       out.push({ scorecard, diff, manifest });
     } finally {
       resolved.restore(); // restore the env before the next variant (no model bleed)

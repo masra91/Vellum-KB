@@ -4,6 +4,7 @@
 // for auditability. The live judge runs a separate Copilot SDK session (mirrors researchWebAgent); the
 // session is an injectable seam so unit tests never load the SDK. Aggregation is pure + unit-tested.
 import { acquireCopilotSlot } from '../../src/kb/copilotConcurrency';
+import { resolveCopilotModel } from '../../src/kb/copilotModel';
 import { DEFAULT_RESEARCH_SESSION_TIMEOUT_MS } from '../../src/kb/researchers';
 import type { SessionConfig, SystemMessageConfig } from '@github/copilot-sdk';
 import type { JudgeCheck } from './scenario';
@@ -23,9 +24,13 @@ export function resolveJudgeModel(): string {
   return process.env.KB_EVAL_JUDGE_MODEL || DEFAULT_JUDGE_MODEL;
 }
 
-/** The resolved system-under-test model (KB_COPILOT_MODEL, read by every decider + recall), or the SDK default. */
+/** The resolved system-under-test model: the SAME resolution every decider + recall uses
+ *  (`resolveCopilotModel`, ORCH-28) — eval-harness `KB_COPILOT_MODEL` override, else the live-CLI-probed
+ *  default (`copilotModelProbe.initLaunchModel`'s `resolvedLaunchModel`), else the `DEFAULT_COPILOT_MODEL`
+ *  floor. Previously returned a literal `'copilot-default'` placeholder that could never equal the judge
+ *  model even when the probed SDK default actually collided with it — a vacuous guard (ENG-3). */
 export function resolveSutModel(): string {
-  return process.env.KB_COPILOT_MODEL || 'copilot-default';
+  return resolveCopilotModel();
 }
 
 /**

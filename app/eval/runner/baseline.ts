@@ -8,29 +8,39 @@ import path from 'node:path';
 import type { Scorecard } from './scorecard';
 import type { CheckResult } from './validators';
 
-/** Where last-known-good baselines live — GITIGNORED, never promoted (EVAL-8). */
+/** Where ad-hoc/local last-known-good baselines live — GITIGNORED, never promoted (EVAL-8). The
+ *  developer "tweak-and-compare" loop (`KB_EVAL=1 npm run eval -- --update-baseline`, per-machine). */
 export const BASELINE_DIR = path.resolve(process.cwd(), 'eval/baselines');
 
+/** Where the COMMITTED (version-controlled) last-known-good scorecard lives (ENG-3, issue #525) — the
+ *  weekly CI eval-scorecard job diffs against THIS, not the gitignored `BASELINE_DIR`, so a regression
+ *  is a real repo-visible signal rather than something only a local machine ever sees. Populated only via
+ *  the nightly workflow's `update_eval_baseline` dispatch (mirrors the e2e visual-snapshot `update_snapshots`
+ *  dispatch pattern) — never written silently by a routine run. */
+export const COMMITTED_BASELINE_DIR = path.resolve(process.cwd(), 'eval/baselines-committed');
+
 /** A filesystem-safe baseline filename for a scenario × variant. */
-function baselinePath(scenarioId: string, variant: string): string {
+function baselinePath(dir: string, scenarioId: string, variant: string): string {
   const slug = (s: string): string => s.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'x';
-  return path.join(BASELINE_DIR, `${slug(scenarioId)}__${slug(variant)}.json`);
+  return path.join(dir, `${slug(scenarioId)}__${slug(variant)}.json`);
 }
 
-/** Load the stored baseline scorecard for a scenario × variant, or null if none exists yet. */
-export async function loadBaseline(scenarioId: string, variant: string): Promise<Scorecard | null> {
+/** Load the stored baseline scorecard for a scenario × variant, or null if none exists yet.
+ *  `dir` defaults to the ad-hoc `BASELINE_DIR`; pass `COMMITTED_BASELINE_DIR` for the CI scorecard job. */
+export async function loadBaseline(scenarioId: string, variant: string, dir: string = BASELINE_DIR): Promise<Scorecard | null> {
   try {
-    return JSON.parse(await fs.readFile(baselinePath(scenarioId, variant), 'utf8')) as Scorecard;
+    return JSON.parse(await fs.readFile(baselinePath(dir, scenarioId, variant), 'utf8')) as Scorecard;
   } catch {
     return null; // no baseline yet (first run) → the diff marks everything 'new'
   }
 }
 
 /** Persist a scorecard as the new baseline (EVAL-8) — only via an explicit `--update-baseline` caller,
- *  never silently (so a worse run can't overwrite the last-known-good). */
-export async function saveBaseline(scorecard: Scorecard): Promise<void> {
-  await fs.mkdir(BASELINE_DIR, { recursive: true });
-  await fs.writeFile(baselinePath(scorecard.scenarioId, scorecard.variant), JSON.stringify(scorecard, null, 2) + '\n', 'utf8');
+ *  never silently (so a worse run can't overwrite the last-known-good). `dir` defaults to the ad-hoc
+ *  `BASELINE_DIR`; pass `COMMITTED_BASELINE_DIR` for the CI baseline-promotion dispatch. */
+export async function saveBaseline(scorecard: Scorecard, dir: string = BASELINE_DIR): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(baselinePath(dir, scorecard.scenarioId, scorecard.variant), JSON.stringify(scorecard, null, 2) + '\n', 'utf8');
 }
 
 export type CheckState = 'pass' | 'fail' | 'absent';

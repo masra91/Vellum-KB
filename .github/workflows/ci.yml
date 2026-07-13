@@ -1,7 +1,8 @@
 # Vellum CI — the authoritative test gate (SPEC-0012 TEST-10/TEST-11).
 #
 # COVERAGE — read this before assuming "green == fully verified" (TEST-11, no silent caps):
-#   NOW (phased rollout), two GATING jobs on every PR + push to `main` (Linux):
+#   NOW (phased rollout), three GATING jobs on every PR + push to `main` (Linux), all three PINNED as
+#   REQUIRED in the `main` branch ruleset (issue #525, ENG-1 — red is no longer mergeable):
 #     - `quick`   — typecheck + lint + unit tests + coverage.
 #     - `package` — `npm run package` build-check: proves the app still PACKAGES (Vite main
 #                   bundle + asar pack + native-dep prepare). Catches the class of break that
@@ -10,6 +11,11 @@
 #                   asar bug). Cheap: build-only, no Playwright, no app launch. Linux is enough
 #                   — Vite-build + asar-pack is platform-agnostic, so a bundling regression
 #                   fails here regardless of the shipped OS.
+#     - `secrets` — gitleaks secret scan (see the job comment below).
+#   ROT-PRONE CHECKS THAT DON'T BELONG ON EVERY PR live in `.github/workflows/nightly.yml` instead
+#   (issue #525, ENG-2): the e2e matrix + `package-macos` run nightly, `knip` (report-only) nightly,
+#   and a weekly eval scorecard diffed against a COMMITTED baseline (`eval/baselines-committed/`,
+#   ENG-3) — auto-filing a `nightly-red`-labeled issue when a scheduled run goes red.
 #   COST-MOVED OFF THE PER-PR PATH (CI-COST-REDUCTION; see the `package`/`package-macos` jobs):
 #        the macOS `package` build-check used to run on every PR at the 10× macOS minute
 #        multiplier (the recurring Actions spend). It is now the separate `package-macos` job,
@@ -99,8 +105,8 @@ jobs:
   # the working tree with the repo-root `.gitleaks.toml`, which inherits the full default rule set and
   # allowlists ONLY the cassette secret-scrubber's intentional fake-token fixtures (EVAL-6). Sub-second,
   # ubuntu, 1× cost — cheap enough to gate every PR. Full-history exposure is handled by the one-time
-  # sweep + the coordinated history purge, not re-scanned here. NB: not yet pinned as a REQUIRED check
-  # in the `main` ruleset — it runs + reports on every PR; promote it to required at the repo level.
+  # sweep + the coordinated history purge, not re-scanned here. Pinned as a REQUIRED check in the `main`
+  # ruleset alongside `typecheck · lint · unit` and `package build-check` (issue #525, ENG-1).
   secrets:
     name: secret scan
     runs-on: ubuntu-latest
@@ -145,11 +151,10 @@ jobs:
       fail-fast: false
       matrix:
         # Single-entry matrix retained DELIBERATELY: it keeps this job's check-context name
-        # `package build-check (ubuntu-latest)` identical to before the macOS split, so IF a branch
-        # ruleset/protection ever pins it as a required check the name stays stable. (As of this
-        # change the `main` ruleset requires only `typecheck · lint · unit (ubuntu-latest)` — neither
-        # package context is required — so dropping the macOS leg from PRs blocks no required check.)
-        # Mirrors the `quick` job's shape.
+        # `package build-check (ubuntu-latest)` identical to before the macOS split, so its pin as a
+        # REQUIRED check in the `main` ruleset (issue #525, ENG-1) stays stable. The macOS leg
+        # (`package-macos` below) is NOT in the ruleset — it never ran per-PR even before #525, so
+        # nothing changed there. Mirrors the `quick` job's shape.
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:

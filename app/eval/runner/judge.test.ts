@@ -2,6 +2,7 @@
 // runJudgeCheck driven by an INJECTED session (the live pinned-model SDK path is opt-in/e2e). Runs in CI.
 import { describe, it, expect, afterEach } from 'vitest';
 import { aggregateJudge, resolveJudgeModel, resolveSutModel, assertJudgeDistinctFromSut, runJudgeCheck, renderJudgeOutput, DEFAULT_JUDGE_MODEL, type JudgeSession } from './judge';
+import { setResolvedLaunchModel } from '../../src/kb/copilotModel';
 import type { VaultSnapshot } from './snapshot';
 import type { AskResult } from '../../src/kb/recall';
 
@@ -51,6 +52,16 @@ describe('assertJudgeDistinctFromSut — judge ≠ SUT hard guard (EVAL-4, KB-Le
   it('runJudgeCheck refuses to run on a judge==SUT collision (hard fail, not a 0-score run)', async () => {
     process.env.KB_COPILOT_MODEL = DEFAULT_JUDGE_MODEL;
     await expect(runJudgeCheck({ rubric: 'r' }, snap(), { session: async () => ({ score: 1, rationale: 'x' }) })).rejects.toThrow(/grade its own homework/);
+  });
+  it('trips when the PROBED SDK default (no explicit KB_COPILOT_MODEL override) collides with the judge model — the vacuous-guard regression (ENG-3)', () => {
+    delete process.env.KB_COPILOT_MODEL; // no eval override — force resolution through the probed default
+    setResolvedLaunchModel(DEFAULT_JUDGE_MODEL); // simulate copilotModelProbe.initLaunchModel() resolving the same model as the judge
+    try {
+      expect(resolveSutModel()).toBe(DEFAULT_JUDGE_MODEL);
+      expect(() => assertJudgeDistinctFromSut()).toThrow(/cannot grade its own homework/);
+    } finally {
+      setResolvedLaunchModel(null);
+    }
   });
 });
 

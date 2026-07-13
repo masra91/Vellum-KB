@@ -1,0 +1,15 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/main.ts",
+    "src/preload.ts",
+    "forge.config.ts",
+    "vite.main.config.ts",
+    "vite.preload.config.ts",
+    "vite.renderer.config.ts",
+    "e2e/**/*.e2e.ts",
+    "eval/**/*.eval.ts",
+    "test/**/*.ts"
+  ],
+  "project": ["src/**/*.{ts,tsx}", "eval/**/*.ts"]
+}
