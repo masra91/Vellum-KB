@@ -286,18 +286,6 @@ export function registerIpc(): void {
         if (input.text.trim().length > 0) payloads.push({ kind: 'text', text: input.text, ...(input.html ? { html: input.html } : {}) });
       } else if (input.kind === 'file') {
         payloads.push({ kind: 'file', name: input.name, data: new Uint8Array(input.data) });
-      } else if (input.kind === 'filePath') {
-        // #512 PERF-R8: the renderer staged this by real on-disk path, never reading it into its own
-        // heap. Read it HERE instead — same as the screenshot-handle path below resolves a handle to
-        // bytes right before pushing a `file` payload. A file that vanished/became unreadable between
-        // drop and submit (moved, deleted, permission revoked) is skipped, not a batch-wide failure —
-        // same per-item-isolation spirit as every other capture input kind.
-        try {
-          const data = await fs.readFile(input.path);
-          payloads.push({ kind: 'file', name: input.name, data: new Uint8Array(data.buffer, data.byteOffset, data.byteLength) });
-        } catch {
-          /* skipped — the file couldn't be read at submit time */
-        }
       }
       // (a `screenshot` input is QCAP-only — resolved in kb:quickCapture, never reaches the in-app panel)
     }

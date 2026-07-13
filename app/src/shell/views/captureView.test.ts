@@ -16,10 +16,6 @@ function setApi(captureResult: CaptureResult): void {
     pipelineStatus: vi.fn().mockResolvedValue({ queueDepth: 0, processing: null, lastArchived: null, updatedAt: null }),
     probeVaultAccess: vi.fn().mockResolvedValue({ ok: true, denied: false, message: 'ok' }),
     openSystemSettingsPrivacy: vi.fn().mockResolvedValue({ ok: true }),
-    // #512: happy-dom's File objects aren't real drops, so there's no real path to resolve — '' makes
-    // every staged file fall back to the (pre-#512) bytes-read path, matching these tests' existing
-    // assertions exactly. The dedicated path-staging behavior gets its OWN describe block below.
-    getPathForFile: vi.fn(() => ''),
   };
 }
 
@@ -162,11 +158,17 @@ describe('captureView — RICHIN rich ingestion (SPEC-0040)', () => {
   it('RICHIN-4: a file that fails to read does not block the others (per-file isolation)', async () => {
     mountCapture(root, '/v', 'KB').show?.();
     const dz = root.querySelector('#dropzone') as HTMLElement;
-    const bad = { name: 'bad.bin', arrayBuffer: () => Promise.reject(new Error('boom')) };
+    const bad = { name: 'bad.bin', size: 4, arrayBuffer: () => Promise.reject(new Error('boom')) };
     drop(dz, [new File([new Uint8Array([1])], 'good.png', { type: 'image/png' }), bad]);
     await flush();
-    expect(root.querySelectorAll('#staged li')).toHaveLength(1); // the good one survived
-    expect(root.querySelector('#staged')!.textContent).toContain('good.png');
+    // #512: staging a File reference can't fail (nothing is read yet) — both stage fine here; the
+    // read (and so the isolation) now happens at actual submit time instead of at drop time.
+    expect(root.querySelectorAll('#staged li')).toHaveLength(2);
+
+    root.querySelector<HTMLButtonElement>('#capture')!.click();
+    await flush();
+    const files = lastInputs().filter((i) => i.kind === 'file');
+    expect(files).toHaveLength(1); // only the readable one made it into the submitted inputs
     expect(root.querySelector('#captureNote')!.textContent).toContain('bad.bin');
   });
 
@@ -188,7 +190,9 @@ describe('captureView — RICHIN rich ingestion (SPEC-0040)', () => {
 
   it('RICHIN-11: a large file is flagged in the manifest and warned (non-blocking) on capture', async () => {
     mountCapture(root, '/v', 'KB').show?.();
-    const big = { name: 'big.bin', arrayBuffer: () => Promise.resolve(new ArrayBuffer(26 * 1024 * 1024)) };
+    // #512: size is read synchronously at STAGE time now (File.size, no read needed) — the fake must
+    // carry it, same as a real dropped File always does.
+    const big = { name: 'big.bin', size: 26 * 1024 * 1024, arrayBuffer: () => Promise.resolve(new ArrayBuffer(26 * 1024 * 1024)) };
     drop(root.querySelector('#dropzone') as HTMLElement, [big]);
     await flush();
     expect(root.querySelector('#staged')!.textContent).toContain('large');
@@ -469,11 +473,16 @@ describe('VUX-1 v3 token migration (SPEC-0060 — off --viz-*)', () => {
 });
 
 // #512 PERF-R8: staging used to read every dropped file's FULL bytes into the renderer's own heap
-// (`file.arrayBuffer()`) even for a file the Principal never submits — unbounded, only a 25MB
-// soft-warn. A genuine drop now resolves to a real on-disk PATH (`getPathForFile`) and stages BY
-// REFERENCE — the bytes never touch the renderer at all; only a pasted image (no real path) still
-// reads bytes up front.
-describe('captureView — #512 path-based staging (PERF-R8)', () => {
+// (`file.arrayBuffer()`) at DROP time, unbounded, regardless of whether the file was ever submitted —
+// only a 25MB soft-warn. Staging now holds a reference to the File itself (a lightweight browser
+// handle, not its content) and defers the actual read to SUBMIT time. An earlier version of this fix
+// resolved the drop to a real on-disk path and sent it to `kb:capture` directly — QD-2's security
+// review (PR #566) correctly rejected that: `capture()` is a directly-exposed contextBridge API taking
+// arbitrary JSON, so trusting a renderer-supplied path in the privileged main process would hand a
+// compromised/malicious renderer script an arbitrary-local-file-read-into-vault primitive it didn't
+// have before. Deferring the read (still renderer-side, still the existing bytes-only wire contract)
+// gets the same heap win without that new attack surface.
+describe('captureView — #512 deferred file read (PERF-R8, staging costs ~0 heap)', () => {
   let root: HTMLElement;
   beforeEach(() => {
     root = document.createElement('div');
@@ -484,42 +493,26 @@ describe('captureView — #512 path-based staging (PERF-R8)', () => {
     vi.restoreAllMocks();
   });
 
-  it('a genuine file drop stages by PATH — arrayBuffer() is never called on it', async () => {
+  it('staging a large file never calls arrayBuffer() — only submitting does', async () => {
     setApi(OK);
-    const getPathForFile = vi.fn(() => '/Users/mason/Downloads/report.pdf');
-    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = { ...(window as unknown as { kbApi: Partial<KbApi> }).kbApi, getPathForFile };
     mountCapture(root, '/v', 'KB').show?.();
 
-    const arrayBuffer = vi.fn(() => Promise.resolve(new ArrayBuffer(100 * 1024 * 1024))); // 100MB — never actually read
+    const arrayBuffer = vi.fn(() => Promise.resolve(new ArrayBuffer(100 * 1024 * 1024))); // 100MB
     const file = { name: 'report.pdf', size: 100 * 1024 * 1024, arrayBuffer };
     drop(root.querySelector('#dropzone') as HTMLElement, [file]);
     await flush();
 
-    expect(arrayBuffer).not.toHaveBeenCalled(); // the 100MB never got read into the renderer
-    expect(getPathForFile).toHaveBeenCalledWith(file);
+    expect(arrayBuffer).not.toHaveBeenCalled(); // staged, but NOT read yet
     expect(root.querySelector('#staged')!.textContent).toContain('report.pdf');
-    expect(root.querySelector('#staged')!.textContent).toContain('100.0 MB'); // size from File.size, not a read
+    expect(root.querySelector('#staged')!.textContent).toContain('100.0 MB'); // size from File.size, no read needed
 
     root.querySelector<HTMLButtonElement>('#capture')!.click();
     await flush();
-    // The submitted input carries the PATH, never bytes.
-    expect(lastInputs()).toEqual([{ kind: 'filePath', name: 'report.pdf', path: '/Users/mason/Downloads/report.pdf' }]);
-  });
-
-  it('a pasted image (no real path) still falls back to reading bytes', async () => {
-    setApi(OK);
-    const getPathForFile = vi.fn(() => ''); // clipboard-synthesized File — no backing path
-    (window as unknown as { kbApi: Partial<KbApi> }).kbApi = { ...(window as unknown as { kbApi: Partial<KbApi> }).kbApi, getPathForFile };
-    mountCapture(root, '/v', 'KB').show?.();
-
-    const ta = root.querySelector<HTMLTextAreaElement>('#captureText')!;
-    paste(ta, { image: new File([new Uint8Array([1, 2, 3])], '', { type: 'image/png' }) });
-    await flush();
-
-    root.querySelector<HTMLButtonElement>('#capture')!.click();
-    await flush();
+    expect(arrayBuffer).toHaveBeenCalledTimes(1); // read exactly once, at submit
+    // The submitted input still carries plain bytes — kb:capture's wire contract is unchanged.
     const input = lastInputs()[0] as { kind: 'file'; name: string; data: Uint8Array };
-    expect(input.kind).toBe('file'); // bytes, not a path — this File had none to give
+    expect(input.kind).toBe('file');
+    expect(input.name).toBe('report.pdf');
     expect(input.data).toBeInstanceOf(Uint8Array);
   });
 });

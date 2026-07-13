@@ -18,12 +18,19 @@ import type { ViewHandle } from '../viewLifecycle';
 const LARGE_TEXT_BYTES = 1 * 1024 * 1024; // ~1 MB pasted text
 const LARGE_FILE_BYTES = 25 * 1024 * 1024; // ~25 MB file
 
-// #512 PERF-R8: a staged file is either a real on-disk PATH (the common case — `getPathForFile`
-// resolved a genuine drop; the bytes never touch the renderer at all) or, when no path is available
-// (a pasted-image File — RICHIN-12 — the clipboard synthesizes a File with no backing path), the
-// bytes read up front as before. `size` is always known synchronously from `File.size` either way, so
-// the staged-list UI (and the large-file flag) never needs to read a path-staged file's content.
-type StagedFile = { name: string; size: number } & ({ kind: 'path'; path: string } | { kind: 'bytes'; data: Uint8Array });
+// #512 PERF-R8: hold a reference to the ORIGINAL File, not its bytes — a File is a lightweight browser
+// handle (nothing is loaded into JS-reachable memory until something actually reads it), so staging
+// even a 100MB dropped file costs the renderer's heap ~0 while it merely sits in the list. `size` is
+// always known synchronously via `File.size`. The bytes are read exactly once, at actual submit time
+// (`onCapture`) — deferring the read this far (rather than resolving+sending a renderer-supplied
+// filesystem PATH to the privileged main process) keeps `kb:capture`'s existing bytes-only wire
+// contract intact, so a compromised/malicious renderer script gains no new arbitrary-local-file-read
+// primitive (QD-2 security review, PR #566).
+interface StagedFile {
+  name: string;
+  size: number;
+  file: File;
+}
 
 // View-local state. The shell mounts each view once and toggles visibility, so this
 // state (and the in-progress textarea) survives switching away and back (SHELL-8).
@@ -80,51 +87,30 @@ function renderStagedFiles(container: HTMLElement): void {
   );
 }
 
-/** #512 PERF-R8: stage by real on-disk PATH when the drop gives one (`getPathForFile` — the common
- *  case, a genuine file drop) so the bytes never touch the renderer's heap at all; only reads bytes
- *  up front when no path is available (a pasted-image File — RICHIN-12 — has none). `size` is always
- *  known synchronously from `File.size` either way. `nameOverride` covers the pasted-image case, where
- *  the clipboard often gives an empty `file.name`. */
-async function stageFile(file: File, nameOverride?: string): Promise<StagedFile> {
-  const name = nameOverride ?? file.name;
-  const path = window.kbApi.getPathForFile(file);
-  if (path) return { kind: 'path', name, size: file.size, path };
-  // The bytes-fallback path already has the real, measured length in hand — use THAT rather than
-  // trusting `file.size` a second time (it should agree, but there's no reason not to use the ground
-  // truth we just read).
-  const data = new Uint8Array(await file.arrayBuffer());
-  return { kind: 'bytes', name, size: data.byteLength, data };
+/** #512 PERF-R8: stage a File REFERENCE, no read — `nameOverride` covers the pasted-image case
+ *  (RICHIN-12), where the clipboard often gives an empty `file.name`. */
+function stageFile(file: File, nameOverride?: string): StagedFile {
+  return { name: nameOverride ?? file.name, size: file.size, file };
 }
 
-/** Add dropped files as staged units — one per file (RICHIN-4). Per-file isolation: a file that
- *  fails to read NEVER blocks or discards the others (RICHIN-4 / ORCH-12 spirit). */
-async function addDroppedFiles(container: HTMLElement, files: FileList): Promise<void> {
-  const failed: string[] = [];
-  for (const file of Array.from(files)) {
-    try {
-      stagedFiles.push(await stageFile(file));
-    } catch {
-      failed.push(file.name || 'a file');
-    }
-  }
+/** Add dropped files as staged units — one per file (RICHIN-4). #512: purely synchronous now — staging
+ *  a File reference can't fail (nothing is read yet); an unreadable file is caught + isolated at actual
+ *  submit time instead (`onCapture`), where the read really happens. */
+function addDroppedFiles(container: HTMLElement, files: FileList): void {
+  for (const file of Array.from(files)) stagedFiles.push(stageFile(file));
   renderStagedFiles(container);
-  if (failed.length) setNote(container, `Couldn't read ${failed.join(', ')} — other items still staged.`, 'caution');
 }
 
 /** Stage a single File (e.g. a pasted image, RICHIN-12), synthesizing a name when the clipboard
  *  gives none. One unit per file; shares the gesture's captureBatch with any text at capture. */
-async function addStagedFile(container: HTMLElement, file: File): Promise<void> {
+function addStagedFile(container: HTMLElement, file: File): void {
   let name = file.name;
   if (!name) {
     const ext = (file.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '');
     name = `pasted-image.${ext || 'png'}`;
   }
-  try {
-    stagedFiles.push(await stageFile(file, name));
-    renderStagedFiles(container);
-  } catch {
-    setNote(container, `Couldn't read the pasted image.`, 'caution');
-  }
+  stagedFiles.push(stageFile(file, name));
+  renderStagedFiles(container);
 }
 
 /** The first image on the clipboard, if any (screenshot paste), else null (RICHIN-12). */
@@ -160,7 +146,7 @@ function onPaste(container: HTMLElement, ta: HTMLTextAreaElement, e: ClipboardEv
     const img = imageFromClipboard(cd);
     if (img) {
       e.preventDefault();
-      void addStagedFile(container, img);
+      addStagedFile(container, img);
       return;
     }
   }
@@ -222,19 +208,31 @@ async function onCapture(container: HTMLElement): Promise<void> {
     const html = pendingPaste && pendingPaste.markdown.trim() === text.trim() ? pendingPaste.html : undefined;
     inputs.push({ kind: 'text', text, ...(html ? { html } : {}) });
   }
+  // #512 PERF-R8: each staged file's bytes are read HERE, once, right before submit — never at
+  // drop/stage time (that's what keeps staging a large file ~free, RICHIN-4 spirit intact). A file
+  // that fails to read (corrupted, removed, permission revoked between drop and submit) is skipped and
+  // reported, never blocking the rest of the batch — the same per-file isolation as before, just
+  // checked at submit time now instead of at drop time.
+  const capturedSizes: number[] = [];
+  const unreadableNames: string[] = [];
   for (const f of stagedFiles) {
-    // #512 PERF-R8: a path-staged file submits by path — main reads the bytes itself, so a large
-    // dropped file's content never crosses the IPC boundary as a serialized buffer either.
-    if (f.kind === 'path') inputs.push({ kind: 'filePath', name: f.name, path: f.path });
-    else inputs.push({ kind: 'file', name: f.name, data: f.data });
+    try {
+      inputs.push({ kind: 'file', name: f.name, data: new Uint8Array(await f.file.arrayBuffer()) });
+      capturedSizes.push(f.size);
+    } catch {
+      unreadableNames.push(f.name);
+    }
   }
 
   if (inputs.length === 0) {
-    setNote(container, 'Type something, paste, or drop a file first.', 'caution');
+    setNote(container, unreadableNames.length ? `Couldn’t read ${unreadableNames.join(', ')}.` : 'Type something, paste, or drop a file first.', 'caution');
     return;
   }
 
-  const warn = sizeWarning(text, stagedFiles);
+  const warn = sizeWarning(
+    text,
+    capturedSizes.map((size) => ({ size })),
+  );
 
   // The main `kb:capture` handler always resolves a structured CaptureResult, but the IPC channel itself
   // can still reject (handler unregistered, serialization error). Guard so a transport reject becomes an
@@ -263,7 +261,9 @@ async function onCapture(container: HTMLElement): Promise<void> {
     stagedFiles = [];
     pendingPaste = null;
     renderStagedFiles(container);
-    setNote(container, warn ? `${res.message} · ${warn}` : res.message, 'ok');
+    const readNote = unreadableNames.length ? `couldn’t read ${unreadableNames.join(', ')}` : '';
+    const notes = [warn, readNote].filter(Boolean).join(' · ');
+    setNote(container, notes ? `${res.message} · ${notes}` : res.message, unreadableNames.length ? 'caution' : 'ok');
   } else if (res.blocked && vaultPath) {
     // SPEC-0034 MACOS-7 / #56: the capture write hit a folder-permission denial — route to the Blocked
     // recovery (actionable: Open System Settings + Retry) instead of a raw OS error. On grant + Retry the
@@ -333,7 +333,7 @@ export function mountCapture(container: HTMLElement, vaultPathArg: string, name:
     stop(e);
     dz.classList.remove('over');
     const dt = (e as DragEvent).dataTransfer;
-    if (dt?.files?.length) void addDroppedFiles(container, dt.files);
+    if (dt?.files?.length) addDroppedFiles(container, dt.files);
   });
 
   // Prevent the window from navigating when a file is dropped outside the zone.
