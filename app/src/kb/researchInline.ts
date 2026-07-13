@@ -21,6 +21,7 @@ import { raiseResearchEscalation } from './researchEscalate';
 import { RESEARCH_REQUEST_SIGNAL, dedupKeyFor, type ResearcherConfig, type ResearchRequest } from './researchers';
 import { isEnrichmentGap } from './enrichGap';
 import { flagEnrichmentGaps } from './enrichTrigger';
+import type { Mutex } from './stageLock';
 
 export interface ResearchDepsOptions {
   /** Thin-CLI relevance runtime for self-nomination (omit → deterministic heuristic only). */
@@ -35,6 +36,9 @@ export interface ResearchDepsOptions {
   researchFn?: ResearchFn;
   maxFanout?: number;
   globalCeiling?: number;
+  /** #517: the shared canonical-writer lock — threaded into every dispatched `runResearcher`'s
+   *  `RunResearcherDeps.lock` so its final capture commit is serialized against other writers. */
+  lock?: Mutex;
 }
 
 /** A no-op cognition for templates whose behavior hasn't landed yet (m365/custom in Slice 2) — a
@@ -70,7 +74,7 @@ export function makeResearchDeps(root: string, opts: ResearchDepsOptions = {}): 
   const orientRunner = makeOrientRunner(root);
   return {
     selfNominate: makeCliSelfNominate(opts.nominateRunner),
-    run: (r, req) => runResearcher(root, r, req, { research: selectResearchFn(root, r, opts), orient: orientRunner }),
+    run: (r, req) => runResearcher(root, r, req, { research: selectResearchFn(root, r, opts), orient: orientRunner, lock: opts.lock }),
     escalate: (r, req, depth) => raiseResearchEscalation(root, r, req, depth),
     ...(opts.maxFanout !== undefined ? { maxFanout: opts.maxFanout } : {}),
     ...(opts.globalCeiling !== undefined ? { globalCeiling: opts.globalCeiling } : {}),

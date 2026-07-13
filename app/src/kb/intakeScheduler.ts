@@ -15,6 +15,7 @@ import { runIntakeConnector } from './intakeRun';
 import { makeRssIntakeFn, type RssIntakeOptions } from './rssConnector';
 import { makeM365MailIntakeFn, type M365MailIntakeOptions } from './m365MailConnector';
 import type { IntakeConnectorConfig, IntakeFetchFn } from './intakeConnectors';
+import { Mutex } from './stageLock';
 import { noopDevLog, type DevLog } from './devlog';
 
 /** Is a connector due for a pull? enabled + scheduled + (never-run OR last + interval ≤ now). */
@@ -61,11 +62,15 @@ export class IntakeScheduler {
   private readonly inFlight = new Set<string>(); // single-flight per connector id (across ticks)
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
+  private readonly lock: Mutex;
 
-  /** `root` is the staging worktree (where the registry + audit live + intake writes sources). */
-  constructor(root: string, opts: IntakeDepsOptions = {}, log: DevLog = noopDevLog) {
+  /** `root` is the staging worktree (where the registry + audit live + intake writes sources). #517:
+   *  `lock` is the shared canonical-writer lock — threaded into every pull's ingest commit so it's
+   *  serialized against stage advances/other writers instead of racing them on the same git index. */
+  constructor(root: string, opts: IntakeDepsOptions = {}, lock: Mutex = new Mutex(), log: DevLog = noopDevLog) {
     this.root = path.resolve(root);
     this.opts = opts;
+    this.lock = lock;
     this.log = log;
   }
 
@@ -116,7 +121,7 @@ export class IntakeScheduler {
     this.inFlight.add(c.id);
     try {
       const ts = new Date(now).toISOString(); // stamp the pass with the tick's logical time
-      await runIntakeConnector(this.root, c, { fetch: selectIntakeFn(c, this.opts), now: () => ts });
+      await runIntakeConnector(this.root, c, { fetch: selectIntakeFn(c, this.opts), now: () => ts, lock: this.lock });
     } catch (err) {
       this.log.child({ scope: 'intake-scheduler' }).error('intake-pass-failed', { itemId: c.id, err });
     } finally {
