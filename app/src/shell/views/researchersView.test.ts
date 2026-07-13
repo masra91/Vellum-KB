@@ -163,9 +163,10 @@ describe('Field Desk — #559 past-runs timeline backfill', () => {
     expect(listResearcherRuns).toHaveBeenCalledWith('web-1');
     const rows = strip.querySelectorAll('.ag-detail-run');
     expect(rows).toHaveLength(2);
-    expect(rows[0].textContent).toContain('Jun 2'); // newest first (2026-06-03T00:00Z formats to a local Jun-2 evening)
-    expect(rows[0].textContent).toContain('brought back 2 cited sources');
-    expect(rows[1].textContent).toContain('May 31'); // the older, second run (2026-06-01T00:00Z)
+    // Timestamp rendering is locale/timezone-dependent (formatTimestamp → shortDate); assert ordering via
+    // the outcome text instead of the formatted date, which differs between local dev and UTC CI.
+    expect(rows[0].textContent).toContain('brought back 2 cited sources'); // newest first (researched, 2026-06-03)
+    expect(rows[1].textContent).toContain('no new findings'); // the older, second run (no-finding, 2026-06-01)
     expect(strip.querySelector('.ag-detail')?.textContent).not.toContain('Loading…');
   });
 
