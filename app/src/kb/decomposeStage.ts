@@ -240,22 +240,34 @@ export async function decomposeOne(
   // Rare for Decompose (disjoint candidate paths + per-source audit); never drop the item.
   const onExhausted = async (): Promise<void> => {
     const base = await canonicalHead(root);
-    await withEphemeralWorktree(root, STAGE, base, async ({ wt, workBranch }) => {
-      await fs.appendFile(
-        path.join(wt, sourceRel, 'audit.jsonl'),
-        auditLine({ runId: ulid(), sourceId: result.sourceId, event: 'setaside', reason: 'collision-exhausted' }),
-        'utf8',
-      );
-      const wtGit = simpleGit(wt);
-      await wtGit.raw('add', '-A');
-      await wtGit.commit(`decompose: set aside ${result.sourceId} (collision-exhausted)`);
-      await lock.run(() => advanceOrCollide(root, workBranch, base), 'decompose:setaside-advance');
-    });
+    // #508 item 2: this pass only ever appends to sourceRel's own audit — narrower than the main
+    // prepare (no candidates write here).
+    await withEphemeralWorktree(
+      root,
+      STAGE,
+      base,
+      async ({ wt, workBranch }) => {
+        await fs.appendFile(
+          path.join(wt, sourceRel, 'audit.jsonl'),
+          auditLine({ runId: ulid(), sourceId: result.sourceId, event: 'setaside', reason: 'collision-exhausted' }),
+          'utf8',
+        );
+        const wtGit = simpleGit(wt);
+        await wtGit.raw('add', '-A');
+        await wtGit.commit(`decompose: set aside ${result.sourceId} (collision-exhausted)`);
+        await lock.run(() => advanceOrCollide(root, workBranch, base), 'decompose:setaside-advance');
+      },
+      [sourceRel],
+    );
     log.error('decompose.setaside', { itemId: result.sourceId, reason: 'collision-exhausted' });
     result = { ...result, ok: false, setAside: true };
   };
 
-  await withConcurrentAdvance({ root, lock, stage: STAGE }, prepare, onExhausted);
+  // #508 item 2: decomposeOne's read scope is exactly the ONE source dir passed in (sourceRel), known
+  // before the worktree is created. Its writes are new `candidates/<shard>/<id>.json` files — the
+  // ids are minted during cognition, not knowable in advance, so the write target is the whole
+  // `candidates/` dir (still far narrower than the full evergreen tree on a large vault).
+  await withConcurrentAdvance({ root, lock, stage: STAGE, sparsePaths: [sourceRel, 'candidates'] }, prepare, onExhausted);
   return result;
 }
 
