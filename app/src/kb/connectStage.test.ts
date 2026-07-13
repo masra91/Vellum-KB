@@ -10,7 +10,7 @@ import { createKb } from './vault';
 import { ulid, dateShard } from './ulid';
 import { renderEntityNode, entityFileRel, LINKS_BLOCK_START } from './connectDoc';
 import { applyProse } from './composeDoc';
-import { connectOne, readConnectQueue, ConnectStage, DEFAULT_MAX_ATTEMPTS, linkOne, linkOneWouldChange, readLinkQueue, dedupClaimsOnce, linkOrphansOnce, listConnectSetAsideItems, retryConnectItem, dismissConnectItem, readResolveAudit } from './connectStage';
+import { connectOne, readConnectQueue, ConnectStage, DEFAULT_MAX_ATTEMPTS, linkOne, linkOneWouldChange, readLinkQueue, dedupClaimsOnce, linkOrphansOnce, listConnectSetAsideItems, retryConnectItem, dismissConnectItem, readResolveAudit, readCandidates, readEntityNodes } from './connectStage';
 import { captureToInbox } from './ingest';
 import { cohesionFromFiles } from './cohesion';
 import { resolveIndexLockPath, GATE3_STALE_AGE_MS } from './canonicalLockHeal';
@@ -1552,5 +1552,68 @@ describe.skipIf(!gitAvailable)('#507 connect sweep off-lock (HEAD-gate + off-loc
       expect(stage.connectSweepTailStats()).toEqual({ skipped: 0, ran: 2 }); // gate DID run the tail…
       expect(runCalls.filter((l) => l === 'connect:link')).toEqual([]); // …but took the lock for NONE of the 5 stable nodes
     });
+  });
+});
+
+// SPEC-0061 T1 / ENG-9 (#539 QA fast-follow) — end-to-end proof for readCandidates/readEntityNodes:
+// these two fuse a parse step into the retired walker (unlike findEntityFiles's pure listing), so a
+// malformed file must be excluded by the PARSE catch, not just walked and handed back raw. Pure fs,
+// no git needed.
+describe('readCandidates / readEntityNodes — a malformed file is skipped end-to-end, never throws (#539 QA fast-follow)', () => {
+  it('readCandidates: a malformed candidate JSON file is excluded; the well-formed sibling is returned', async () => {
+    const root = await makeTempDir('kb-readcandidates-');
+    try {
+      await fs.mkdir(path.join(root, 'candidates'), { recursive: true });
+      const good: Candidate = { id: ulid(), sourceId: 'SRC1', kind: 'person', name: 'Ada Lovelace', confidence: 0.9, mentions: ['Ada'] };
+      await fs.writeFile(path.join(root, 'candidates', `${good.id}.json`), JSON.stringify(good), 'utf8');
+      await fs.writeFile(path.join(root, 'candidates', 'broken.json'), 'not valid json at all {{{', 'utf8');
+
+      const candidates = await readCandidates(root); // no throw on the malformed sibling — the assertion
+      expect(candidates.map((c) => c.id)).toEqual([good.id]);
+    } finally {
+      await rmTempDir(root);
+    }
+  });
+
+  it('readCandidates: well-formed JSON that fails Candidate shape validation is also excluded, not thrown', async () => {
+    const root = await makeTempDir('kb-readcandidates-');
+    try {
+      await fs.mkdir(path.join(root, 'candidates'), { recursive: true });
+      await fs.writeFile(path.join(root, 'candidates', 'shapeless.json'), JSON.stringify({ notACandidate: true }), 'utf8');
+      await expect(readCandidates(root)).resolves.toEqual([]);
+    } finally {
+      await rmTempDir(root);
+    }
+  });
+
+  it('readEntityNodes: a malformed entity file (no frontmatter) is excluded; the well-formed sibling is returned', async () => {
+    const root = await makeTempDir('kb-readentitynodes-');
+    try {
+      const goodRel = entityFileRel('person', 'Ada Lovelace', ulid());
+      await fs.mkdir(path.dirname(path.join(root, goodRel)), { recursive: true });
+      await fs.writeFile(
+        path.join(root, goodRel),
+        renderEntityNode({
+          id: ulid(),
+          kind: 'person',
+          name: 'Ada Lovelace',
+          confidence: 0.9,
+          aliases: [],
+          tags: [],
+          derivedFrom: [],
+          resolvedFrom: [],
+          createdAt: '2026-06-02T00:00:00Z',
+          updatedAt: '2026-06-02T00:00:00Z',
+        }),
+        'utf8',
+      );
+      await fs.mkdir(path.join(root, 'entities', 'concept'), { recursive: true });
+      await fs.writeFile(path.join(root, 'entities', 'concept', 'broken.md'), 'not a valid entity — no frontmatter\n', 'utf8');
+
+      const nodes = await readEntityNodes(root); // no throw on the malformed sibling — the assertion
+      expect(nodes.map((n) => n.rel)).toEqual([goodRel]);
+    } finally {
+      await rmTempDir(root);
+    }
   });
 });

@@ -239,4 +239,19 @@ describe('applyClaimDedup — the within-source dedup PASS (CLAIMS-19)', () => {
     await writeClaim('ev2', evil, claim('X.', 'interpretation', 0.8));
     await expect(applyClaimDedup(root)).rejects.toThrow();
   });
+
+  // SPEC-0061 T1 / ENG-9 (#539 QA fast-follow) — end-to-end proof for walkClaimFiles (claimDedup.ts's
+  // own private walker): a malformed claim file must not crash the pass, and the well-formed sibling
+  // is still correctly inspected.
+  it('a malformed claim file (no frontmatter) is silently excluded, never throws (#539 QA fast-follow)', async () => {
+    const ada = 'entities/person/Ada.md';
+    await writeClaim('good1', ada, claim('Pioneered the first algorithm.', 'fact', 0.9));
+    await writeEntity(ada, 'Ada', [{ claimPath: claimRel('good1'), statement: 'Pioneered the first algorithm.', status: 'fact', confidence: 0.9 }]);
+    await fs.mkdir(path.join(root, 'claims', '2026', '06', '02'), { recursive: true });
+    await fs.writeFile(path.join(root, 'claims', '2026', '06', '02', 'broken.md'), 'not a valid claim — no frontmatter at all\n', 'utf8');
+
+    const report = await applyClaimDedup(root); // no throw on the malformed sibling — the assertion
+    expect(report.inspected).toBe(1); // only the well-formed claim was ever counted
+    expect(report.dropped).toBe(0);
+  });
 });
