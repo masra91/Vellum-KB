@@ -6,7 +6,7 @@
 // is node-tested in reviewBadge.test.ts; this covers the shell's DOM wiring + graceful degradation.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mountShell } from './shell';
-import { VIEW_REVIEWS, VIEW_CAPTURE, VIEW_CONNECTORS, VIEW_EXPLORE, VIEW_ACTIVITY, VIEW_HEALTH, VIEW_AGENTS } from './views';
+import { VIEW_REVIEWS, VIEW_CAPTURE, VIEW_CONNECTORS, VIEW_EXPLORE, VIEW_ACTIVITY, VIEW_HEALTH, VIEW_AGENTS, NAV_VIEWS } from './views';
 import { setTopbarContext } from './nav';
 import type { KbApi, ReviewSummary } from '../kb/types';
 
@@ -363,5 +363,67 @@ describe('#519 §3 — per-view topctx fillers (Explore/Activity/Health/Agents f
     expect(nameField).not.toBeNull();
     root.querySelector<HTMLElement>('[data-topctx-action="add-researcher"]')!.click();
     expect(document.activeElement).toBe(nameField);
+  });
+});
+
+// SPEC-0058 STATE-8 (#510) — the view lifecycle CONTRACT, swept across every rail-registered view (the
+// CLASS, not hand-picked instances): switching away must stop that view's live behavior within one tick.
+// A broad kbApi mock so every view's mount succeeds (or degrades gracefully via its own ENG-15/16 error
+// path, which still starts+registers whatever timers that view's `show()` unconditionally sets up).
+function setBroadApi(): void {
+  (window as unknown as { kbApi: Partial<KbApi> }).kbApi = {
+    listReviews: vi.fn(async () => []),
+    reviewProjection: vi.fn(async () => ({ data: [], builtAt: 't', stale: false })),
+    getTodayProjection: vi.fn(async () => ({ status: 'ready' as const, data: null, builtAt: 't', stale: false }) as unknown as Awaited<ReturnType<KbApi['getTodayProjection']>>),
+    pipelineStatus: vi.fn(async () => ({ queueDepth: 0, processing: null, lastArchived: null, updatedAt: null })),
+    capture: vi.fn(),
+    exploreProjection: vi.fn(async () => ({ status: 'ready', data: { neighborhood: { found: false, claims: [], neighbors: [], shown: 0, total: 0, contradictions: [] }, entities: [] }, builtAt: 't', stale: false }) as unknown as Awaited<ReturnType<KbApi['exploreProjection']>>),
+    healthReport: vi.fn(async () => ({ status: 'ready', builtAt: 't', dimensions: [] }) as unknown as Awaited<ReturnType<KbApi['healthReport']>>),
+    activityFeed: vi.fn(async () => ({ entries: [], total: 0, truncated: false })),
+    listAgents: vi.fn(async () => []),
+    getModelCatalog: vi.fn(async () => ({ accepted: null, resolved: 'auto', configured: undefined, staleConfigured: false })),
+    listJobs: vi.fn(async () => []),
+    listResearchers: vi.fn(async () => []),
+    listIntakeConnectors: vi.fn(async () => []),
+    getState: vi.fn(async () => ({ activeVaultPath: null, vaultConfig: null }) as unknown as Awaited<ReturnType<KbApi['getState']>>),
+    onProjectionChanged: vi.fn(() => () => {}),
+  };
+}
+
+describe('#510 contract: every registered view stops its live behavior within one tick of hide()', () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="app"></div>';
+    root = document.getElementById('app')!;
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  it('a fake-timer sweep through every rail view: after visiting all of them and returning to the first, the timer count is back to baseline — no leaked interval/timeout from any view', async () => {
+    vi.useFakeTimers();
+    try {
+      setBroadApi();
+      mountShell(root, '/vault', 'KB');
+      // 1200ms: long enough for shell.ts's own one-shot "brand-diamond churn" timeout (1100ms, fired on
+      // every render() — shell chrome, not any view's lifecycle) to fire and self-clear each time, so it
+      // never accumulates across clicks and pollutes the view-timer count this test actually cares about.
+      await vi.advanceTimersByTimeAsync(1200); // let the launch-home (Today) view's first show() settle
+      const baseline = vi.getTimerCount(); // Today's live clock + the always-on Reviews rail badge poll
+
+      for (const view of NAV_VIEWS) {
+        root.querySelector<HTMLButtonElement>(`.nav-item[data-view="${view.id}"]`)!.click();
+        await vi.advanceTimersByTimeAsync(1200); // let that view's (async) mount/show settle
+      }
+      // Switch back to the first view — this is what forces the LAST visited view's hide() to fire (the
+      // shell only hides the PREVIOUSLY active view on the NEXT switch).
+      root.querySelector<HTMLButtonElement>(`.nav-item[data-view="${NAV_VIEWS[0].id}"]`)!.click();
+      await vi.advanceTimersByTimeAsync(1200);
+
+      expect(vi.getTimerCount()).toBe(baseline); // every visited view's hide() cleaned up fully
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

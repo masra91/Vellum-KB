@@ -213,4 +213,45 @@ describe('Today v2 — command-center home (SPEC-0058 STATE-7)', () => {
     expect(c.querySelectorAll('.today-feed-row')).toHaveLength(1);
     expect(c.querySelector('.today-src')).toBeNull(); // no [[ref]] in the text
   });
+
+  describe('#510 lifecycle — data that changed while hidden repaints fresh on show()', () => {
+    it('hide() stops the live clock + warming re-poll; a later show() re-reads and repaints the LATEST data, not what was cached at hide time', async () => {
+      const c = document.createElement('div');
+      document.body.appendChild(c);
+      const handle = mountToday(c);
+
+      handle.show?.(); // first activation
+      await flush();
+      expect(c.querySelector('.today-greet')?.textContent).toContain('Good morning');
+      expect(getTodayProjection).toHaveBeenCalledTimes(1);
+
+      handle.hide?.(); // switched away — no timer should keep ticking
+      // The backend changed while hidden (e.g. a canonical advance) — the OLD design would never see
+      // this until the next 8s poll tick; the view shouldn't even be polling while hidden at all.
+      getTodayProjection = vi.fn(async () => ready({ greeting: { salutation: 'Good evening', name: 'Mason' } }));
+      setApi();
+
+      handle.show?.(); // switched back
+      await flush();
+      expect(getTodayProjection).toHaveBeenCalledTimes(1); // fresh read on THIS show(), not a stale cache
+      expect(c.querySelector('.today-greet')?.textContent).toContain('Good evening'); // repainted with the NEW data
+    });
+
+    it('hide() clears the clock ticker and the warming timer — no leaked interval after switching away', async () => {
+      vi.useFakeTimers();
+      try {
+        const c = document.createElement('div');
+        document.body.appendChild(c);
+        const handle = mountToday(c);
+        handle.show?.();
+        await vi.advanceTimersByTimeAsync(0); // let the mocked getTodayProjection resolve
+        expect(vi.getTimerCount()).toBeGreaterThan(0); // the clock ticker is running while shown
+
+        handle.hide?.();
+        expect(vi.getTimerCount()).toBe(0); // no timer survives hide()
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
