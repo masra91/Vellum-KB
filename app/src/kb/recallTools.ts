@@ -10,6 +10,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parseEntityNode } from './connectDoc';
 import { resolveContainedRel } from './pathContainment';
+import { walkVaultFiles } from './vaultWalk';
 import type { RecallTools, EntityHit, ClaimHit, LinkHit, GrepHit } from './recall';
 
 const DEFAULT_ENTITY_LIMIT = 10;
@@ -25,24 +26,16 @@ const MAX_AMBIGUOUS_CANDIDATES = 3;
 // (skip) — reads never throw. It hardens the old lexical `safeResolve` against committed-symlink
 // escapes too (a symlinked vault file could otherwise surface host content as "cited KB content").
 
-/** Recursively collect files under `dir` (repo-relative to `root`) matching `keep`. */
+/** Recursively collect files under `dir` (repo-relative to `root`) matching `keep`.
+ *  SPEC-0061 T1 / ENG-9 (#539): delegates to the shared `walkVaultFiles` (`vaultWalk.ts`, landed in
+ *  #530). Two behavior changes vs. the old ad-hoc recursion, both strict improvements: symlinks are
+ *  never followed (was previously followed — a committed symlink under `entities/`/`claims/`/`sources/`
+ *  could escape the vault), and entries are returned in deterministic name-sorted order (was OS
+ *  `readdir` order, unspecified) — the live walk's own downstream consumers (`entityLookup`'s explicit
+ *  confidence+name sort, `resolveEntity`'s ranked matching) already don't depend on raw walk order, so
+ *  this doesn't change observable behavior for any well-formed vault. */
 async function walkFiles(root: string, dir: string, keep: (name: string) => boolean): Promise<string[]> {
-  const out: string[] = [];
-  async function rec(d: string): Promise<void> {
-    let entries: import('node:fs').Dirent[];
-    try {
-      entries = await fs.readdir(d, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      const full = path.join(d, e.name);
-      if (e.isDirectory() && !e.name.startsWith('.')) await rec(full);
-      else if (e.isFile() && keep(e.name)) out.push(path.relative(root, full));
-    }
-  }
-  await rec(path.join(root, dir));
-  return out;
+  return walkVaultFiles(root, dir, { keep });
 }
 
 // ── A tolerant claim-file parser (claimDoc.ts only renders; recall needs to read) ───────────
