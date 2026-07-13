@@ -295,12 +295,12 @@ export interface AuditCoverageEntry {
 export const AUDIT_COVERAGE: readonly AuditCoverageEntry[] = [
   {
     actor: 'archivist',
-    what: 'Archives a captured source verbatim and records the archivist decision (ORCH-16).',
-    emitters: ['orchestrator'],
-    auditPath: 'sources/<shard>/<id>/audit.jsonl',
+    what: 'Archives a captured source verbatim and records the archivist decision (ORCH-16). ingest.ts additionally records a `capture-refused` event (#516 BUG-3) when a foreign folder-drop is skipped during normalize — oversized (>2GiB) or otherwise unreadable — into the cross-cutting control log, so a refusal is never silent (OBS-4).',
+    emitters: ['orchestrator', 'ingest'],
+    auditPath: 'sources/<shard>/<id>/audit.jsonl (archived) · ' + CONTROL_AUDIT_REL + ' (capture-refused)',
     mutating: true,
-    carriesWhy: true, // payload.decision records the routing rationale
-    traces: ['AUDIT-1', 'AUDIT-2', 'ORCH-16', 'DATA-10'],
+    carriesWhy: true, // payload.decision records the routing rationale; capture-refused records the reason
+    traces: ['AUDIT-1', 'AUDIT-2', 'ORCH-16', 'DATA-10', 'ORCH-14'],
   },
   {
     actor: 'decompose',

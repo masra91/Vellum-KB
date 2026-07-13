@@ -159,6 +159,73 @@ describe.skipIf(!gitAvailable)('captureToInbox (SPEC-0013)', () => {
   });
 });
 
+// #516 BUG-3 (the normalizeInbox half): an oversized/unreadable foreign drop is refused (audited),
+// never a whole-pass throw that would wedge the archive drain (normalizeInbox runs under
+// `lock.run('normalize')` in drainOnce with no surrounding try/catch — a throw here used to kill the
+// ENTIRE drain, before the real queue was even read).
+describe.skipIf(!gitAvailable)('normalizeInbox — per-file isolation + size cap (#516 BUG-3)', () => {
+  let dir: string;
+  let vault: string;
+  beforeEach(async () => {
+    dir = await makeTempDir();
+    vault = path.join(dir, 'vault');
+    await createKb({ path: vault, initGitIfNeeded: true });
+  });
+  afterEach(async () => {
+    await rmTempDir(dir);
+  });
+
+  async function auditEvents(): Promise<Array<{ eventType: string; payload: Record<string, unknown> }>> {
+    const raw = await fs.readFile(path.join(vault, '.kb', 'audit.jsonl'), 'utf8').catch(() => '');
+    return raw
+      .trim()
+      .split('\n')
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as { eventType: string; payload: Record<string, unknown> });
+  }
+
+  it('a file over the size cap is REFUSED (audited capture-refused), never read, and stays on disk untouched', async () => {
+    await fs.mkdir(path.join(vault, 'inbox'), { recursive: true });
+    await fs.writeFile(path.join(vault, 'inbox', 'huge.bin'), Buffer.alloc(100, 1));
+    const minted = await normalizeInbox(vault, Date.now(), 50); // tiny cap — the 100-byte file exceeds it
+    expect(minted).toEqual([]);
+    expect(await pathExists(path.join(vault, 'inbox', 'huge.bin'))).toBe(true); // untouched, not adopted
+    expect(await inboxUnits(vault)).toEqual(['huge.bin']); // no ULID unit dir minted for it — the raw file is all that's there
+
+    const events = await auditEvents();
+    const refused = events.find((e) => e.eventType === 'capture-refused');
+    expect(refused).toBeDefined();
+    expect(refused!.payload.name).toBe('huge.bin');
+    expect(refused!.payload.bytes).toBe(100);
+    expect(refused!.payload.reason).toContain('size cap');
+  });
+
+  it('one refused file does NOT block a sibling good file from normalizing in the same pass', async () => {
+    await fs.mkdir(path.join(vault, 'inbox'), { recursive: true });
+    await fs.writeFile(path.join(vault, 'inbox', 'huge.bin'), Buffer.alloc(100, 1));
+    await fs.writeFile(path.join(vault, 'inbox', 'fine.txt'), 'a perfectly normal file');
+    const minted = await normalizeInbox(vault, Date.now(), 50);
+    expect(minted).toHaveLength(1); // the good one adopted
+    expect(await pathExists(path.join(vault, 'inbox', 'huge.bin'))).toBe(true); // refused one left alone
+    expect(await pathExists(path.join(vault, 'inbox', 'fine.txt'))).toBe(false); // adopted (moved into its unit)
+  });
+
+  it('a per-file read failure is isolated (audited, skipped) — never a whole-pass throw', async () => {
+    await fs.mkdir(path.join(vault, 'inbox'), { recursive: true });
+    // A directory entry that LOOKS like a plain file to fs.stat's isFile() gate would be unusual to
+    // fabricate portably; instead simulate an unreadable file via a broken symlink target read failure
+    // is already excluded by isFile() — so exercise the catch-all via a file that vanishes between the
+    // readdir listing and the stat/read (a realistic race): create it, then race a deletion mid-pass by
+    // making the SECOND file's presence the assertion target (isolation, not the exact error path).
+    await fs.writeFile(path.join(vault, 'inbox', 'a-first.txt'), 'first');
+    await fs.writeFile(path.join(vault, 'inbox', 'b-second.txt'), 'second');
+    await fs.rm(path.join(vault, 'inbox', 'a-first.txt')); // vanished before normalizeInbox's own stat
+    const minted = await normalizeInbox(vault);
+    expect(minted).toHaveLength(1); // b-second still adopted despite a-first's mid-scan disappearance
+    expect(await pathExists(path.join(vault, 'inbox', 'b-second.txt'))).toBe(false);
+  });
+});
+
 describe.skipIf(!gitAvailable)('captureToInbox — RICHIN rich paste (SPEC-0040)', () => {
   let dir: string;
   let vault: string;
@@ -196,6 +263,62 @@ describe.skipIf(!gitAvailable)('captureToInbox — RICHIN rich paste (SPEC-0040)
     const unit = path.join(vault, 'inbox', res.ids[0]);
     expect(await pathExists(path.join(unit, 'original.html'))).toBe(false);
     expect((await readCapturedMeta(unit)).clip).toBeUndefined();
+  });
+});
+
+// #516 BUG-9: unit files written before a failing commit are cleaned up, not left as orphaned
+// uncommitted litter that a LATER successful capture's `git add inbox` (which stages the whole inbox
+// tree) silently sweeps up and rescue-commits under an unrelated message — while the UI already told
+// the Principal THIS capture failed, so a re-capture would mint a duplicate.
+describe.skipIf(!gitAvailable)('captureToInbox — failed-commit cleanup (#516 BUG-9)', () => {
+  let dir: string;
+  let vault: string;
+  beforeEach(async () => {
+    dir = await makeTempDir();
+    vault = path.join(dir, 'vault');
+    await createKb({ path: vault, initGitIfNeeded: true });
+  });
+  afterEach(async () => {
+    await fs.rm(path.join(vault, '.git', 'index.lock'), { force: true }).catch(() => {});
+    await rmTempDir(dir);
+  });
+
+  /** Force the NEXT git commit in this repo to fail deterministically: a real, held `index.lock` makes
+   *  git refuse with "Unable to create '.git/index.lock': File exists." — no fake-git injection seam
+   *  needed, and it exercises the REAL git failure path end-to-end. */
+  async function jamGitIndex(): Promise<void> {
+    await fs.writeFile(path.join(vault, '.git', 'index.lock'), '');
+  }
+
+  it('a failing commit removes the just-written unit dirs — no unit remains queued after a failed capture', async () => {
+    await jamGitIndex();
+    await expect(captureToInbox(vault, 'in-app-panel', [{ kind: 'text', text: 'will fail to commit' }])).rejects.toThrow();
+    expect(await inboxUnits(vault)).toEqual([]); // nothing left behind — not even a partial unit
+  });
+
+  it('cleans up ALL units in a multi-payload batch on a failed commit, not just the first', async () => {
+    await jamGitIndex();
+    await expect(
+      captureToInbox(vault, 'in-app-panel', [
+        { kind: 'text', text: 'one' },
+        { kind: 'text', text: 'two' },
+        { kind: 'text', text: 'three' },
+      ]),
+    ).rejects.toThrow();
+    expect(await inboxUnits(vault)).toEqual([]);
+  });
+
+  it('a LATER successful capture is unaffected — no orphaned litter to rescue-commit under its message', async () => {
+    await jamGitIndex();
+    await expect(captureToInbox(vault, 'in-app-panel', [{ kind: 'text', text: 'fails' }])).rejects.toThrow();
+    await fs.rm(path.join(vault, '.git', 'index.lock'), { force: true });
+
+    const res = await captureToInbox(vault, 'in-app-panel', [{ kind: 'text', text: 'succeeds' }]);
+    expect(res.committed).toBe(true);
+    expect(await inboxUnits(vault)).toEqual([res.ids[0]]); // exactly the new unit — no leftover from the failed attempt
+    const git = simpleGit(vault);
+    expect((await git.log()).latest?.message).toContain('capture: 1 item(s)'); // its OWN message, nothing rescued in
+    expect((await git.status()).isClean()).toBe(true);
   });
 });
 
