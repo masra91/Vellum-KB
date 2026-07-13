@@ -82,7 +82,18 @@ the issue's own scoping ("optional... as a follow-up").
 
 An ENG-15/16-style unit per text-emitting call site with a 120-char value, asserting the `title`
 attribute is present and equal to the full value, and that the container carries `.v3-clip` (or the
-wrap/flip treatment per §3's table). One narrow-width (760px) DL-1 capture across the five named
+wrap/flip treatment per §3's table). This covers the **ellipsis + reveal** sites (C2-C7) — the other
+two treatments need their own test shape, not a reuse of the title-attribute assertion:
+- **Wrap** (C1): a unit asserting the agent-instructions container has no `nowrap`/single-line
+  override and that a long value actually renders on multiple lines (or at least doesn't truncate).
+- **Flip / reflow** (C9): a unit placing a node near the graph's right/bottom bound and asserting
+  its label renders on the mirrored side, not clipped at the viewport edge.
+- **Container shrink** (C10): a unit asserting the past-chats panel's rendered width tracks its
+  container below 22rem, rather than asserting anything about the text nodes inside it.
+- **Qcap note wrap** (C11): a unit asserting a long status note doesn't push `.qcap-head` to grow
+  (the header row's height stays fixed regardless of note length).
+
+One narrow-width (760px) DL-1 capture across the five named
 views.
 
 ## 7. Changelog

@@ -130,15 +130,15 @@ direction, not a paused feature — there is no roadmap item that resurrects "th
 standalone view (what's moving lives on Today's flow-strip; diagnostics live in Health, per
 SPEC-0060 §4, both already shipped). Delete in one PR:
 
-- `statusView.ts` + `statusView.test.ts` (692 lines)
+- `statusView.ts` (604 lines) + `statusView.test.ts` (692 lines)
 - `lineMotion.ts` + `lineMotion.test.ts` (138 + 195 lines)
 - `theLineModel.test.ts` (280 lines) + the `theLineModel.ts` shim
 - `theLine.css` (558 lines)
 - the `VIEW_STATUS` constant and its `views.ts` mount claim
 
 **Keep `kb/lineStations.ts`** — Today's flow-strip (SPEC-0060's shipped replacement) calls
-`buildStations` from it (`pipeline.ts:840`); this file is live infrastructure, not part of the dead
-cluster, despite the naming overlap.
+`buildStations` from it (`pipeline.ts` ~904/957); this file is live infrastructure, not part of the
+dead cluster, despite the naming overlap.
 
 **One verification task for the executor, not a design call:** check whether
 `kb/audit.ts:388-424`'s actor strings (e.g. "into the KB") reach any rendered surface. If they do,
@@ -165,7 +165,11 @@ ids/actors are explicitly out of the glossary's scope).
 
 Terminology grep-test extension to the three named files (§8); qcap class assertions (no
 `viz-*` prefix survives) via `qcapSheet.test.ts`; build-check + `themeCohesion` (any CSS touch runs
-it) + one DL-1 gate pass comparing qcap to in-app Capture side by side.
+it) + one DL-1 gate pass comparing qcap to in-app Capture side by side. **A dedicated unit for the
+first-run status-marker fix (§3):** assert `mark()`'s output contains no emoji codepoint and that
+the glyph's color class/token varies correctly with the three states (sprout-true / gold-deep-caution
+/ oxide-blocker) — the terminology grep-test only catches banned text, not a marker silently staying
+colored-emoji or losing its state-hue mapping.
 
 ## 10. Changelog
 

@@ -155,8 +155,11 @@ term and a working reset. Today/Activity: a snapshot or class assertion confirmi
 `text-transform: uppercase` computed style on card titles/buttons on v3 surfaces (regression guard
 so a future PR can't quietly reintroduce it). `--faint` usage: a grep-based lint (or extend
 `themeCohesion`) asserting `--faint` doesn't appear in any rule also setting `font-size` below
-`1rem`. VUX-17: once disposition is confirmed, a per-agent-card test asserting the drill cue is
-present and the click target navigates to the detail view.
+`1rem`. VUX-17: now that disposition is confirmed (§5), a per-agent-card test asserting the drill
+cue is present and the click target navigates to the detail view. **View-swap announcements (§6):**
+a test asserting the shared `aria-live="polite"` region's text content updates to "{View name} view"
+on each route change — this is its own §7 AC item and needs its own assertion, not just a visual
+check that the region exists.
 
 ## 9. Changelog
 
