@@ -59,6 +59,7 @@ import { advanceOrCollide, boundedGit, canonicalHead, DEFAULT_MAX_COLLISION_RETR
 import { CanonicalQueueCache } from './queueCache';
 import { noopDevLog, type DevLog } from './devlog';
 import { noopTracer, noopActiveSpan, STAGE_RUN_OP, type Tracer, type ActiveSpan } from './tracing';
+import { walkVaultFiles } from './vaultWalk';
 
 /**
  * The branch Connect's worktree is based on and fast-forwards into.
@@ -190,30 +191,21 @@ async function readSourceCard(wt: string, cand: Candidate): Promise<{ title: str
 
 // ── Reading the working zone: candidates + existing nodes ──────────────────────────────────
 
-/** Walk `candidates/` and return every well-formed candidate (skips malformed files). */
+/** Walk `candidates/` and return every well-formed candidate (skips malformed files).
+ *  SPEC-0061 T1 / ENG-9 (#539): file collection delegates to the shared `walkVaultFiles`; the parse
+ *  step (previously fused into the walk) is now a separate pass over the collected paths, with the
+ *  same try/catch-and-skip malformed-file behavior. */
 export async function readCandidates(root: string): Promise<Candidate[]> {
   root = path.resolve(root);
   const out: Candidate[] = [];
-  async function walk(dir: string): Promise<void> {
-    let entries: import('node:fs').Dirent[];
+  const rels = await walkVaultFiles(root, 'candidates', { keep: (n) => n.endsWith('.json') });
+  for (const rel of rels) {
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
+      out.push(validCandidate(JSON.parse(await fs.readFile(path.join(root, rel), 'utf8'))));
     } catch {
-      return;
-    }
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory() && !e.name.startsWith('.')) await walk(full);
-      else if (e.isFile() && e.name.endsWith('.json')) {
-        try {
-          out.push(validCandidate(JSON.parse(await fs.readFile(full, 'utf8'))));
-        } catch {
-          /* malformed candidate — skip (not our well-formed unit) */
-        }
-      }
+      /* malformed candidate — skip (not our well-formed unit) */
     }
   }
-  await walk(path.join(root, 'candidates'));
   return out;
 }
 
@@ -222,31 +214,20 @@ export interface LocatedNode extends ParsedNode {
   rel: string;
 }
 
-/** Walk `entities/` and return every well-formed node with its repo-relative path. */
+/** Walk `entities/` and return every well-formed node with its repo-relative path.
+ *  SPEC-0061 T1 / ENG-9 (#539): same walk/parse split as `readCandidates` above. */
 export async function readEntityNodes(root: string): Promise<LocatedNode[]> {
   root = path.resolve(root);
   const out: LocatedNode[] = [];
-  async function walk(dir: string): Promise<void> {
-    let entries: import('node:fs').Dirent[];
+  const rels = await walkVaultFiles(root, 'entities', { keep: (n) => n.endsWith('.md') });
+  for (const rel of rels) {
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
+      const parsed = parseEntityNode(await fs.readFile(path.join(root, rel), 'utf8'));
+      out.push({ ...parsed, rel });
     } catch {
-      return;
-    }
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory() && !e.name.startsWith('.')) await walk(full);
-      else if (e.isFile() && e.name.endsWith('.md')) {
-        try {
-          const parsed = parseEntityNode(await fs.readFile(full, 'utf8'));
-          out.push({ ...parsed, rel: path.relative(root, full) });
-        } catch {
-          /* foreign / malformed node — skip */
-        }
-      }
+      /* foreign / malformed node — skip */
     }
   }
-  await walk(path.join(root, 'entities'));
   return out;
 }
 
@@ -551,25 +532,15 @@ function parseClaim(md: string, rel: string): ClaimRef | null {
   return { rel, subject, statement, status, confidence, relatesTo };
 }
 
+// SPEC-0061 T1 / ENG-9 (#539): same walk/parse split as `readCandidates`/`readEntityNodes` above —
+// file collection via the shared `walkVaultFiles`, parsing as a separate pass.
 async function readClaims(wtRoot: string): Promise<ClaimRef[]> {
   const out: ClaimRef[] = [];
-  async function walk(dir: string): Promise<void> {
-    let entries: import('node:fs').Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory() && !e.name.startsWith('.')) await walk(full);
-      else if (e.isFile() && e.name.endsWith('.md')) {
-        const c = parseClaim(await fs.readFile(full, 'utf8'), path.relative(wtRoot, full));
-        if (c) out.push(c);
-      }
-    }
+  const rels = await walkVaultFiles(wtRoot, 'claims', { keep: (n) => n.endsWith('.md') });
+  for (const rel of rels) {
+    const c = parseClaim(await fs.readFile(path.join(wtRoot, rel), 'utf8'), rel);
+    if (c) out.push(c);
   }
-  await walk(path.join(wtRoot, 'claims'));
   return out;
 }
 
