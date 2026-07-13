@@ -494,10 +494,23 @@ export function registerIpc(): void {
     // ORCH-16: pin the model recall's SDK session runs on, same as the enrich deciders — prod
     // otherwise passed no model and the SDK inherited `~/.copilot/settings.json` (model-pin gap).
     const model = resolveCopilotModel(undefined, 'recall');
+    const root = path.resolve(cfg.activeVaultPath);
+    // SPEC-0061 T1 follow-up (#538): serve Ask's tool surface from the library index — zero fs reads per
+    // tool call, and it's what makes `search` (the composite tool) actually reachable by the agent
+    // (`RecallTools.search` is only implemented by the index-backed surface). Same never-throw fallback
+    // as `kb:healthReport`: an index open/refresh failure degrades to the live vault walker, which has
+    // no `search` — the agent simply falls back to the granular tools, never a hard failure.
+    let tools: RecallTools | undefined;
+    try {
+      tools = await libraryIndexToolsFor(root);
+    } catch {
+      tools = undefined;
+    }
     return recall(
-      path.resolve(cfg.activeVaultPath),
+      root,
       { question: req.question, history: req.history },
       {
+        tools,
         client: getRecallClient(), // #514: process-wide reuse — 2nd+ question skips the CLI server boot
         sessionBudgetMs,
         maxToolCalls,

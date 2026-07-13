@@ -49,7 +49,9 @@ describe('recall skill (ASK-4)', () => {
     expect(RECALL_SKILL).toMatch(/SIMPLE \/ FACTUAL[\s\S]*TIGHT, DIRECT/);
     expect(RECALL_SKILL).toMatch(/OPEN-ENDED \/ EXPLORATORY[\s\S]*FULLER/);
     expect(RECALL_SKILL).toMatch(/never less grounding/);
-    expect(RECALL_SKILL_VERSION).toBe('recall/v5-sdk'); // #113 + ASK-13 + ASK-18 adaptive length
+    expect(RECALL_SKILL).toMatch(/TOOL STRATEGY/); // #538: steers toward `search` for a broad first pass when available
+    expect(RECALL_SKILL).toContain('search');
+    expect(RECALL_SKILL_VERSION).toBe('recall/v6-sdk'); // #113 + ASK-13 + ASK-18 adaptive length + #538 search strategy
   });
 });
 

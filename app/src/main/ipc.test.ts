@@ -353,6 +353,31 @@ describe('SPEC-0026 ASK — kb:ask grounded recall', () => {
     expect(res.citations[0].ref).toBe('claims/person/ada-lovelace.md');
     expect(mocks.recall).not.toHaveBeenCalled();
   });
+
+  it('SPEC-0061 T1 follow-up (#538): a real git vault gets index-backed tools (search available) passed to recall', async () => {
+    // A real git-committed vault (kb:create), unlike the plain temp dir the other kb:ask tests
+    // configure directly — libraryIndexToolsFor needs a real canonical HEAD to build the index against.
+    await invoke<CreateKbResult>('kb:create', { path: vaultDir, name: 'Ask KB', initGitIfNeeded: true });
+    await fs.mkdir(path.join(vaultDir, 'entities', 'person'), { recursive: true });
+    await fs.writeFile(path.join(vaultDir, 'entities', 'person', 'ada.md'), '---\nid: 01ADA\nkind: person\nname: Ada Lovelace\ntags: []\n---\n# Ada Lovelace\n', 'utf8');
+
+    await invoke('kb:ask', { question: 'Who?', history: [] });
+
+    const opts = (mocks.recall.mock.calls[0] as unknown[])[2] as { tools?: { search?: unknown } };
+    expect(typeof opts.tools?.search).toBe('function');
+  });
+
+  it('a non-git activeVaultPath degrades gracefully — kb:ask never throws, recall still runs', async () => {
+    // A plain temp dir (no kb:create — no git repo): ensureLibraryIndexFresh's own canonicalHead
+    // catch makes this a graceful no-op (empty index, not an error) rather than something
+    // libraryIndexToolsFor's try/catch even needs to intervene on — but the never-throws contract is
+    // what matters here, mirroring kb:healthReport's identical degrade path (#530).
+    await configureVault(vaultDir);
+    await invoke('kb:ask', { question: 'Who?', history: [] });
+    expect(mocks.recall).toHaveBeenCalled(); // never throws, never silently no-ops
+    const opts = (mocks.recall.mock.calls[0] as unknown[])[2] as { tools?: { search?: unknown; entityLookup?: unknown } };
+    expect(typeof opts.tools?.entityLookup).toBe('function'); // still a valid (if empty) index-backed surface
+  });
 });
 
 // #514: kb:ask previously built a fresh RecallClient (→ a fresh CLI server) on every call. ipc.ts now

@@ -12,7 +12,7 @@ import type { CopilotClientOptions, SessionConfig, SystemMessageConfig, Tool, To
 import type { RecallClient, RecallSession, RecallSessionConfig, RecallToolDef } from './recall';
 
 /** Version of the recall skill/instruction (for the audit trail; ORCH-16 / SPEC-0014 Q9). */
-export const RECALL_SKILL_VERSION = 'recall/v5-sdk';
+export const RECALL_SKILL_VERSION = 'recall/v6-sdk'; // #538: added the search-tool-first strategy guidance
 
 /**
  * The recall SKILL (ASK-4): teaches the agent the KB's structure + how to ground/cite, so it
@@ -33,6 +33,14 @@ export const RECALL_SKILL = [
   '  entity node it is about), status (fact|interpretation|hypothesis), confidence, and',
   '  provenance.derivedFrom + mentions (verbatim evidence spans).',
   '- [[wikilinks]] connect nodes; provenance links everything back to sources.',
+  '',
+  'TOOL STRATEGY: if a `search` tool is available, START THERE for a broad first pass — it ranks',
+  'entities/claims/sources by relevance in ONE call, with each entity’s top claims and backlinks',
+  'already attached (no need for a follow-up claimsForEntity/linkTraversal on it). Use the single-',
+  'purpose tools (entityLookup, claimsForEntity, linkTraversal, readNode, readSource, grep) for',
+  'PRECISION follow-ups: an exact name lookup, a specific node’s full text, or a source quote —',
+  'not as your first move when `search` can get you there faster. If `search` is not available,',
+  'fall back to the entity-centric method below from the start.',
   '',
   'METHOD (multi-hop, entity-centric): find the relevant entity → read its claims → follow its',
   'links → read the underlying source text for exact quotes. Reason about relevance; stay on-topic.',

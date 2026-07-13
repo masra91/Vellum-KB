@@ -13,7 +13,7 @@ import { rmTempDir } from '../../test/tempVault';
 import { makeReadOnlyTools } from './recallTools';
 import { makeFakeLibraryIndexStore } from './libraryIndexFake';
 import { rebuildLibraryIndexFull } from './libraryIndexBuild';
-import { makeIndexTools } from './libraryIndexTools';
+import { makeIndexTools, sanitizeFtsQuery } from './libraryIndexTools';
 import { buildHealthReport } from './healthPanel';
 
 async function buildIndexTools(root: string) {
@@ -128,6 +128,105 @@ describe('library index — malformed/orphan straggler fidelity (mirrors the gra
   });
 });
 
+describe('library index — search() composite ranked search (#538)', () => {
+  it('sanitizeFtsQuery token-quotes input, neutralizing FTS5 syntax characters', () => {
+    expect(sanitizeFtsQuery('hello world')).toBe('"hello" "world"');
+    expect(sanitizeFtsQuery('  spaced   out  ')).toBe('"spaced" "out"');
+    expect(sanitizeFtsQuery('a"b')).toBe('"a""b"');
+    expect(sanitizeFtsQuery('AND OR NOT -foo *bar NEAR')).toBe('"AND" "OR" "NOT" "-foo" "*bar" "NEAR"');
+    expect(sanitizeFtsQuery('')).toBe('');
+    expect(sanitizeFtsQuery('   ')).toBe('');
+  });
+
+  it('an entity match folds in its claims + incoming backlinks — one call instead of three', async () => {
+    const v = await buildRecallVault();
+    try {
+      const idx = await buildIndexTools(v.root);
+      const result = await idx.search!({ query: 'Lovelace' });
+      const ada = result.entities.find((e) => e.entity.rel === v.adaRel);
+      expect(ada).toBeDefined();
+      expect(ada!.claims.map((c) => c.rel)).toContain(v.claimRel);
+      expect(ada!.incoming.map((l) => l.from)).toContain(v.engineRel); // Engine links back to Ada
+      expect(ada!.snippet).toContain('**'); // highlighted match
+    } finally {
+      await rmTempDir(v.root);
+    }
+  });
+
+  it('a claim already folded into a matched entity is NOT also listed standalone', async () => {
+    const v = await buildRecallVault();
+    try {
+      const idx = await buildIndexTools(v.root);
+      const result = await idx.search!({ query: 'Lovelace' });
+      const matchedRels = new Set(result.entities.map((e) => e.entity.rel));
+      for (const c of result.claims) {
+        const claim = await idx.claimsForEntity({ entity: c.rel === v.claimRel ? v.adaRel : '' });
+        void claim; // sanity anchor only
+      }
+      expect(result.claims.map((c) => c.rel)).not.toContain(v.claimRel);
+      expect(matchedRels.has(v.adaRel)).toBe(true);
+    } finally {
+      await rmTempDir(v.root);
+    }
+  });
+
+  it('a query matching only the source (not the entity or claim body) surfaces a standalone source hit', async () => {
+    const v = await buildRecallVault();
+    try {
+      const idx = await buildIndexTools(v.root);
+      // buildRecallVault's source.md is the only place "worked on" appears verbatim.
+      const result = await idx.search!({ query: 'worked' });
+      const sourceRel = path.join(v.sourceDir, 'source.md');
+      expect(result.sources.map((s) => s.rel)).toContain(sourceRel);
+      expect(result.sources.find((s) => s.rel === sourceRel)!.snippet).toContain('**');
+    } finally {
+      await rmTempDir(v.root);
+    }
+  });
+
+  it('a query matching nothing returns an all-empty result', async () => {
+    const v = await buildRecallVault();
+    try {
+      const idx = await buildIndexTools(v.root);
+      expect(await idx.search!({ query: 'zzz_nonexistent_term_zzz' })).toEqual({ entities: [], claims: [], sources: [] });
+    } finally {
+      await rmTempDir(v.root);
+    }
+  });
+
+  it('an empty query returns an all-empty result, matching grep\'s empty-pattern behavior', async () => {
+    const v = await buildRecallVault();
+    try {
+      const idx = await buildIndexTools(v.root);
+      expect(await idx.search!({ query: '' })).toEqual({ entities: [], claims: [], sources: [] });
+    } finally {
+      await rmTempDir(v.root);
+    }
+  });
+
+  it('respects limit across the combined entity+claim+source count', async () => {
+    const v = await buildRecallVault();
+    try {
+      const idx = await buildIndexTools(v.root);
+      const result = await idx.search!({ query: 'Lovelace', limit: 1 });
+      const total = result.entities.length + result.claims.length + result.sources.length;
+      expect(total).toBeLessThanOrEqual(1);
+    } finally {
+      await rmTempDir(v.root);
+    }
+  });
+
+  it('the live vault-walker tool surface has no search capability — capability-gated, not a breaking interface change', async () => {
+    const v = await buildRecallVault();
+    try {
+      const live = makeReadOnlyTools(v.root);
+      expect(live.search).toBeUndefined();
+    } finally {
+      await rmTempDir(v.root);
+    }
+  });
+});
+
 describe('library index — zero fs reads once built (SPEC-0061 T1 AC)', () => {
   it('every RecallTools method serves from the store alone, with zero node:fs calls', async () => {
     const v = await buildRecallVault();
@@ -141,6 +240,7 @@ describe('library index — zero fs reads once built (SPEC-0061 T1 AC)', () => {
       await idx.readNode({ rel: v.adaRel });
       await idx.readSource({ dir: v.sourceDir });
       await idx.grep({ pattern: 'programmer' });
+      await idx.search!({ query: 'Lovelace' });
       expect(readFileSpy).not.toHaveBeenCalled();
       expect(readdirSpy).not.toHaveBeenCalled();
       readFileSpy.mockRestore();
