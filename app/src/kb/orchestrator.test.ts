@@ -9,6 +9,7 @@ import simpleGit from 'simple-git';
 import { createKb } from './vault';
 import { captureToInbox, readCapturedMeta } from './ingest';
 import { Orchestrator, archiveOne, readQueue, readStatus } from './orchestrator';
+import { Mutex } from './stageLock';
 import { makeCopilotDecider } from './copilotAgent';
 import { DEFAULT_COPILOT_MODEL } from './copilotModel';
 import { dateShard } from './ulid';
@@ -373,5 +374,60 @@ describe.skipIf(!gitAvailable)('Orchestration engine (SPEC-0014)', () => {
     const wtDir = path.join(vault, '.kb', 'cache', 'worktrees');
     const leftover = (await fs.readdir(wtDir).catch(() => [] as string[])).filter((d) => d.startsWith('archive-'));
     expect(leftover).toEqual([]);
+  });
+});
+
+describe.skipIf(!gitAvailable)('#506 — an idle sweep on an empty inbox skips the canonical lock entirely', () => {
+  let dir: string;
+  let vault: string;
+  beforeEach(async () => {
+    dir = await makeTempDir();
+    vault = path.join(dir, 'vault');
+    await createKb({ path: vault, initGitIfNeeded: true });
+  });
+  afterEach(async () => {
+    await rmTempDir(dir);
+  });
+
+  it('poke() on an empty inbox never takes the lock (no normalize, no afterDrain)', async () => {
+    const lock = new Mutex();
+    const runSpy = vi.spyOn(lock, 'run');
+    let afterDrainCalls = 0;
+    const orch = new Orchestrator(vault, undefined, lock, async () => {
+      afterDrainCalls += 1;
+    });
+    await orch.poke();
+    expect(runSpy).not.toHaveBeenCalled(); // was: lock.run('normalize') + lock.run('afterDrain') even when empty
+    expect(afterDrainCalls).toBe(0);
+    expect(await readQueue(vault)).toEqual([]);
+  });
+
+  it('poke() with a queued item still normalizes + drains + runs afterDrain, unchanged', async () => {
+    await captureToInbox(vault, 'in-app-panel', [{ kind: 'text', text: 'a' }]);
+    const lock = new Mutex();
+    const runSpy = vi.spyOn(lock, 'run');
+    let afterDrainCalls = 0;
+    const orch = new Orchestrator(vault, undefined, lock, async () => {
+      afterDrainCalls += 1;
+    });
+    await orch.poke();
+    const labels = runSpy.mock.calls.map((c) => c[1]);
+    expect(labels).toContain('normalize');
+    expect(afterDrainCalls).toBeGreaterThan(0);
+    expect(await readQueue(vault)).toEqual([]); // archived
+  });
+
+  it('a FOREIGN drop (no ULID, not yet normalized) still triggers normalize even though readQueue would be empty', async () => {
+    // A file dropped straight into inbox/ by another app — normalizeInbox must still see it and adopt
+    // it. The pre-check only skips when the raw dir is COMPLETELY empty, never on a non-canonical drop.
+    await fs.mkdir(path.join(vault, 'inbox'), { recursive: true });
+    await fs.writeFile(path.join(vault, 'inbox', 'dropped.txt'), 'loose file');
+    const lock = new Mutex();
+    const runSpy = vi.spyOn(lock, 'run');
+    const orch = new Orchestrator(vault, undefined, lock);
+    await orch.poke();
+    const labels = runSpy.mock.calls.map((c) => c[1]);
+    expect(labels).toContain('normalize'); // adopted, not skipped
+    expect(await readQueue(vault)).toEqual([]); // normalized + archived in the same pass
   });
 });

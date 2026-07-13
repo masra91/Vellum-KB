@@ -125,6 +125,37 @@ describe('createProjectionStore (SHELL-12 spine)', () => {
     expect(fk.isRunning()).toBe(false);
   });
 
+  // #505/#506: a HEAD-gated compute (graph projection, status queues) detects "nothing changed" and
+  // returns the SAME object it returned last time instead of redoing the walk — a true no-op tick
+  // should skip the restamp/save/push too, not just the walk.
+  it('compute returning the SAME reference as current data is a true no-op — no restamp, no save, no push', async () => {
+    const cached = { v: 1 };
+    const compute = vi.fn().mockResolvedValue(cached);
+    const save = vi.fn();
+    const onUpdate = vi.fn();
+    const clock = fakeClock();
+    const store = createProjectionStore<{ v: number }>({ compute, intervalMs: 1000, now: clock, save, onUpdate });
+    await store.refreshNow(); // first tick: real compute, sets builtAt t0
+    const first = store.current();
+    expect(first).toEqual({ data: cached, builtAt: 't0', stale: false });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+
+    await store.refreshNow(); // second tick: compute returns the SAME reference (unchanged HEAD)
+    expect(store.current()).toBe(first); // untouched — not even a new envelope object
+    expect(save).toHaveBeenCalledTimes(1); // no redundant disk write
+    expect(onUpdate).toHaveBeenCalledTimes(1); // no redundant push
+  });
+
+  it('compute returning a DIFFERENT reference still refreshes normally (every other store is unaffected)', async () => {
+    const compute = vi.fn().mockResolvedValueOnce({ v: 1 }).mockResolvedValueOnce({ v: 2 });
+    const clock = fakeClock();
+    const store = createProjectionStore<{ v: number }>({ compute, intervalMs: 1000, now: clock });
+    await store.refreshNow();
+    await store.refreshNow();
+    expect(store.current()).toEqual({ data: { v: 2 }, builtAt: 't1', stale: false });
+  });
+
   it('a bad persisted load never throws out of start() (best-effort seed)', () => {
     const store = createProjectionStore<string>({
       compute: vi.fn().mockResolvedValue('v'),

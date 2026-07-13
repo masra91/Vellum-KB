@@ -1,6 +1,6 @@
 // SPEC-0030 OBS-1/2/3 — the diagnostic dev-log subsystem (leveled, size-rotated JSONL,
 // redaction-aware, runId/itemId cross-link). Standalone unit; the pipeline wiring (OBS-4) follows.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { makeTempDir, rmTempDir, pathExists } from '../../test/tempVault';
@@ -205,5 +205,44 @@ describe('readRecentDevLogEntries (SPEC-0030 OBS-6 — recent errors for the Sta
 
   it('a missing log yields an empty list (never throws)', async () => {
     await expect(readRecentDevLogEntries(vault)).resolves.toEqual([]);
+  });
+
+  // #506: a 5MB active log read WHOLE on every 2.5s status tick was ~7GB/hour of read amplification
+  // at debug level. Prove the tail-budget read: a file bigger than the budget is NOT whole-file-read,
+  // yet the newest entries (the ones a status tick actually wants) still come back correctly.
+  it('reads only the TAIL of a file larger than the byte budget, not the whole file (#506)', async () => {
+    const logDir = vaultLogDir(vault);
+    await fs.mkdir(logDir, { recursive: true });
+    const file = path.join(logDir, 'pipeline.log');
+    // Old padding entries (well before the tail window) — must NOT surface, and must not be READ at all.
+    const oldLines = Array.from({ length: 500 }, (_, i) => JSON.stringify({ ts: NOW(), level: 'error', event: `old-${i}`, pad: 'x'.repeat(200) }));
+    const recentLines = [
+      JSON.stringify({ ts: NOW(), level: 'warn', event: 'recent-warn' }),
+      JSON.stringify({ ts: NOW(), level: 'error', event: 'recent-error' }),
+    ];
+    await fs.writeFile(file, [...oldLines, ...recentLines].join('\n') + '\n', 'utf8');
+    const { size } = await fs.stat(file);
+    const tailBytes = 2048;
+    expect(size).toBeGreaterThan(tailBytes); // sanity: the file really exceeds the budget
+
+    const spy = vi.spyOn(fs, 'readFile');
+    try {
+      const recent = await readRecentDevLogEntries(vault, { limit: 10, tailBytes });
+      expect(spy).not.toHaveBeenCalled(); // the large-file branch uses fs.open+read, never a whole-file readFile
+      const events = recent.map((e) => e.event);
+      expect(events).toContain('recent-warn');
+      expect(events).toContain('recent-error');
+      expect(events).not.toContain('old-0'); // the very first line — nowhere near the tail window
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a file smaller than the byte budget is still read in full (small-file branch)', async () => {
+    const log = createVaultDevLog(vault, { level: 'debug', now: NOW });
+    log.warn('small-file-warn');
+    await log.flush();
+    const recent = await readRecentDevLogEntries(vault, { tailBytes: 10 * 1024 * 1024 });
+    expect(recent.map((e) => e.event)).toContain('small-file-warn');
   });
 });
