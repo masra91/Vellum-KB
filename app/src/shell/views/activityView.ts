@@ -17,6 +17,7 @@ import { stageDisplayName } from '../stageLabels';
 import { glyphFor } from './activityGlyph';
 import { navIcon } from '../icons';
 import { setTopbarContext } from '../nav';
+import type { ViewHandle } from '../viewLifecycle';
 import type { ActivityFeedEntry, AuditEvent, Lineage, ActivityFilter, AuditActor, SourceSensitivity } from '../../kb/types';
 
 // View-local, ephemeral state (the shell mounts once + toggles visibility).
@@ -35,7 +36,7 @@ let errorMsg = '';
 export const SEARCH_DEBOUNCE_MS = 200;
 let searchDebounce: ReturnType<typeof setTimeout> | undefined;
 
-export function mountActivity(container: HTMLElement): void {
+export function mountActivity(container: HTMLElement): ViewHandle {
   entries = [];
   total = 0;
   truncated = false;
@@ -59,7 +60,15 @@ export function mountActivity(container: HTMLElement): void {
     </div>`;
   wire(container);
   renderControls(container);
-  void load(container);
+  // #510: re-read the feed (for the CURRENT filter) on every activation (STATE-8 AC1) — Activity had no
+  // live-update mechanism at all before this, so it froze on whatever it showed at first mount.
+  return {
+    show: () => void load(container),
+    hide: () => {
+      if (searchDebounce !== undefined) clearTimeout(searchDebounce);
+      searchDebounce = undefined;
+    },
+  };
 }
 
 /** (Re)load the feed for the current filter (AUDIT-5/7). buildActivityIndex on the main side keeps

@@ -13,8 +13,9 @@ import { mountJobs } from './jobsView';
 import { mountResearchers } from './researchersView';
 import { setTopbarContext } from '../nav';
 import { navIcon } from '../icons';
+import type { ViewHandle } from '../viewLifecycle';
 
-export async function mountAgentsHub(container: HTMLElement): Promise<void> {
+export function mountAgentsHub(container: HTMLElement): ViewHandle {
   // v3 (SPEC-0060 VUX-1): the hub frame on the warm-vellum language — a calm top head + headed sections.
   // The continuous LOOM signature lives on each live librarian/researcher card (honest, per-agent), not a
   // synthetic hub pulse (that would need a render-path status aggregate). IA-lock: the three sections
@@ -56,16 +57,34 @@ export async function mountAgentsHub(container: HTMLElement): Promise<void> {
   // catch is the catastrophic backstop: if a sub-view ever threw PAST its own guard it'd otherwise leave
   // a stuck "Loading…" — instead we paint a calm per-section fallback (DL-2 hardening), isolated to that
   // section so the others (and the hub framing) still render.
-  const mountSection = (name: string, mount: (c: HTMLElement) => Promise<void>): Promise<void> =>
-    mount(sec(name)).catch(() => {
+  const mountSection = (name: string, mount: (c: HTMLElement) => ViewHandle): ViewHandle | null => {
+    try {
+      return mount(sec(name));
+    } catch {
       sec(name).innerHTML = `<p class="agents-section-error viz-body">Couldn’t load this section — reopen Agents to retry.</p>`;
-    });
+      return null;
+    }
+  };
+  const librarians = mountSection('librarians', mountAgents);
+  const schedules = mountSection('schedules', mountJobs);
+  const researchers = mountSection('researchers', mountResearchers);
   wireTopctxAddResearcher(container);
-  await Promise.all([
-    mountSection('librarians', mountAgents),
-    mountSection('schedules', mountJobs),
-    mountSection('researchers', mountResearchers),
-  ]);
+  // #510: the hub's own show()/hide() fan out to whichever sub-sections actually mounted (a failed
+  // section's null handle is simply skipped) — so the shell driving ONE Agents view id correctly starts/
+  // stops all three sections' live behavior together, including agentsView's poll (fixing the wrong-
+  // element visibility bug: hide() now genuinely stops it instead of a self-check that never engaged).
+  return {
+    show: () => {
+      librarians?.show?.();
+      schedules?.show?.();
+      researchers?.show?.();
+    },
+    hide: () => {
+      librarians?.hide?.();
+      schedules?.hide?.();
+      researchers?.hide?.();
+    },
+  };
 }
 
 /**

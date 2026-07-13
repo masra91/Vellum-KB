@@ -884,6 +884,11 @@ export interface KbApi {
   // SPEC-0058 Today: the single home read — {status, data, builtAt, stale} from the maintained Today
   // projection (warming|ready; the view switches on status, no live scan). The live clock is view-rendered.
   getTodayProjection(): Promise<TodayProjectionView>;
+  // SPEC-0058 STATE-8 (#510): subscribe to the main→renderer projection-changed push (`store` names one
+  // of the four maintained stores — 'status'|'review'|'graph'|'today'). Unlike every other member here,
+  // this is a SUBSCRIPTION, not a request/response call — it returns an unsubscribe function so a view's
+  // `hide()` can stop listening (no leaked IPC listener across a view switch).
+  onProjectionChanged(cb: (event: { store: string; builtAt: string }) => void): () => void;
 }
 
 /** The curated Activity feed + its window-cap signal. Consumers key off `total`/`truncated`, NOT

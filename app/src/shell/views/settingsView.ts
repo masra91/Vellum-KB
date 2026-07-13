@@ -13,6 +13,7 @@ import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import { mountAboutPanel } from '../aboutPanel';
 import { mountWatchedFolders } from './watchedFolders';
 import { readStoredTheme, setTheme, type Theme } from '../theme';
+import type { ViewHandle } from '../viewLifecycle';
 import type { InstanceSettings, QuiesceStatus } from '../../kb/types';
 // SPEC-0048 SCALE Settings (Scale card). Imported from the PURE `scaleConstants` (no node import) so
 // the renderer bundle never pulls the node-only `instanceConfig` (the renderer→node-builtin boundary).
@@ -68,9 +69,18 @@ const STAGE_LABELS: Record<ScaleStage, string> = {
   connect: 'Connect',
 };
 
-export async function mountSettings(container: HTMLElement): Promise<void> {
+export function mountSettings(container: HTMLElement): ViewHandle {
   paintSkeleton(container, `<h1 class="settings-title viz-voice">Settings</h1>`, 'cards');
+  // #510: re-read on every activation (STATE-8 AC1 — Settings was one of the 8 frozen views). `render()`
+  // does one full innerHTML replace once its data is ready (no interim skeleton flash on a switch-back,
+  // matching Today/Explore's pattern) — only mount()'s own initial paint above shows the skeleton.
+  return {
+    show: () => void render(container),
+    hide: () => stopQuiescePoll(), // the shutdown-prep poll (if active) shouldn't tick on a hidden view
+  };
+}
 
+async function render(container: HTMLElement): Promise<void> {
   // Settings must never error the shell. Any IPC failure (incl. a #145 hang — withTimeout bounds
   // every await below) degrades to a friendly, retryable message.
   try {
@@ -252,7 +262,7 @@ export async function mountSettings(container: HTMLElement): Promise<void> {
     if (watchedEl) void mountWatchedFolders(watchedEl);
   } catch {
     // #145: failed/timed-out load → a retryable error, never an infinite spinner.
-    renderLoadError(container, '<h1 class="settings-title viz-voice">Settings</h1>', () => void mountSettings(container));
+    renderLoadError(container, '<h1 class="settings-title viz-voice">Settings</h1>', () => void render(container));
   }
 }
 

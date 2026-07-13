@@ -11,6 +11,15 @@ import { mountReviews } from './reviewsView';
 import { LOAD_TIMEOUT_MS } from '../loadGuard';
 import type { KbApi, ReviewSummary } from '../../kb/types';
 
+/** #510: mountReviews() now only builds the skeleton + returns lifecycle hooks; show() (which the shell
+ *  calls right after mount) is what actually loads + paints. `advanceTimersByTimeAsync(0)` flushes the
+ *  pending microtask chain under this file's fake timers (no real timer needs to fire for a resolving
+ *  mock — it's the shared idiom the file already uses for `vi.advanceTimersByTimeAsync(POLL_MS)`). */
+async function mount(root: HTMLElement): Promise<void> {
+  mountReviews(root).show?.();
+  await vi.advanceTimersByTimeAsync(0);
+}
+
 const POLL_MS = 5000; // keep in sync with REVIEW_POLL_MS in reviewsView.ts
 
 const CLAIM_REVIEW: ReviewSummary = {
@@ -79,7 +88,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
 
   it('renders open reviews with Confirm/Reject (REVIEW-10)', async () => {
     setApi(vi.fn(async () => [CLAIM_REVIEW]));
-    await mountReviews(root);
+    await mount(root);
     expect(root.querySelector('.review-q')?.textContent).toContain('Ada Lovelace');
     expect(root.querySelector('.review-confirm')).toBeTruthy();
     expect(root.querySelector('.review-reject')).toBeTruthy();
@@ -88,7 +97,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
 
   it('UX v2 (SPEC-0058): v2 material surface, Spectral head, no emoji — items present (ember spine is CSS)', async () => {
     setApi(vi.fn(async () => [CLAIM_REVIEW]));
-    await mountReviews(root);
+    await mount(root);
     // lifted off the legacy `.card` onto the scoped v2 surface; head is the Spectral voice, no 🔍
     expect(root.querySelector('.reviews-v2.viz-surface')).toBeTruthy();
     expect(root.querySelector('.reviews-title.viz-voice')?.textContent).toBe('Reviews');
@@ -100,7 +109,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
 
   it('UX v2: the empty state is the calm v2 .viz-empty (no 🎉, no ember)', async () => {
     setApi(vi.fn(async () => []));
-    await mountReviews(root);
+    await mount(root);
     expect(root.querySelector('.viz-empty')).toBeTruthy();
     expect(root.textContent).toContain('Nothing needs you');
     expect(root.textContent).not.toContain('🎉');
@@ -118,7 +127,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
       createdAt: '2026-06-02T12:00:00.000Z',
     };
     setApi(vi.fn(async () => [leaky]));
-    await mountReviews(root);
+    await mount(root);
     // The raw id must NEVER reach the Principal — anywhere in the rendered surface.
     expect(root.textContent).not.toContain(ULID);
     // …replaced with a neutral word (not deleted), so the sentence still reads.
@@ -128,7 +137,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
 
   it('WS2 PR3: composes the shared Button + EditableField primitives (DESIGN-SYS §8/§9)', async () => {
     setApi(vi.fn(async () => [CLAIM_REVIEW]));
-    await mountReviews(root);
+    await mount(root);
     // Button — Confirm is the emphasized action (.viz-btn--primary); Reject is the neutral .viz-btn.
     const confirm = root.querySelector('.review-confirm');
     expect(confirm?.classList.contains('viz-btn')).toBe(true);
@@ -148,11 +157,10 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
   it('#145: a hung listReviews times out → retryable error (no infinite spinner), and Retry re-loads', async () => {
     const list = vi.fn<KbApi['listReviews']>().mockReturnValue(new Promise<ReviewSummary[]>(() => {})); // hangs
     setApi(list);
-    const mounted = mountReviews(root);
+    mountReviews(root).show?.();
     expect(root.querySelector('.rev-skeleton')).toBeTruthy(); // calm warming skeleton initially (VUX-13)
 
     await vi.advanceTimersByTimeAsync(LOAD_TIMEOUT_MS); // trip the timeout
-    await mounted;
     expect(root.querySelector('.rev-skeleton')).toBeFalsy(); // no infinite skeleton
     expect(root.querySelector('.load-error')).toBeTruthy();
     expect(root.querySelector('.load-retry')).toBeTruthy();
@@ -166,7 +174,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
 
   it('renders a CONNECT-15 ambiguous-LINK review (empty subject) — confirm/reject, no "About" line (#110)', async () => {
     setApi(vi.fn(async () => [LINK_REVIEW]));
-    await mountReviews(root);
+    await mount(root);
     expect(root.querySelector('.review-q')?.textContent).toContain('Analytical Engine');
     expect(root.textContent).toContain('matches multiple entities'); // detail rendered verbatim
     expect(root.querySelector('.review-confirm')).toBeTruthy();
@@ -181,7 +189,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
       .mockResolvedValueOnce([]) // mounted while the queue was empty
       .mockResolvedValue([LINK_REVIEW]); // then a link review is raised
     setApi(list);
-    await mountReviews(root);
+    await mount(root);
     expect(root.textContent).toContain('Nothing needs you'); // initial empty state (the frozen bug)
 
     await vi.advanceTimersByTimeAsync(POLL_MS); // the visibility-aware poll fires
@@ -191,7 +199,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
 
   it('does not repoll-repaint when the open set is unchanged (no flicker)', async () => {
     setApi(vi.fn(async () => [CLAIM_REVIEW]));
-    await mountReviews(root);
+    await mount(root);
     const firstList = root.querySelector('.review-list');
     await vi.advanceTimersByTimeAsync(POLL_MS);
     expect(root.querySelector('.review-list')).toBe(firstList); // same node — not re-innerHTML'd
@@ -200,7 +208,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
   it('skips the poll while the view is hidden (another view is shown)', async () => {
     const list = vi.fn<KbApi['listReviews']>().mockResolvedValueOnce([]).mockResolvedValue([LINK_REVIEW]);
     setApi(list);
-    await mountReviews(root);
+    await mount(root);
     root.classList.add('hidden'); // shell un-shows this view
     await vi.advanceTimersByTimeAsync(POLL_MS);
     expect(list).toHaveBeenCalledTimes(1); // no fetch while hidden
@@ -210,7 +218,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
   it('never clobbers a note being written: defers the repaint while a note is dirty', async () => {
     const list = vi.fn<KbApi['listReviews']>().mockResolvedValueOnce([CLAIM_REVIEW]).mockResolvedValue([CLAIM_REVIEW, LINK_REVIEW]);
     setApi(list);
-    await mountReviews(root);
+    await mount(root);
     const note = root.querySelector<HTMLTextAreaElement>('.review-note')!;
     note.value = 'half-written correction'; // dirty
     await vi.advanceTimersByTimeAsync(POLL_MS);
@@ -226,7 +234,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
     const list = vi.fn<KbApi['listReviews']>().mockResolvedValueOnce([CLAIM_REVIEW]).mockResolvedValue([]);
     const answerReview = vi.fn(async () => ({ ok: true, message: 'answered' }));
     setApi(list, answerReview);
-    await mountReviews(root);
+    await mount(root);
     root.querySelector<HTMLButtonElement>('.review-confirm')!.click();
     await vi.advanceTimersByTimeAsync(340); // flush the answer + forced refresh + the exit-motion settle (#520 §10)
     expect(answerReview).toHaveBeenCalledWith({ id: 'R1', verdict: 'confirm', note: undefined });
@@ -236,7 +244,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
   it('stops polling once the view is detached from the document', async () => {
     const list = vi.fn(async () => [CLAIM_REVIEW]);
     setApi(list);
-    await mountReviews(root);
+    await mount(root);
     const callsAfterMount = list.mock.calls.length;
     root.remove(); // shell tears the view out
     await vi.advanceTimersByTimeAsync(POLL_MS * 2);
@@ -247,7 +255,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
   describe('REVIEW-16 candidate rows', () => {
     it('renders one row per candidate, gloss-first, so the Principal can tell them apart', async () => {
       setApi(vi.fn(async () => [DISAMBIG_REVIEW]));
-      await mountReviews(root);
+      await mount(root);
       const rows = root.querySelectorAll('.review-candidate');
       expect(rows).toHaveLength(2);
       const glosses = Array.from(root.querySelectorAll('.review-candidate-gloss')).map((g) => g.textContent);
@@ -259,7 +267,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
     it('"Open in Obsidian" opens that candidate\'s source via openCitation (reuses the EXPLORE-4 IPC)', async () => {
       const openCitation = vi.fn(async () => ({ ok: true as const }));
       setApi(vi.fn(async () => [DISAMBIG_REVIEW]), undefined, openCitation);
-      await mountReviews(root);
+      await mount(root);
       const links = root.querySelectorAll<HTMLButtonElement>('.review-candidate-open');
       expect(links).toHaveLength(2);
       links[1].click(); // open the second candidate's source
@@ -270,7 +278,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
       // The live bug: the link showed a generic "Open in Obsidian" and the Principal saw a raw ULID / dead
       // dir. Fix: the link TEXT is the human source title, opening source.md.
       setApi(vi.fn(async () => [DISAMBIG_REVIEW]));
-      await mountReviews(root);
+      await mount(root);
       const links = Array.from(root.querySelectorAll<HTMLButtonElement>('.review-candidate-open'));
       expect(links.map((l) => l.textContent?.trim())).toEqual(['Fishing trip notes ↗', "Dave's wedding guest list ↗"]);
       expect(root.textContent).not.toContain('Open in Obsidian'); // generic placeholder gone from visible text
@@ -286,7 +294,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
         ],
       };
       setApi(vi.fn(async () => [review]));
-      await mountReviews(root);
+      await mount(root);
       expect(root.querySelectorAll('.review-candidate')).toHaveLength(2);
       expect(root.querySelectorAll('.review-candidate-open')).toHaveLength(1); // only the one with a source
     });
@@ -298,7 +306,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
         candidates: [{ name: xss, gloss: xss, title: xss, sourceRel: '"><script>window.__pwned=1</script>' }],
       };
       setApi(vi.fn(async () => [review]));
-      await mountReviews(root);
+      await mount(root);
       // The payload renders as inert text, not DOM: no injected <img>/<script>, and the row is intact.
       expect(root.querySelector('.review-candidate-gloss')?.textContent).toBe(xss);
       expect(root.querySelector('.review-candidate-gloss img')).toBeNull();
@@ -314,7 +322,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
 
     it('an ordinary review (no candidates) renders no candidate block — unchanged behaviour', async () => {
       setApi(vi.fn(async () => [CLAIM_REVIEW]));
-      await mountReviews(root);
+      await mount(root);
       expect(root.querySelector('.review-candidates')).toBeNull();
     });
   });
@@ -341,7 +349,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
 
     it('renders a legacy candidate with title:null — the list PAINTS (fails-before: esc(c.title) threw in .map)', async () => {
       setApi(vi.fn(async () => [legacyTitleNull]));
-      await mountReviews(root);
+      await mount(root);
       // The regression was "Loading… forever" — assert the list actually painted.
       expect(root.querySelector('.review-list')).not.toBeNull();
       expect(root.querySelector('.review-q')?.textContent).toContain('Jordan');
@@ -359,7 +367,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
         candidates: [{ gloss: 'only a gloss', sourceRel: 'sources/2026/06/02/01M/source.md' }] as unknown as ReviewSummary['candidates'],
       } as ReviewSummary;
       setApi(vi.fn(async () => [review]));
-      await mountReviews(root);
+      await mount(root);
       const link = root.querySelector<HTMLButtonElement>('.review-candidate-open');
       expect(link?.textContent?.trim()).toBe('Open in Obsidian ↗');
       expect(root.textContent).not.toContain('undefined');
@@ -375,7 +383,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
         ] as unknown as ReviewSummary['candidates'],
       } as ReviewSummary;
       setApi(vi.fn(async () => [review]));
-      await mountReviews(root);
+      await mount(root);
       expect(root.querySelectorAll('.review-candidate')).toHaveLength(2); // good row + a safe fallback row
       expect(root.textContent).toContain('A real title'); // the good candidate survived
       expect(root.querySelector('.review-list')).not.toBeNull();
@@ -383,7 +391,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
 
     it('ENG-16: one malformed REVIEW degrades its own row — sibling reviews still render + stay actionable', async () => {
       setApi(vi.fn(async () => [CLAIM_REVIEW, null as unknown as ReviewSummary, DISAMBIG_REVIEW]));
-      await mountReviews(root);
+      await mount(root);
       expect(root.querySelectorAll('.review')).toHaveLength(3); // two good + one fallback
       expect(root.textContent).toContain('Ada Lovelace'); // CLAIM_REVIEW survived
       expect(root.textContent).toContain("Dave's wedding"); // DISAMBIG_REVIEW survived
@@ -409,7 +417,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
     it('marks the row leaving IMMEDIATELY on click — before the answer IPC resolves (fails-before: old code awaited it)', async () => {
       const { fn: answerReview, resolve } = deferredAnswer();
       setApi(vi.fn(async () => [CLAIM_REVIEW]), answerReview);
-      await mountReviews(root);
+      await mount(root);
       expect(root.querySelector('.review[data-id="R1"]')).not.toBeNull();
 
       root.querySelector<HTMLButtonElement>('.review-confirm')!.click();
@@ -435,7 +443,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
       // poll still returns it. The suppression must keep it removed until the backend catches up.
       const { fn: answerReview, resolve } = deferredAnswer();
       setApi(vi.fn(async () => [CLAIM_REVIEW]), answerReview); // projection still has it
-      await mountReviews(root);
+      await mount(root);
       root.querySelector<HTMLButtonElement>('.review-confirm')!.click();
       expect(root.querySelector('.review[data-id="R1"]')?.classList.contains('is-leaving')).toBe(true);
 
@@ -449,7 +457,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
     it('a rejected (ok:false) answer restores the item with a retryable error affordance', async () => {
       const answerReview = vi.fn(async () => ({ ok: false, message: 'canonical lock busy' }));
       setApi(vi.fn(async () => [CLAIM_REVIEW]), answerReview); // still open on the backend (write failed)
-      await mountReviews(root);
+      await mount(root);
       root.querySelector<HTMLButtonElement>('.review-confirm')!.click();
       expect(root.querySelector('.review[data-id="R1"]')?.classList.contains('is-leaving')).toBe(true); // optimistically leaving
 
@@ -465,7 +473,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
     it('a THROWN answer IPC also restores the item (honest rollback, not a silent drop)', async () => {
       const answerReview = vi.fn(async () => { throw new Error('ipc channel died'); });
       setApi(vi.fn(async () => [CLAIM_REVIEW]), answerReview);
-      await mountReviews(root);
+      await mount(root);
       root.querySelector<HTMLButtonElement>('.review-confirm')!.click();
       await vi.advanceTimersByTimeAsync(0);
       expect(root.querySelector('.review[data-id="R1"]')).not.toBeNull();
@@ -478,7 +486,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
         .mockResolvedValueOnce({ ok: false, message: 'busy' })
         .mockResolvedValueOnce({ ok: true, message: 'answered' });
       setApi(vi.fn(async () => [CLAIM_REVIEW]), answerReview);
-      await mountReviews(root);
+      await mount(root);
       root.querySelector<HTMLButtonElement>('.review-confirm')!.click();
       await vi.advanceTimersByTimeAsync(0);
       expect(root.querySelector('.review-error')).not.toBeNull(); // failed → banner
@@ -492,7 +500,7 @@ describe('Reviews view (SPEC-0018) + #110 list/badge reconciliation', () => {
 
     it('answering one of several items removes only that row — the others (and their notes) are untouched', async () => {
       setApi(vi.fn(async () => [CLAIM_REVIEW, LINK_REVIEW]), vi.fn(async () => ({ ok: true, message: 'answered' })));
-      await mountReviews(root);
+      await mount(root);
       // Type a note on the OTHER item — answering R1 must not clobber it.
       const linkNote = root.querySelector<HTMLTextAreaElement>('.review[data-id="L1"] .review-note')!;
       linkNote.value = 'half-written note on the link review';
@@ -528,7 +536,7 @@ describe('Reviews warming skeleton (SPEC-0060 VUX-13 — no 2s blank / wrong-emp
   it('shows the skeleton — NOT the "Nothing needs you" empty state — while the projection is warming', async () => {
     // Warming: the envelope is null (projection not yet built). The list mock is irrelevant here.
     setApi(vi.fn(async () => []), undefined, undefined, vi.fn(async () => null));
-    await mountReviews(root);
+    await mount(root);
     await vi.advanceTimersByTimeAsync(0);
     expect(root.querySelector('.rev-skeleton')).toBeTruthy(); // calm warming affordance
     // Fails-before: the old view collapsed warming→[] and painted the empty state. It must NOT now.
@@ -543,7 +551,7 @@ describe('Reviews warming skeleton (SPEC-0060 VUX-13 — no 2s blank / wrong-emp
       .mockResolvedValueOnce(null)
       .mockResolvedValue({ data: [CLAIM_REVIEW], builtAt: '2026-06-02T12:00:00.000Z', stale: false });
     setApi(vi.fn(async () => [CLAIM_REVIEW]), undefined, undefined, proj);
-    await mountReviews(root);
+    await mount(root);
     await vi.advanceTimersByTimeAsync(0);
     expect(root.querySelector('.rev-skeleton')).toBeTruthy(); // warming first
 
@@ -556,7 +564,7 @@ describe('Reviews warming skeleton (SPEC-0060 VUX-13 — no 2s blank / wrong-emp
     // Ready + zero open reviews → the queue is honestly quiet; the skeleton must give way to the
     // "Nothing needs you" empty state. This is the distinction the old flattened read could not make.
     setApi(vi.fn(async () => []), undefined, undefined, vi.fn(async () => ({ data: [], builtAt: '2026-06-02T12:00:00.000Z', stale: false })));
-    await mountReviews(root);
+    await mount(root);
     await vi.advanceTimersByTimeAsync(0);
     expect(root.querySelector('.rev-skeleton')).toBeFalsy();
     expect(root.textContent).toContain('Nothing needs you right now');

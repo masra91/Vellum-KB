@@ -61,7 +61,8 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
       setJobConfig: vi.fn(),
       runJobNow: vi.fn(),
     });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
 
     expect(root.querySelector('.job-sub')?.textContent).toContain('Recurring'); // section sub-note (hub owns the "Schedules" title — WS-E)
     expect(root.querySelectorAll('.job')).toHaveLength(2);
@@ -86,7 +87,8 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
       setJobConfig: vi.fn(),
       runJobNow: vi.fn(),
     });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
 
     const text = li(root, 'reflect').querySelector('.job-lastrun')?.textContent ?? '';
     expect(text).not.toContain('undefined');
@@ -96,14 +98,16 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
 
   it('shows a friendly empty state when there are no jobs (PANEL-9)', async () => {
     setApi({ listJobs: vi.fn(async () => []), setJobConfig: vi.fn(), runJobNow: vi.fn() });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
     expect(root.textContent).toContain('open a library');
   });
 
   it('enabling a job is risky: confirms first, then persists on confirm (PANEL-7)', async () => {
     const setJobConfig = vi.fn(async () => [job({ id: 'reflect', enabled: true, registered: true })]);
     setApi({ listJobs: vi.fn(async () => [job({ id: 'reflect' })]), setJobConfig, runJobNow: vi.fn() });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
 
     const row = li(root, 'reflect');
     const arm = row.querySelector<HTMLButtonElement>('.job-enabled')!; // arm switch (role=switch), not a checkbox
@@ -121,7 +125,8 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
 
   it('PANEL-11 gate: a built-in job is DISABLE-ONLY — it has an enable/disable switch but NO delete/retire affordance', async () => {
     setApi({ listJobs: vi.fn(async () => [job({ id: 'reflect' })]), setJobConfig: vi.fn(), runJobNow: vi.fn() });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
     const row = li(root, 'reflect');
     // Built-in entities (the autonomous-job catalog) are disable-forever, not deletable — the lifecycle-delete
     // gate (user-added → removable; built-in → disable-only) means no remove/retire/delete control here.
@@ -132,7 +137,8 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
   it('cancelling a risky change reverts the control and does not persist (PANEL-7)', async () => {
     const setJobConfig = vi.fn();
     setApi({ listJobs: vi.fn(async () => [job({ id: 'reflect' })]), setJobConfig, runJobNow: vi.fn() });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
 
     const row = li(root, 'reflect');
     const arm = row.querySelector<HTMLButtonElement>('.job-enabled')!;
@@ -149,7 +155,8 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
   it('changing the schedule is not risky — persists directly (PANEL-2)', async () => {
     const setJobConfig = vi.fn(async () => [job({ id: 'reflect', schedule: 'daily' })]);
     setApi({ listJobs: vi.fn(async () => [job({ id: 'reflect' })]), setJobConfig, runJobNow: vi.fn() });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
 
     const daily = li(root, 'reflect').querySelector<HTMLButtonElement>('.job-schedule .viz-seg-opt[data-value="daily"]')!;
     daily.click();
@@ -160,7 +167,8 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
   it('moving to Autonomous posture is risky — confirms first (PANEL-7)', async () => {
     const setJobConfig = vi.fn(async () => [job({ id: 'reflect', posture: 'autonomous' })]);
     setApi({ listJobs: vi.fn(async () => [job({ id: 'reflect' })]), setJobConfig, runJobNow: vi.fn() });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
 
     const row = li(root, 'reflect');
     const auto = row.querySelector<HTMLButtonElement>('.job-posture .viz-seg-opt[data-value="autonomous"]')!;
@@ -176,7 +184,8 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
   it('Run now confirms, calls IPC, and reports the outcome (PANEL-2/JOBS-11)', async () => {
     const runJobNow = vi.fn(async () => ({ ran: true as const, outcome: 'advanced' as const, applied: 2, deferred: 1 }));
     setApi({ listJobs: vi.fn(async () => [job({ id: 'reflect' })]), setJobConfig: vi.fn(), runJobNow });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
 
     const row = li(root, 'reflect');
     row.querySelector<HTMLButtonElement>('.job-run')!.click();
@@ -194,7 +203,8 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
     let resolveRun!: (v: RunOk) => void;
     const runJobNow = vi.fn((): Promise<RunOk> => new Promise<RunOk>((res) => (resolveRun = res)));
     setApi({ listJobs: vi.fn(async () => [job({ id: 'reflect' })]), setJobConfig: vi.fn(), runJobNow });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
     li(root, 'reflect').querySelector<HTMLButtonElement>('.job-run')!.click();
     li(root, 'reflect').querySelector<HTMLButtonElement>('.job-confirm-go')!.click();
     await tick();
@@ -218,7 +228,8 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
       setJobConfig: vi.fn(),
       runJobNow: vi.fn(),
     });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
     expect(root.querySelector('.load-error')?.textContent).toContain('Couldn’t load'); // retryable fallback (#145)
     expect(root.querySelector('.load-retry')).toBeTruthy();
   });
@@ -238,7 +249,8 @@ describe('Jobs view · WS2 — composes the shared design-system primitives (no 
 
   it('uses NO native <select> anywhere — schedule + autonomy are SegmentedControls (the generic-look fix)', async () => {
     setApi(oneJob());
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
     expect(root.querySelectorAll('select')).toHaveLength(0);
     // schedule + autonomy are .viz-seg radiogroups of .viz-seg-opt radios
     const groups = Array.from(root.querySelectorAll('.viz-seg[role="radiogroup"]'));
@@ -255,7 +267,8 @@ describe('Jobs view · WS2 — composes the shared design-system primitives (no 
 
   it('enable is a role=switch arm (not a raw checkbox) reflecting the enabled state', async () => {
     setApi({ ...oneJob(), listJobs: vi.fn(async () => [job({ id: 'reflect', enabled: true })]) });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
     const arm = li(root, 'reflect').querySelector('.job-enabled')!;
     expect(arm.tagName).toBe('BUTTON');
     expect(arm.getAttribute('role')).toBe('switch');
@@ -265,7 +278,8 @@ describe('Jobs view · WS2 — composes the shared design-system primitives (no 
 
   it('Run now is a .viz-btn; the confirm composes .viz-confirm with a .viz-btn--danger confirm action', async () => {
     setApi(oneJob());
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
     const row = li(root, 'reflect');
     expect(row.querySelector('.job-run')?.classList.contains('viz-btn')).toBe(true);
     expect(row.querySelector('.job-confirm')?.classList.contains('viz-confirm')).toBe(true);
@@ -280,7 +294,8 @@ describe('Jobs view · WS2 — composes the shared design-system primitives (no 
     let resolveRun!: (v: RunOk) => void;
     const runJobNow = vi.fn((): Promise<RunOk> => new Promise<RunOk>((res) => (resolveRun = res)));
     setApi({ ...oneJob(), runJobNow });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
     li(root, 'reflect').querySelector<HTMLButtonElement>('.job-run')!.click();
     li(root, 'reflect').querySelector<HTMLButtonElement>('.job-confirm-go')!.click();
     await tick();
@@ -310,7 +325,8 @@ describe('Jobs view · #205 load resilience (no infinite spinner when data arriv
       setJobConfig: vi.fn(),
       runJobNow: vi.fn(),
     });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
     expect(root.textContent).not.toContain('Loading…'); // the transition completed
     expect(root.querySelectorAll('.job')).toHaveLength(2);
   });
@@ -326,7 +342,8 @@ describe('Jobs view · #205 load resilience (no infinite spinner when data arriv
       lastRun: { ts: '2026-06-02T07:00:00.000Z', inspected: 5 as unknown as string, applied: 1, deferred: 0 },
     });
     setApi({ listJobs: vi.fn(async () => [bad]), setJobConfig: vi.fn(), runJobNow: vi.fn() });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
     expect(root.textContent).not.toContain('Loading…');
     expect(li(root, 'example').querySelector('.job-lastrun')?.textContent).toContain('inspected 5');
   });
@@ -342,7 +359,8 @@ describe('Jobs view · #205 load resilience (no infinite spinner when data arriv
     });
     const listJobs = vi.fn<KbApi['listJobs']>().mockResolvedValueOnce([exploding]);
     setApi({ listJobs, setJobConfig: vi.fn(), runJobNow: vi.fn() });
-    await mountJobs(root);
+    mountJobs(root).show?.();
+    await tick();
 
     expect(root.textContent).not.toContain('Loading…'); // no infinite spinner
     expect(root.querySelector('.load-error')?.textContent).toContain('Couldn’t load');
@@ -371,12 +389,11 @@ describe('Jobs view · #145 load resilience (no infinite spinner on a hung IPC)'
   it('times out a hung listJobs → retryable error, and Retry re-loads successfully', async () => {
     const listJobs = vi.fn<KbApi['listJobs']>().mockReturnValueOnce(new Promise<JobView[]>(() => {})); // hangs
     setApi({ listJobs, setJobConfig: vi.fn(), runJobNow: vi.fn() });
-    const mounted = mountJobs(root); // blocked on the hung load
+    mountJobs(root).show?.(); // blocked on the hung load
     expect(root.querySelector('[aria-busy="true"]')).not.toBeNull(); // skeleton initially (#520)
     expect(root.textContent).not.toContain('Loading…'); // never bare "Loading…" (#520 §8)
 
     await vi.advanceTimersByTimeAsync(LOAD_TIMEOUT_MS); // trip the timeout
-    await mounted;
     expect(root.textContent).not.toContain('Loading…'); // no infinite spinner
     expect(root.querySelector('.load-error')).toBeTruthy();
 

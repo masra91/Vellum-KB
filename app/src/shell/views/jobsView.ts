@@ -14,6 +14,7 @@
 import { esc } from '../html';
 import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import { schedulePresetLabel, SCHEDULE_OPTIONS, isRiskyJobChange } from '../../kb/jobsPanel';
+import type { ViewHandle } from '../viewLifecycle';
 import type { JobView, JobConfigPatch } from '../../kb/types';
 
 const POSTURE_OPTIONS = ['guarded', 'autonomous'] as const;
@@ -23,9 +24,9 @@ const POSTURE_LABEL: Record<string, string> = { guarded: 'Guarded', autonomous: 
 // the hub owns the "Schedules" group header/naming, so this section drops its own page-title h1.
 const HEADER = `<p class="job-sub viz-body">Recurring background tasks that keep your library healthy. Changes apply without a restart.</p>`;
 
-export async function mountJobs(container: HTMLElement): Promise<void> {
+export function mountJobs(container: HTMLElement): ViewHandle {
   paintSkeleton(container, HEADER, 'cards');
-  await render(container);
+  return { show: () => void render(container) }; // #510: re-read on every activation (no timers here)
 }
 
 async function render(container: HTMLElement): Promise<void> {

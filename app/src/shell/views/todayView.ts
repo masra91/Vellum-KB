@@ -12,6 +12,8 @@ import { esc, emptyState } from '../html';
 import { navIcon } from '../icons';
 import { navigateTo } from '../nav';
 import { renderLoadError, renderWarming, reportLoadFailure, paintSkeleton } from '../loadGuard';
+import { subscribeProjectionChanged } from '../projectionPush';
+import type { ViewHandle } from '../viewLifecycle';
 import type { TodayActivityItem, TodayDecision, TodayHealthRow, TodayProjection, TodayProjectionView, TodayStat, TodayStation } from '../../kb/types';
 
 const HEADER = `<h1 class="today-title viz-signage">Today</h1>`;
@@ -42,10 +44,25 @@ const DECISION_ICON: Record<TodayDecision['kind'], string> = { contradiction: 's
  *  hue carried by `data-status` in CSS (brass / oxide) — the glyph keeps the signal non-colour-alone (#184). */
 const HEALTH_ICON: Record<TodayHealthRow['status'], string> = { ok: 'circle-check', warn: 'alert-triangle', bad: 'alert-triangle' };
 
-export async function mountToday(container: HTMLElement): Promise<void> {
+export function mountToday(container: HTMLElement): ViewHandle {
   const state: TodayState = {};
   paintSkeleton(container, HEADER, 'prose');
-  await load(container, state);
+  let unsubscribe: (() => void) | null = null;
+  return {
+    // #510: show() re-reads the maintained projection every time Today becomes visible (first activation
+    // AND every switch-back — STATE-8 AC1, kills the freeze-after-first-paint bug) and subscribes to the
+    // 'today' push topic so a canonical advance repaints within ~1s while Today stays visible (AC2), not
+    // just on the next switch-away-and-back.
+    show: () => {
+      void load(container, state);
+      unsubscribe ??= subscribeProjectionChanged('today', () => void load(container, state));
+    },
+    hide: () => {
+      clearTimers(state);
+      unsubscribe?.();
+      unsubscribe = null;
+    },
+  };
 }
 
 /** Read the maintained Today projection (ONE read, no live scan — STATE-1) and paint. `status` is

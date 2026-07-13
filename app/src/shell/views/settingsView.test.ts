@@ -48,14 +48,16 @@ describe('Settings · Autonomy default (SPEC-0027 PANEL-5/7)', () => {
 
   it('renders the current Instance default posture', async () => {
     setApi('guarded');
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(checked(root, 'autonomy-default')).toBe('guarded');
   });
 
   it('UX v2 (SPEC-0058): scoped v2 material surface, Spectral head, no ⚙️ emoji', async () => {
     setApi('guarded');
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(root.querySelector('.settings-v2.viz-surface')).toBeTruthy(); // scoped material marker
     expect(root.querySelector('.settings-title.viz-voice')?.textContent).toBe('Settings'); // Spectral head, de-emoji'd
@@ -72,7 +74,8 @@ describe('Settings · Autonomy default (SPEC-0027 PANEL-5/7)', () => {
     });
     document.documentElement.removeAttribute('data-theme');
     setApi('guarded');
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     // The Appearance segmented control renders with Light selected by default.
     const group = root.querySelector('#theme-select')!;
@@ -91,7 +94,8 @@ describe('Settings · Autonomy default (SPEC-0027 PANEL-5/7)', () => {
 
   it('→ Autonomous confirms before persisting (PANEL-7)', async () => {
     const { set } = setApi('guarded');
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
 
     pick(root, 'autonomy-default', 'autonomous');
@@ -108,7 +112,8 @@ describe('Settings · Autonomy default (SPEC-0027 PANEL-5/7)', () => {
 
   it('cancelling the confirm reverts the selection and does not persist', async () => {
     const { set } = setApi('guarded');
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     pick(root, 'autonomy-default', 'autonomous');
     (root.querySelector('#autonomy-cancel') as HTMLButtonElement).click();
@@ -119,7 +124,8 @@ describe('Settings · Autonomy default (SPEC-0027 PANEL-5/7)', () => {
 
   it('relaxing to Guarded applies directly (no confirm)', async () => {
     const { set } = setApi('autonomous');
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     pick(root, 'autonomy-default', 'guarded');
     await tick();
@@ -139,7 +145,8 @@ describe('Settings · Dev-log verbosity (SPEC-0030 OBS-10)', () => {
 
   it('renders the current level and persists a change as the FULL settings (autonomy preserved)', async () => {
     const { set } = setApi('autonomous'); // devLogLevel defaults to info
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(checked(root, 'devlog-level')).toBe('info');
 
@@ -166,7 +173,8 @@ describe('Settings · WS3 design-system migration (DESIGN-LEGACY-VIEWS §3 — o
 
   it('renders both controls as blessed SegmentedControls (role=radiogroup of role=radio .viz-seg-opt), labelled', async () => {
     setApi('guarded');
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     for (const [id, labelId] of [['autonomy-default', 'autonomy-label'], ['devlog-level', 'devlog-label']] as const) {
       const group = root.querySelector<HTMLElement>(`#${id}`)!;
@@ -182,7 +190,8 @@ describe('Settings · WS3 design-system migration (DESIGN-LEGACY-VIEWS §3 — o
 
   it('uses roving tabindex — only the checked segment is the tab stop (§3 a11y)', async () => {
     setApi('guarded');
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(segOpt(root, 'autonomy-default', 'guarded').tabIndex).toBe(0); // checked → in the tab order
     expect(segOpt(root, 'autonomy-default', 'autonomous').tabIndex).toBe(-1); // unchecked → roved out
@@ -190,7 +199,8 @@ describe('Settings · WS3 design-system migration (DESIGN-LEGACY-VIEWS §3 — o
 
   it('roves focus with arrow keys WITHOUT committing; Space/Enter commits (selection ≠ focus)', async () => {
     const { set } = setApi('autonomous'); // devLogLevel = info
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     const info = segOpt(root, 'devlog-level', 'info');
     const debug = segOpt(root, 'devlog-level', 'debug');
@@ -211,7 +221,8 @@ describe('Settings · WS3 design-system migration (DESIGN-LEGACY-VIEWS §3 — o
 
   it('composes the blessed .viz-confirm + .viz-btn--danger primitives (autonomy = caution, replay = danger)', async () => {
     setApi('guarded');
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     const autoConfirm = root.querySelector<HTMLElement>('#autonomy-confirm')!;
     expect(autoConfirm.classList.contains('viz-confirm')).toBe(true);
@@ -228,7 +239,8 @@ describe('Settings · WS3 design-system migration (DESIGN-LEGACY-VIEWS §3 — o
 
   it('carries NO legacy off-system primitives (.muted / legacy .confirm / .btn-danger / native select) on the success path', async () => {
     setApi('autonomous');
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(root.querySelector('.muted')).toBeNull(); // notes / copilot detail / dt all migrated
     expect(root.querySelector('.confirm')).toBeNull(); // confirms are .viz-confirm now (distinct token)
@@ -273,7 +285,8 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
 
   it('renders Auto by default (no ceiling override): manual row + hint hidden, caps at defaults', async () => {
     setScaleApi(); // no copilotCeiling, no stageCaps
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(checked(root, 'ceiling-mode')).toBe('auto');
     expect((root.querySelector('#ceiling-manual-row') as HTMLElement).hidden).toBe(true);
@@ -288,7 +301,8 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
 
   it('Connect is an editable cap now — not pinned/disabled, and a bump persists it (SCALE-5 unpin)', async () => {
     const { set } = setScaleApi();
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(stepperValue('cap-connect')).toBe('1'); // today's default (serial) — but editable now
     expect(btn('cap-connect', 1).disabled).toBe(false); // increment enabled (was disabled when pinned)
@@ -302,7 +316,8 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
 
   it('cap rows align via a 2-col grid (label | stepper); 5 rows, no pinned-note row (SCALE-5)', async () => {
     setScaleApi();
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     // Every cap row carries .scale-stage-row (the grid that right-aligns the steppers into one column).
     const rows = root.querySelectorAll('.scale-stage-row');
@@ -316,7 +331,8 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
 
   it('renders Manual when a ceiling override is set: row + hint visible, stepper at the value', async () => {
     setScaleApi({ copilotCeiling: 6 });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(checked(root, 'ceiling-mode')).toBe('manual');
     expect((root.querySelector('#ceiling-manual-row') as HTMLElement).hidden).toBe(false);
@@ -326,7 +342,8 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
 
   it('Auto → Manual sets the ceiling to the stepper value + reveals the row (SCALE-1)', async () => {
     const { set } = setScaleApi(); // auto, ceiling stepper seeds at 4
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     pick(root, 'ceiling-mode', 'manual');
     await tick();
@@ -337,7 +354,8 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
 
   it('Manual → Auto CLEARS the ceiling (copilotCeiling: null) + hides the row', async () => {
     const { set } = setScaleApi({ copilotCeiling: 8 });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     pick(root, 'ceiling-mode', 'auto');
     await tick();
@@ -348,7 +366,8 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
 
   it('bumping a stage cap persists the FULL settings with the merged stageCaps (preserve-on-omission)', async () => {
     const { set } = setScaleApi({ stageCaps: { claims: 2 } });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(stepperValue('cap-decompose')).toBe('4'); // SCALE adaptive-default: cap-stage default 3→4
     bump('cap-decompose', 1); // 4 → 5
@@ -362,7 +381,8 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
 
   it('the manual-ceiling stepper persists copilotCeiling on change', async () => {
     const { set } = setScaleApi({ copilotCeiling: 5 });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     bump('ceiling', 1); // 5 → 6
     await tick();
@@ -372,7 +392,8 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
 
   it('bound-affordance: a stepper at its minimum disables decrement; at its max disables increment', async () => {
     setScaleApi({ stageCaps: { decompose: 1 } }); // at the floor
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(btn('cap-decompose', -1).disabled).toBe(true); // can't go below 1
     expect(btn('cap-decompose', 1).disabled).toBe(false);
@@ -384,7 +405,8 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
   it('tolerates malformed legacy stageCaps without crashing the card (ENG-15)', async () => {
     // A hand-edited/old instance.json with a garbled cap — resolveStageCaps clamps to a safe default.
     setScaleApi({ stageCaps: { decompose: 'nope' as unknown as number, compose: 999 } });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(root.querySelector('#scale-status')).toBeTruthy(); // card rendered, not a blank/crash
     expect(stepperValue('cap-decompose')).toBe('4'); // garbled → default (SCALE adaptive-default: 3→4)
@@ -393,7 +415,8 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
 
   it('renders the steppers as labelled groups (a11y): role=group + aria-labelledby + a live value', async () => {
     setScaleApi();
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     const el = stepper('cap-decompose');
     expect(el.getAttribute('role')).toBe('group');
@@ -406,7 +429,8 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
   // render ONLY while backed off, ember-breathe dot while in the cooldown; never announce "not throttled").
   it('throttled indicator: shows "effective N of M" + the ember-breathe dot when backed off in cooldown', async () => {
     setScaleApi({}, { adaptive: true, effective: 2, reference: 4, backedOff: true, throttled: true });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     const el = root.querySelector<HTMLElement>('#scale-throttle')!;
     expect(el.hidden).toBe(false);
@@ -417,7 +441,8 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
 
   it('throttled indicator: backed off but past the cooldown → caption, no breathe dot', async () => {
     setScaleApi({}, { adaptive: true, effective: 3, reference: 6, backedOff: true, throttled: false });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     const el = root.querySelector<HTMLElement>('#scale-throttle')!;
     expect(el.hidden).toBe(false);
@@ -427,14 +452,16 @@ describe('Settings · Scale (SPEC-0048 SCALE — stage-parallelism knobs)', () =
 
   it('throttled indicator: ABSENT when healthy (effective === reference) — never announces "not throttled"', async () => {
     setScaleApi({}, { adaptive: true, effective: 4, reference: 4, backedOff: false, throttled: false });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(root.querySelector<HTMLElement>('#scale-throttle')!.hidden).toBe(true);
   });
 
   it('throttled indicator: ABSENT in fixed mode (manual/env pin — not adaptive)', async () => {
     setScaleApi({ copilotCeiling: 6 }, { adaptive: false, effective: 6, reference: 6, backedOff: false });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(root.querySelector<HTMLElement>('#scale-throttle')!.hidden).toBe(true);
   });
@@ -471,7 +498,8 @@ describe('Settings · Recall & Ask (SPEC-0026 ASK-19 — recall work-budget knob
 
   it('renders the time budget in minutes + search depth Auto by default (no override): manual row + hint state', async () => {
     setRecallApi(); // no recallBudgetMs (legacy) → 4min default; no recallMaxToolCalls → Auto
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(stepperValue('recall-time')).toBe('4'); // DEFAULT_RECALL_BUDGET_MS (240000) → 4 minutes
     expect(checked(root, 'recall-depth-mode')).toBe('auto');
@@ -481,14 +509,16 @@ describe('Settings · Recall & Ask (SPEC-0026 ASK-19 — recall work-budget knob
 
   it('reflects a saved time budget in minutes (360000ms → 6)', async () => {
     setRecallApi({ recallBudgetMs: 360_000 });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(stepperValue('recall-time')).toBe('6');
   });
 
   it('bumping the time stepper persists recallBudgetMs as ms (×60000), full settings (preserve-on-omission)', async () => {
     const { set } = setRecallApi(); // seeds at 4 min
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     bump('recall-time', 1); // 4 → 5 minutes
     await tick();
@@ -498,7 +528,8 @@ describe('Settings · Recall & Ask (SPEC-0026 ASK-19 — recall work-budget knob
 
   it('time budget bound-affordance: at the 10-minute ceiling, increment is disabled', async () => {
     setRecallApi({ recallBudgetMs: 600_000 }); // RECALL_BUDGET_MS_MAX → 10 minutes
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(stepperValue('recall-time')).toBe('10');
     expect(btn('recall-time', 1).disabled).toBe(true); // can't exceed the 10-minute ceiling
@@ -507,7 +538,8 @@ describe('Settings · Recall & Ask (SPEC-0026 ASK-19 — recall work-budget knob
 
   it('renders Manual search depth when an override is set: row visible, hint hidden, stepper at the value', async () => {
     setRecallApi({ recallMaxToolCalls: 16 });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(checked(root, 'recall-depth-mode')).toBe('manual');
     expect((root.querySelector('#recall-depth-manual-row') as HTMLElement).hidden).toBe(false);
@@ -517,7 +549,8 @@ describe('Settings · Recall & Ask (SPEC-0026 ASK-19 — recall work-budget knob
 
   it('Auto → Manual sets recallMaxToolCalls to the stepper seed + reveals the row (ASK-19 per-instance override)', async () => {
     const { set } = setRecallApi(); // Auto; depth stepper seeds at 12
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     pick(root, 'recall-depth-mode', 'manual');
     await tick();
@@ -529,7 +562,8 @@ describe('Settings · Recall & Ask (SPEC-0026 ASK-19 — recall work-budget knob
 
   it('Manual → Auto CLEARS the override (recallMaxToolCalls: null) + hides the row, restores the hint', async () => {
     const { set } = setRecallApi({ recallMaxToolCalls: 20 });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     pick(root, 'recall-depth-mode', 'auto');
     await tick();
@@ -541,7 +575,8 @@ describe('Settings · Recall & Ask (SPEC-0026 ASK-19 — recall work-budget knob
 
   it('the manual search-depth stepper persists recallMaxToolCalls on change', async () => {
     const { set } = setRecallApi({ recallMaxToolCalls: 8 });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     bump('recall-depth', 1); // 8 → 9
     await tick();
@@ -551,7 +586,8 @@ describe('Settings · Recall & Ask (SPEC-0026 ASK-19 — recall work-budget knob
 
   it('search-depth bound-affordance: clamps at the raised MAX (24) — increment disabled at the cap', async () => {
     setRecallApi({ recallMaxToolCalls: 24 }); // RECALL_BUDGET.MAX
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(stepperValue('recall-depth')).toBe('24');
     expect(btn('recall-depth', 1).disabled).toBe(true); // never above the raised cap
@@ -559,7 +595,8 @@ describe('Settings · Recall & Ask (SPEC-0026 ASK-19 — recall work-budget knob
 
   it('tolerates a garbled/missing time budget without crashing the card (ENG-16)', async () => {
     setRecallApi({ recallBudgetMs: NaN as unknown as number }); // a hand-edited/old value
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     expect(root.querySelector('#recall-status')).toBeTruthy(); // card rendered, not a blank/crash
     expect(stepperValue('recall-time')).toBe('4'); // garbled → the default, in minutes
@@ -567,7 +604,8 @@ describe('Settings · Recall & Ask (SPEC-0026 ASK-19 — recall work-budget knob
 
   it('renders the steppers as labelled a11y groups (role=group + aria-labelledby + a live value)', async () => {
     setRecallApi();
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     const el = stepper('recall-time');
     expect(el.getAttribute('role')).toBe('group');
@@ -592,12 +630,11 @@ describe('Settings · #145 load resilience (no infinite spinner on a hung IPC)',
   it('times out a hung getState → retryable error, and Retry re-loads successfully', async () => {
     const getState = vi.fn<KbApi['getState']>().mockReturnValueOnce(new Promise(() => {})); // hangs
     (window as unknown as { kbApi: Partial<KbApi> }).kbApi = { getState };
-    const mounted = mountSettings(root);
+    mountSettings(root).show?.();
     expect(root.querySelector('[aria-busy="true"]')).not.toBeNull(); // skeleton initially (#520)
     expect(root.textContent).not.toContain('Loading…'); // never bare "Loading…" (#520 §8)
 
     await vi.advanceTimersByTimeAsync(LOAD_TIMEOUT_MS); // trip the timeout
-    await mounted;
     expect(root.textContent).not.toContain('Loading…'); // no infinite spinner
     expect(root.querySelector('.load-error')).toBeTruthy();
     expect(root.querySelector('.load-retry')).toBeTruthy();
@@ -642,7 +679,8 @@ describe('Settings · Prepare for shutdown (SPEC-0045 QUIESCE-1/3/5/6)', () => {
 
   it('the "Prepare for shutdown" button is a modest, non-danger control (QUIESCE-6)', async () => {
     setQuiesceApi();
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     const btn = root.querySelector('#quiesce-btn')!;
     expect(btn.textContent).toMatch(/Prepare for shutdown/i);
@@ -652,7 +690,8 @@ describe('Settings · Prepare for shutdown (SPEC-0045 QUIESCE-1/3/5/6)', () => {
 
   it('clicking Prepare quiesces + shows the drain status + Resume (QUIESCE-1/3)', async () => {
     const { quiesce } = setQuiesceApi();
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     (root.querySelector('#quiesce-btn') as HTMLButtonElement).click();
     await tick();
@@ -664,7 +703,8 @@ describe('Settings · Prepare for shutdown (SPEC-0045 QUIESCE-1/3/5/6)', () => {
 
   it('Resume un-pauses, restoring the Prepare button (QUIESCE-5)', async () => {
     const { resume } = setQuiesceApi();
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     (root.querySelector('#quiesce-btn') as HTMLButtonElement).click();
     await tick();
@@ -677,7 +717,8 @@ describe('Settings · Prepare for shutdown (SPEC-0045 QUIESCE-1/3/5/6)', () => {
 
   it('reflects an already-safe drain on mount: "Safe to shut down" (QUIESCE-3)', async () => {
     setQuiesceApi({ quiesceStatus: vi.fn(async () => ({ quiescing: true, remaining: 0, safe: true, detail: 'Safe to shut down — all work finished.' })) as KbApi['quiesceStatus'] });
-    await mountSettings(root);
+    mountSettings(root).show?.();
+    await tick();
     await tick();
     const statusEl = root.querySelector('#quiesce-status')!;
     expect(statusEl.textContent).toMatch(/Safe to shut down/i);

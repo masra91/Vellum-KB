@@ -82,6 +82,14 @@ const kbApi: KbApi = {
   healthRemediate: (req) => ipcRenderer.invoke('kb:healthRemediate', req), // SPEC-0060 VUX-16
   dismissHealthFinding: (req) => ipcRenderer.invoke('kb:dismissHealthFinding', req),
   getTodayProjection: () => ipcRenderer.invoke('kb:getTodayProjection'), // SPEC-0058 Today (instant, maintained)
+  // SPEC-0058 STATE-8 (#510): subscribe to the main→renderer projection-changed PUSH. Unlike every other
+  // `kbApi` member (request/response `invoke`), this is a subscription — returns an unsubscribe fn so a
+  // view's `hide()` can cleanly stop listening (no leaked `ipcRenderer` listener across a view switch).
+  onProjectionChanged: (cb) => {
+    const listener = (_e: Electron.IpcRendererEvent, payload: { store: string; builtAt: string }): void => cb(payload);
+    ipcRenderer.on('kb:projection-changed', listener);
+    return () => ipcRenderer.removeListener('kb:projection-changed', listener);
+  },
 };
 
 contextBridge.exposeInMainWorld('kbApi', kbApi);

@@ -6,6 +6,7 @@
 // section whose IPC fails still renders the other (PANEL-9), never a broken canvas.
 import { esc, emptyState } from '../html';
 import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
+import type { ViewHandle } from '../viewLifecycle';
 import {
   schedulePresetLabel,
   SCHEDULE_OPTIONS,
@@ -36,9 +37,9 @@ function armSwitch(cls: string, armed: boolean, active: boolean, label: string):
 // SPEC-0060 IA: Connectors = the OUTWARD intake (feeds). Watched folders moved to Settings (mountWatchedFolders).
 const HEADER = `<h1 class="rdesk-title src-title viz-voice">Connectors</h1><p class="rdesk-sub viz-body">Feeds you subscribe to — new items arrive as sources in your library.</p>`;
 
-export async function mountSources(container: HTMLElement): Promise<void> {
+export function mountSources(container: HTMLElement): ViewHandle {
   paintSkeleton(container, HEADER, 'cards');
-  await render(container);
+  return { show: () => void render(container) }; // #510: re-read on every activation (no timers here)
 }
 
 async function render(container: HTMLElement): Promise<void> {

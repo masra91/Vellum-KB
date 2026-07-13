@@ -13,6 +13,8 @@
 import { esc, emptyState } from '../html';
 import { withTimeout, renderLoadError } from '../loadGuard';
 import { createVisibilityPoll, type VisibilityPoll } from '../visibilityPoll';
+import { subscribeProjectionChanged } from '../projectionPush';
+import type { ViewHandle } from '../viewLifecycle';
 
 // UX v2 (SPEC-0058): the Reviews "needs you" queue, lifted off the legacy `.card`/`--border` chrome onto
 // the v2 material. `reviews-v2` scopes every override to this surface. Reviews is the ONE peripheral screen
@@ -55,7 +57,7 @@ let answeredIds = new Set<string>();
 let failedIds = new Map<string, string>();
 let lastList: ReviewSummary[] = [];
 
-export async function mountReviews(container: HTMLElement): Promise<void> {
+export function mountReviews(container: HTMLElement): ViewHandle {
   poll?.stop();
   poll = undefined;
   renderedSig = '';
@@ -63,8 +65,24 @@ export async function mountReviews(container: HTMLElement): Promise<void> {
   failedIds = new Map();
   lastList = [];
   paintSkeleton(container); // SPEC-0060 VUX-13: a calm warming skeleton — never a 2s blank / wrong-empty.
-  await refresh(container);
-  startPoll(container);
+  let unsubscribe: (() => void) | null = null;
+  return {
+    // #510: re-read on every activation (STATE-8 AC1) and subscribe to the 'review' push topic so an
+    // answer/re-raise elsewhere repaints within ~1s while Reviews stays visible (AC2). `startPoll`'s
+    // #509 `createVisibilityPoll` stays as the backstop cadence; `hide()` now fully `stop()`s it (not
+    // just self-gating) so it matches every other view's contract (zero live timers once hidden).
+    show: () => {
+      void refresh(container);
+      startPoll(container);
+      unsubscribe ??= subscribeProjectionChanged('review', () => void refresh(container, { onlyIfChanged: true }));
+    },
+    hide: () => {
+      poll?.stop();
+      poll = undefined;
+      unsubscribe?.();
+      unsubscribe = null;
+    },
+  };
 }
 
 /**

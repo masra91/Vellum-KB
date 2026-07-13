@@ -58,7 +58,7 @@ describe('captureView — blocked-capture recovery (MACOS-7 / #56)', () => {
 
   it('a permission-denied capture routes to the Blocked recovery (no raw OS error, no silent stall)', async () => {
     setApi({ ok: false, blocked: true, ids: [], captureBatch: null, committed: false, message: 'Vellum can’t write to your vault folder — access is turned off.' });
-    mountCapture(root, '/Users/me/Documents/MyVault', 'KB');
+    mountCapture(root, '/Users/me/Documents/MyVault', 'KB').show?.();
     (root.querySelector('#captureText') as HTMLTextAreaElement).value = 'a thought';
     root.querySelector<HTMLButtonElement>('#capture')!.click();
     await Promise.resolve(); await Promise.resolve();
@@ -71,7 +71,7 @@ describe('captureView — blocked-capture recovery (MACOS-7 / #56)', () => {
 
   it('a successful capture clears the input + confirms (no Blocked surface)', async () => {
     setApi({ ok: true, blocked: false, ids: ['1'], captureBatch: 'b1', committed: true, message: 'Captured 1 item(s).' });
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     const ta = root.querySelector('#captureText') as HTMLTextAreaElement;
     ta.value = 'x';
     root.querySelector<HTMLButtonElement>('#capture')!.click();
@@ -87,7 +87,7 @@ describe('captureView — blocked-capture recovery (MACOS-7 / #56)', () => {
     // must surface an honest note (not fail silently) AND never lose the user's capture.
     setApi(OK); // full kbApi shape (incl. pipelineStatus for the status timer)…
     captureMock().mockRejectedValue(new Error('channel down')); // …then make the capture channel reject
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     const ta = root.querySelector('#captureText') as HTMLTextAreaElement;
     ta.value = 'a precious thought';
     root.querySelector<HTMLButtonElement>('#capture')!.click();
@@ -117,7 +117,7 @@ describe('captureView — RICHIN rich ingestion (SPEC-0040)', () => {
   });
 
   it('RICHIN-1/2: a rich paste inserts Markdown and capture carries the original HTML sidecar', async () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     const ta = root.querySelector('#captureText') as HTMLTextAreaElement;
     paste(ta, { html: '<h1>Hi</h1>', plain: 'Hi' });
     expect(ta.value).toContain('# Hi'); // converted, not the raw plain text
@@ -130,7 +130,7 @@ describe('captureView — RICHIN rich ingestion (SPEC-0040)', () => {
   });
 
   it('RICHIN-3: with "Keep formatting" off, a paste is captured as plain (no HTML sidecar)', () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     (root.querySelector('#keepFormatting') as HTMLInputElement).checked = false;
     const ta = root.querySelector('#captureText') as HTMLTextAreaElement;
     paste(ta, { html: '<h1>Hi</h1>', plain: 'Hi' });
@@ -143,7 +143,7 @@ describe('captureView — RICHIN rich ingestion (SPEC-0040)', () => {
   });
 
   it('RICHIN-4: a multi-file drop stages one entry per file and captures one input each', async () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     const dz = root.querySelector('#dropzone') as HTMLElement;
     drop(dz, [new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }), new File([new Uint8Array([2, 3])], 'b.pdf', { type: 'application/pdf' })]);
     await flush();
@@ -156,7 +156,7 @@ describe('captureView — RICHIN rich ingestion (SPEC-0040)', () => {
   });
 
   it('RICHIN-4: a file that fails to read does not block the others (per-file isolation)', async () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     const dz = root.querySelector('#dropzone') as HTMLElement;
     const bad = { name: 'bad.bin', arrayBuffer: () => Promise.reject(new Error('boom')) };
     drop(dz, [new File([new Uint8Array([1])], 'good.png', { type: 'image/png' }), bad]);
@@ -167,7 +167,7 @@ describe('captureView — RICHIN rich ingestion (SPEC-0040)', () => {
   });
 
   it('RICHIN-12: a pasted image (no text flavor) is staged as a file unit', async () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     const ta = root.querySelector('#captureText') as HTMLTextAreaElement;
     paste(ta, { image: new File([new Uint8Array([9, 9])], 'shot.png', { type: 'image/png' }) });
     await flush();
@@ -176,14 +176,14 @@ describe('captureView — RICHIN rich ingestion (SPEC-0040)', () => {
   });
 
   it('RICHIN-6: the manifest shows each file size', async () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     drop(root.querySelector('#dropzone') as HTMLElement, [new File([new Uint8Array([1, 2, 3])], 'tiny.bin', { type: 'application/octet-stream' })]);
     await flush();
     expect(root.querySelector('#staged')!.textContent).toContain('3 B');
   });
 
   it('RICHIN-11: a large file is flagged in the manifest and warned (non-blocking) on capture', async () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     const big = { name: 'big.bin', arrayBuffer: () => Promise.resolve(new ArrayBuffer(26 * 1024 * 1024)) };
     drop(root.querySelector('#dropzone') as HTMLElement, [big]);
     await flush();
@@ -222,7 +222,7 @@ describe('captureView — WS3 design-system migration (DESIGN-LEGACY-VIEWS §6 �
   });
 
   it('renders the Capture button as a blessed .viz-btn--primary (was button.primary)', () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     const btn = root.querySelector<HTMLButtonElement>('#capture')!;
     expect(btn.classList.contains('viz-btn')).toBe(true);
     expect(btn.classList.contains('viz-btn--primary')).toBe(true);
@@ -230,7 +230,7 @@ describe('captureView — WS3 design-system migration (DESIGN-LEGACY-VIEWS §6 �
   });
 
   it('gives the textarea a real accessible name via aria-label; the Spectral head is the visible label (§6 a11y, SPEC-0058 v2)', () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     const ta = root.querySelector<HTMLTextAreaElement>('#captureText')!;
     expect(ta.getAttribute('aria-label')).toBe('Capture'); // accessible name (placeholder is NOT one)
     expect(root.querySelector('.capture-eyebrow')?.textContent).toBe('Capture'); // the eyebrow names the surface
@@ -239,7 +239,7 @@ describe('captureView — WS3 design-system migration (DESIGN-LEGACY-VIEWS §6 �
   });
 
   it('announces + makes the dropzone reachable — role=region + aria-label + tabindex (§6 a11y)', () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     const dz = root.querySelector<HTMLElement>('#dropzone')!;
     // role="region" (not "button"): the dropzone has no click/keyboard activation — it's a labelled
     // drop target, so an announced region is the correct semantic; a role=button with no handler would
@@ -250,7 +250,7 @@ describe('captureView — WS3 design-system migration (DESIGN-LEGACY-VIEWS §6 �
   });
 
   it('restyles the keep-formatting toggle to the WS2 muted-signage label (off legacy .muted)', () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     const toggle = root.querySelector('#keepFormatting')!.closest('label')!;
     expect(toggle.classList.contains('capture-toggle')).toBe(true);
     expect(toggle.classList.contains('muted')).toBe(false);
@@ -258,7 +258,7 @@ describe('captureView — WS3 design-system migration (DESIGN-LEGACY-VIEWS §6 �
   });
 
   it('renders the staged-file remove action as a .viz-btn--ghost naming its file (was button.link)', async () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     drop(root.querySelector('#dropzone') as HTMLElement, [new File([new Uint8Array([1])], 'note.pdf', { type: 'application/pdf' })]);
     await flush();
     const rm = root.querySelector<HTMLButtonElement>('#staged button[data-rm]')!;
@@ -270,7 +270,7 @@ describe('captureView — WS3 design-system migration (DESIGN-LEGACY-VIEWS §6 �
   });
 
   it('carries NO legacy off-system primitives (.muted / button.link / button.primary) on any render path', async () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     drop(root.querySelector('#dropzone') as HTMLElement, [new File([new Uint8Array([1])], 'f.bin', { type: 'application/octet-stream' })]);
     await flush(); // exercise the staged-files render path too
     expect(root.querySelector('.muted')).toBeNull(); // path / toggle / note / pipeline / size all migrated
@@ -292,7 +292,7 @@ describe('captureView — Vellum UX v2 glance (SPEC-0058 STATE content view, DL-
   });
 
   it('is a centered v3 composer: a Spectral head + a focus-within surface (not v2 .viz-card / legacy .card)', () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     expect(root.querySelector('.capture-v2')).not.toBeNull();
     const composer = root.querySelector('.capture-composer');
     expect(composer).not.toBeNull();
@@ -305,7 +305,7 @@ describe('captureView — Vellum UX v2 glance (SPEC-0058 STATE content view, DL-
   });
 
   it('the dropzone drag-over adds the .over hook (CSS maps it to the --viz-accent wash, DL-2 ruling — not ember)', () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     const dz = root.querySelector<HTMLElement>('#dropzone')!;
     dz.dispatchEvent(new Event('dragover', { bubbles: true, cancelable: true }));
     expect(dz.classList.contains('over')).toBe(true);
@@ -314,7 +314,7 @@ describe('captureView — Vellum UX v2 glance (SPEC-0058 STATE content view, DL-
   });
 
   it('the queue reads as a mono count, never an emoji (#184: tokenized glyph + Plex-Mono number)', async () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     await flush(); // refreshStatus awaits pipelineStatus()
     const q = root.querySelector('#pipeline')!;
     expect(q.querySelector('.viz-numeric')).not.toBeNull(); // mono count
@@ -323,7 +323,7 @@ describe('captureView — Vellum UX v2 glance (SPEC-0058 STATE content view, DL-
   });
 
   it('a successful capture confirms with the OK (sprout) note state; clears the field', async () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     (root.querySelector('#captureText') as HTMLTextAreaElement).value = 'a thought';
     root.querySelector<HTMLButtonElement>('#capture')!.click();
     await flush();
@@ -334,7 +334,7 @@ describe('captureView — Vellum UX v2 glance (SPEC-0058 STATE content view, DL-
 
   it('a true capture error uses the oxide (error) note state — not caution, not ember', async () => {
     setApi({ ok: false, blocked: false, ids: [], captureBatch: '', committed: false, message: 'Disk is full.' });
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     (root.querySelector('#captureText') as HTMLTextAreaElement).value = 'x';
     root.querySelector<HTMLButtonElement>('#capture')!.click();
     await flush();
@@ -342,7 +342,7 @@ describe('captureView — Vellum UX v2 glance (SPEC-0058 STATE content view, DL-
   });
 
   it('NO ember anywhere — Capture is input, not a decision (colour discipline)', async () => {
-    mountCapture(root, '/v', 'KB');
+    mountCapture(root, '/v', 'KB').show?.();
     drop(root.querySelector('#dropzone') as HTMLElement, [new File([new Uint8Array([1])], 'f.bin', { type: 'application/octet-stream' })]);
     await flush();
     expect(root.innerHTML.toLowerCase()).not.toContain('ember');

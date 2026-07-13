@@ -38,7 +38,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
 
   it('lists librarians as v3 cards with state, model, and instruction pointer', async () => {
     setApi(vi.fn(async () => AGENTS));
-    await mountAgents(root);
+    mountAgents(root).show?.();
+    await tick();
     await tick();
     expect(root.querySelectorAll('.ag-card')).toHaveLength(2);
     const decompose = root.querySelector('.ag-card[data-key="decompose"]')!;
@@ -54,7 +55,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
     setApi(vi.fn(async () => {
       throw new Error('boom');
     }));
-    await mountAgents(root);
+    mountAgents(root).show?.();
+    await tick();
     await tick();
     expect(root.querySelector('.load-error')?.textContent).toContain('Couldn’t load'); // retryable fallback (#145)
     expect(root.querySelector('.load-retry')).toBeTruthy();
@@ -62,7 +64,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
 
   it('shows a friendly empty state when there are no agents', async () => {
     setApi(vi.fn(async () => []));
-    await mountAgents(root);
+    mountAgents(root).show?.();
+    await tick();
     await tick();
     expect(root.textContent).toContain('open a library');
   });
@@ -72,7 +75,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
   describe('v3 card language (SPEC-0060 VUX-1)', () => {
     it('renders a state pill that is status-first: running = loom mark, idle = calm dot', async () => {
       setApi(vi.fn(async () => AGENTS));
-      await mountAgents(root);
+      mountAgents(root).show?.();
+      await tick();
       await tick();
       const run = root.querySelector<HTMLElement>('.ag-card[data-key="decompose"] .ag-state')!;
       expect(run.classList.contains('run')).toBe(true);
@@ -92,7 +96,7 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
           .mockResolvedValueOnce(AGENTS)
           .mockResolvedValue([{ ...AGENTS[0], status: 'idle' }, AGENTS[1]]);
         setApi(listAgents);
-        await mountAgents(root);
+        mountAgents(root).show?.();
         await vi.advanceTimersByTimeAsync(5000); // one poll → refreshStatus rewrites the pill
         const pill = root.querySelector<HTMLElement>('.ag-card[data-key="decompose"] .ag-state')!;
         expect(pill.textContent).toContain('Idle'); // status updated in place
@@ -106,13 +110,15 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
 
     it('carries NO ember + NO legacy off-system primitives (.muted) on any render path', async () => {
       setApi(vi.fn(async () => AGENTS));
-      await mountAgents(root);
+      mountAgents(root).show?.();
+      await tick();
       await tick();
       expect(root.querySelector('[class*="ember"]')).toBeNull(); // agent activity is not a decision
       expect(root.querySelector('.muted')).toBeNull();
       // empty state too
       setApi(vi.fn(async () => []));
-      await mountAgents(root);
+      mountAgents(root).show?.();
+      await tick();
       await tick();
       expect(root.querySelector('.muted')).toBeNull();
     });
@@ -129,7 +135,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
 
     it('renders a .viz-select picker over the catalog with the configured model selected + a "runs as" caption', async () => {
       setApi(vi.fn(async () => AGENTS), vi.fn(async () => CATALOG), vi.fn());
-      await mountAgents(root);
+      mountAgents(root).show?.();
+      await tick();
       await tick();
       const select = root.querySelector<HTMLSelectElement>('select.viz-select#model-default')!;
       expect(select).toBeTruthy();
@@ -142,7 +149,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
     it('shows a stale note (gold mark, not oxide) when the persisted pick is no longer in the live catalog', async () => {
       const stale: ModelCatalogView = { accepted: ['claude-opus-4.8'], resolved: 'claude-opus-4.8', configured: 'claude-opus-4', staleConfigured: true };
       setApi(vi.fn(async () => AGENTS), vi.fn(async () => stale), vi.fn());
-      await mountAgents(root);
+      mountAgents(root).show?.();
+      await tick();
       await tick();
       const note = root.querySelector<HTMLElement>('.model-stale')!;
       expect(note).toBeTruthy();
@@ -157,7 +165,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
     it('persists a pick via setModel on change and updates the runs-as caption in place', async () => {
       const setModel = vi.fn(async () => ({ ok: true, resolved: 'gpt-5.5' }));
       setApi(vi.fn(async () => AGENTS), vi.fn(async () => CATALOG), setModel);
-      await mountAgents(root);
+      mountAgents(root).show?.();
+      await tick();
       await tick();
       const select = root.querySelector<HTMLSelectElement>('#model-default')!;
       select.value = 'gpt-5.5';
@@ -170,7 +179,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
     it('degrades to the card grid with NO picker when the catalog IPC is unavailable (ENG-15/16)', async () => {
       // getModelCatalog omitted → the call throws → catalog null → control omitted, list still renders.
       setApi(vi.fn(async () => AGENTS));
-      await mountAgents(root);
+      mountAgents(root).show?.();
+      await tick();
       await tick();
       expect(root.querySelector('#model-default')).toBeNull();
       expect(root.querySelectorAll('.ag-card')).toHaveLength(2); // the list never blocks on the picker
@@ -179,7 +189,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
     it('shows a resolved-only readout (no dropdown) when the CLI catalog could not be probed (accepted=null)', async () => {
       const unprobed: ModelCatalogView = { accepted: null, resolved: 'claude-opus-4.8', configured: undefined, staleConfigured: false };
       setApi(vi.fn(async () => AGENTS), vi.fn(async () => unprobed), vi.fn());
-      await mountAgents(root);
+      mountAgents(root).show?.();
+      await tick();
       await tick();
       expect(root.querySelector('#model-default')).toBeNull(); // can't offer a list
       expect(root.querySelector('.ag-modelbar .model-runs')?.textContent).toContain('claude-opus-4.8'); // but shows what runs
@@ -193,7 +204,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
         { key: 'decompose', label: 'Decompose', role: 'r', model: 'claude-opus-4.8', instructions: 'kb/decomposeAgent.ts', status: 'idle' },
       ];
       setApi(vi.fn(async () => agents), vi.fn(async () => CATALOG), vi.fn(), vi.fn());
-      await mountAgents(root);
+      mountAgents(root).show?.();
+      await tick();
       await tick();
       const connectSel = root.querySelector<HTMLSelectElement>('.ag-card[data-key="connect"] .agent-model-select')!;
       expect(connectSel).toBeTruthy();
@@ -208,7 +220,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
       const agents: AgentView[] = [{ key: 'connect', label: 'Connect', role: 'r', model: 'claude-opus-4.8', instructions: 'kb/connectAgent.ts', status: 'idle' }];
       const setAgentModel = vi.fn(async () => ({ ok: true, resolved: 'claude-sonnet-4.5' }));
       setApi(vi.fn(async () => agents), vi.fn(async () => CATALOG), vi.fn(), setAgentModel);
-      await mountAgents(root);
+      mountAgents(root).show?.();
+      await tick();
       await tick();
       const sel = root.querySelector<HTMLSelectElement>('.ag-card[data-key="connect"] .agent-model-select')!;
       sel.value = 'claude-sonnet-4.5';
@@ -221,7 +234,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
     it('folds the per-agent model into a quiet "Model" disclosure (select + caption stacked together)', async () => {
       const agents: AgentView[] = [{ key: 'connect', label: 'Connect', role: 'r', model: 'claude-sonnet-4.5', configuredModel: 'claude-sonnet-4.5', instructions: 'kb/connectAgent.ts', status: 'idle' }];
       setApi(vi.fn(async () => agents), vi.fn(async () => CATALOG), vi.fn(), vi.fn());
-      await mountAgents(root);
+      mountAgents(root).show?.();
+      await tick();
       await tick();
       const adv = root.querySelector<HTMLElement>('.ag-card[data-key="connect"] details.ag-adv')!;
       expect(adv).toBeTruthy();
@@ -238,7 +252,9 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
   // #509 regression: the Librarians section (this `root`) lives NESTED inside the Agents hub's `.view`
   // wrapper — the shell toggles `.hidden` on that ANCESTOR, never on this container directly. The old
   // guard checked `root`'s own class (never matched in production → the poll never paused); test the
-  // real shape, a `.view.hidden` parent, so this fails-before/passes-after on the actual bug.
+  // real shape, a `.view.hidden` parent, so this fails-before/passes-after on the actual bug. This
+  // exercises `createVisibilityPoll`'s OWN self-gating (independent of #510's explicit hide()/show()
+  // below) — the poll keeps ticking but skips the IPC while its ancestor `.view` is hidden.
   it('pauses the status poll while its ANCESTOR `.view` is hidden, resumes when shown (#509 / PANEL-9)', async () => {
     vi.useFakeTimers();
     try {
@@ -249,14 +265,47 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
 
       const listAgents = vi.fn(async () => AGENTS);
       setApi(listAgents);
-      await mountAgents(root); // initial render → one listAgents call
+      mountAgents(root).show?.(); // initial activation → one listAgents call
+      await vi.advanceTimersByTimeAsync(0);
       const initial = listAgents.mock.calls.length;
 
       view.classList.add('hidden'); // the shell toggles `.hidden` on the `.view` ancestor
       await vi.advanceTimersByTimeAsync(5000);
-      expect(listAgents.mock.calls.length).toBe(initial); // no IPC while hidden
+      expect(listAgents.mock.calls.length).toBe(initial); // no IPC while hidden — the poll self-gated
 
       view.classList.remove('hidden');
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(listAgents.mock.calls.length).toBeGreaterThan(initial); // resumes when shown
+
+      view.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #510: the shell drives visibility EXPLICITLY via the returned lifecycle handle, rather than relying
+  // solely on the poll's own class-based self-gating — `hide()` fully `stop()`s the poll (zero live
+  // timers once hidden, the fake-timer sweep's contract), not just skip-while-hidden.
+  it('#510: hide() stops the status poll; show() resumes it (efficiency — PANEL-9)', async () => {
+    vi.useFakeTimers();
+    try {
+      const view = document.createElement('div');
+      view.className = 'view';
+      document.body.appendChild(view);
+      view.appendChild(root);
+
+      const listAgents = vi.fn(async () => AGENTS);
+      setApi(listAgents);
+      const handle = mountAgents(root);
+      handle.show?.(); // initial activation → one listAgents call
+      await vi.advanceTimersByTimeAsync(0);
+      const initial = listAgents.mock.calls.length;
+
+      handle.hide?.(); // the shell calls this on switch-away
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(listAgents.mock.calls.length).toBe(initial); // no IPC while hidden — the poll timer was cleared
+
+      handle.show?.(); // switch back
       await vi.advanceTimersByTimeAsync(5000);
       expect(listAgents.mock.calls.length).toBeGreaterThan(initial); // resumes when shown
 
@@ -271,7 +320,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
     try {
       const listAgents = vi.fn(async () => AGENTS);
       setApi(listAgents);
-      await mountAgents(root);
+      mountAgents(root).show?.(); // #510: mount() no longer self-loads — show() does (mirrors the shell)
+      await vi.advanceTimersByTimeAsync(0);
       const initial = listAgents.mock.calls.length;
       await vi.advanceTimersByTimeAsync(5000);
       expect(listAgents.mock.calls.length).toBeGreaterThan(initial);

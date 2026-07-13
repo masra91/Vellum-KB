@@ -11,19 +11,30 @@
 // slate=interactive). Status-first: the live `status` field drives the pill, no render-path vault scan.
 import { esc } from '../html';
 import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
-import { createVisibilityPoll } from '../visibilityPoll';
+import { createVisibilityPoll, type VisibilityPoll } from '../visibilityPoll';
+import type { ViewHandle } from '../viewLifecycle';
 import type { AgentView, ModelCatalogView } from '../../kb/types';
 
 // Mounted as the **Librarians** section of the Agents hub (SPEC-0053 WS-E) — the hub owns the group
 // header/naming, so this section renders the librarian grid (the global default-model control above it).
-export async function mountAgents(container: HTMLElement): Promise<void> {
+export function mountAgents(container: HTMLElement): ViewHandle {
   paintSkeleton(container, '', 'cards');
-  await render(container);
-  // #509: this container is the Librarians SECTION nested inside the Agents hub, not the `.view` the
-  // shell toggles `.hidden` on — checking `container`'s own class (the old guard) never engaged, so the
-  // poll ran every 5s for the rest of the session regardless of which view was active. The shared helper
-  // walks up to the ancestor `.view` instead, so the intended pause actually engages.
-  createVisibilityPoll(container, 5000, () => refreshStatus(container));
+  let poll: VisibilityPoll | null = null;
+  // #509 fixed the wrong-element visibility bug (this container is the Librarians SECTION nested inside
+  // the Agents hub, not the shell's outer `.view` — `createVisibilityPoll`'s ancestor-aware check handles
+  // that). #510 layers the explicit shell-driven lifecycle on top: `hide()` fully `stop()`s the poll (not
+  // just self-gating) so it matches every other view's contract, dispatched via the Agents-hub's own
+  // aggregated handle.
+  return {
+    show: () => {
+      void render(container); // full refresh (the catalog + status) on every activation
+      if (poll == null) poll = createVisibilityPoll(container, 5000, () => refreshStatus(container));
+    },
+    hide: () => {
+      poll?.stop();
+      poll = null;
+    },
+  };
 }
 
 async function render(container: HTMLElement): Promise<void> {

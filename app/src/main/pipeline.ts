@@ -168,6 +168,29 @@ const PROMOTE_MAX_WAIT_MS = 180_000; // …but at least every 3 min under a cont
 
 let active: ActivePipeline | null = null;
 
+// ── SPEC-0058 STATE-8 (#510): the maintained-projection PUSH sink ───────────────────────────────────
+// `main.ts` sets this once (`setProjectionPushSink`) to broadcast `webContents.send('kb:projection-
+// changed', event)` so a visible renderer view re-reads its (instant) projection immediately instead of
+// waiting on its poll interval. Injected rather than importing Electron here directly, so pipeline.ts
+// stays node-testable without a real BrowserWindow. Best-effort + never load-bearing: a push is a "go
+// re-read the cache" nudge — the render path's own IPC read is always the source of truth, so a dropped
+// push (no window yet, a listener throwing) just means the view catches up on its own next poll/switch.
+export type ProjectionPushEvent = { store: 'status' | 'review' | 'graph' | 'today'; builtAt: string };
+let projectionPushSink: ((event: ProjectionPushEvent) => void) | null = null;
+
+/** Register (or clear, with `null`) the push sink. Call once from `main.ts` after the window exists. */
+export function setProjectionPushSink(sink: ((event: ProjectionPushEvent) => void) | null): void {
+  projectionPushSink = sink;
+}
+
+function pushProjectionChanged(store: ProjectionPushEvent['store'], builtAt: string): void {
+  try {
+    projectionPushSink?.({ store, builtAt });
+  } catch {
+    /* push is best-effort — a listener failure must never break the projection */
+  }
+}
+
 /** The active vault's `.kb/cache` dir — where OBS-21 writes a heap snapshot (gitignored), or null
  *  when no vault is open (the sampler then skips the snapshot). Passed to the telemetry glue. */
 export function activeSnapshotDir(): string | null {
@@ -769,6 +792,7 @@ const statusStore: StatusSnapshotStore = createStatusSnapshotStore({
     if (active) void saveStatusSnapshot(active.vaultPath, view).catch(() => {});
   },
   onError: (err) => active?.log.child({ scope: 'status' }).warn('status.snapshot-refresh-failed', { err }),
+  onUpdate: (view) => pushProjectionChanged('status', view.builtAt),
 });
 
 /**
@@ -809,6 +833,7 @@ const reviewStore: ProjectionStore<ReviewSummary[]> = createProjectionStore<Revi
   compute: computeReviewSummaries,
   intervalMs: REVIEW_REFRESH_MS,
   onError: (err) => active?.log.child({ scope: 'reviews' }).warn('reviews.projection-refresh-failed', { err }),
+  onUpdate: (projection) => pushProjectionChanged('review', projection.builtAt),
 });
 
 /** The render-path review-queue read (SHELL-12): the background-maintained last-known-good projection,
@@ -916,6 +941,7 @@ const graphStore: ProjectionStore<GraphProjection> = createProjectionStore<Graph
     if (active) void saveGraphProjection(active.vaultPath, graph).catch(() => {});
   },
   onError: (err) => active?.log.child({ scope: 'graph' }).warn('graph.projection-refresh-failed', { err }),
+  onUpdate: (projection) => pushProjectionChanged('graph', projection.builtAt),
 });
 
 /** The render-path graph read (SPEC-0058 STATE-2): the background-maintained last-known-good projection,
@@ -1012,6 +1038,7 @@ const todayStore: ProjectionStore<TodayProjection> = createProjectionStore<Today
   compute: computeTodayProjection,
   intervalMs: TODAY_REFRESH_MS,
   onError: (err) => active?.log.child({ scope: 'today' }).warn('today.projection-refresh-failed', { err }),
+  onUpdate: (projection) => pushProjectionChanged('today', projection.builtAt),
 });
 
 /** The render-path Today read (SPEC-0058): the background-maintained last-known-good projection, INSTANT

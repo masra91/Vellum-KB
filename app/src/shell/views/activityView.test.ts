@@ -57,7 +57,9 @@ beforeEach(() => {
 async function mount(): Promise<HTMLElement> {
   const c = document.createElement('div');
   document.body.appendChild(c);
-  mountActivity(c);
+  // #510: mountActivity() now only builds the skeleton + returns lifecycle hooks; show() (which the
+  // shell calls right after mount) is what actually loads + paints — mirror that here.
+  mountActivity(c).show?.();
   await flush();
   return c;
 }
@@ -397,7 +399,7 @@ describe('Activity view · #145 load resilience (no infinite spinner on a hung I
   it('times out a hung activityFeed → retryable error, and Retry re-loads successfully', async () => {
     const activityFeed = vi.fn<KbApi['activityFeed']>().mockReturnValueOnce(new Promise<ActivityFeedResult>(() => {})); // hangs
     (window as unknown as { kbApi: Pick<KbApi, 'activityFeed'> }).kbApi = { activityFeed: activityFeed as unknown as KbApi['activityFeed'] };
-    mountActivity(c);
+    mountActivity(c).show?.();
     expect(c.querySelector('#activityBody')?.getAttribute('aria-busy')).toBe('true'); // skeleton initially (#520)
     expect(c.textContent).not.toContain('Loading…'); // never bare "Loading…" (#520 §8)
 
