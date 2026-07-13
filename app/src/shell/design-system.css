@@ -157,6 +157,11 @@
    interaction. No new styling — they alias the pseudo. (Harmless on feature surfaces; only the gallery sets them.) */
 .viz-focusable:focus-visible, .viz-focusable.is-focus { outline: 2px solid var(--viz-accent); outline-offset: 1px; } /* never the framework indigo */
 
+/* Visually-hidden but screen-reader-reachable — for aria-live announcement regions (VUX-CONFORM
+   #524 §6) and similar content that must exist in the accessibility tree without a visual footprint.
+   The standard clip-rect recipe (not `display:none`, which strips it from the a11y tree too). */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
 /* Select primitive (SPEC-0048) — a native <select> in the viz idiom for a DYNAMIC many-option list
    (the model catalog); .viz-seg stays for small bounded enums. Flat, ruled, mono, custom caret, accent
    focus — never the default OS chrome (the "generic AI app" tell §6 guards against). */
