@@ -66,6 +66,14 @@ export interface RunOptions {
    * NEXT, never HOW MANY run at once — exactly one section is ever active regardless of priority, so
    * the single-writer invariant is untouched; priority only bounds how long a capture-shaped write can
    * be stuck behind a long bulk/sweep pass (Connect's link/orphan/dedup tail, PERF-E3), not whether one.
+   *
+   * KNOWN TRADEOFF (KB-Quality-Driver review): there's no aging/round-robin/max-consecutive-priority
+   * backstop — a continuous stream of priority sections could in theory starve the background lane
+   * indefinitely. Accepted deliberately: this fixes captures queuing behind Connect's sweep (the
+   * issue's actual scope), not general fair scheduling; captures are short-lived one-off writes (never
+   * a sustained stream in practice), and a delayed background pass (Connect's sweep, an advance) is
+   * idempotent/self-healing on the next tick, never a lossy outcome. Revisit only if a real workload
+   * demonstrates sustained priority pressure — don't add starvation-prevention machinery pre-emptively.
    */
   priority?: boolean;
 }
