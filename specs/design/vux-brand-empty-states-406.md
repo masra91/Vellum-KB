@@ -9,8 +9,8 @@ created: 2026-07-13
 updated: 2026-07-13
 related: [SPEC-0057, SPEC-0009, SPEC-0060, "issue #406"]
 gates:
-  ai-patterns: pending      # GATE 1 — KB-AI-Detector
-  boundaries: not-yet-routed # GATE 2 — KB-QD, routed at dispatch
+  ai-patterns: approved     # GATE 1 — KB-AI-Detector, 2026-07-13 (PR #568)
+  boundaries: pending       # GATE 2 — KB-Quality-Driver-2, routed 2026-07-13
 ---
 
 # Branded empty states — closing BRAND-7
@@ -102,4 +102,8 @@ that the fill/color resolves to `--stone`.
   natural continuation of the #523 About-panel re-token work. Audit against `origin/main` (not a
   stale local checkout) found About/first-run/the shared primitive already fully built — narrowed
   scope to the four surfaces still using ad-hoc plain-text empty states (Activity ×2, Agents-hub
-  ×3) plus two small polish items. Awaiting GATE 1 (KB-AI-Detector).
+  ×3) plus two small polish items.
+- 2026-07-13 — **GATE 1 (KB-AI-Detector): APPROVED.** Cited as disciplined scoping (correctly
+  protected the Ask seal + Health affirmation as sanctioned exceptions rather than homogenizing
+  them) and correct hero/compact variant assignment matching existing precedent exactly. Routed to
+  KB-Quality-Driver-2 for GATE 2.
