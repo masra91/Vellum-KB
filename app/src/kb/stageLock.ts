@@ -43,9 +43,14 @@ export interface MutexOptions {
   /** #515: default per-section hard timeout (ms), applied to every `run()` call that doesn't pass its
    *  own `opts.timeoutMs`. Undefined (default) disables enforcement — existing callers/tests that
    *  construct a bare `new Mutex()` keep today's behavior (a wedged section wedges the chain forever;
-   *  `boundedGit`'s own process-level timeout is what unblocks a pure-git section in practice). Set
-   *  this on the shared per-vault lock as defense-in-depth for the non-git work inside a section
-   *  (fs writes, sidecar reads) that boundedGit can't bound. See `run()`. */
+   *  `boundedGit`'s own process-level timeout is what unblocks a pure-git section in practice).
+   *  CAUTION (KB-QD review): a timeout that fires WHILE a git call inside the section is still in
+   *  flight releases the chain for the next waiter, which then runs CONCURRENTLY with the still-live
+   *  orphaned write — recreating the single-writer violation #515 fixes, not mitigating it. Only safe
+   *  to set on a Mutex whose EVERY section's total `boundedGit` call budget is providably < this value —
+   *  the shared per-vault lock (pipeline.ts) deliberately does NOT set it today, since it's threaded
+   *  through heterogeneous multi-git-call sections (connect/claims/compose/decompose) with no single
+   *  safe constant. See `run()`. */
   sectionTimeoutMs?: number;
 }
 

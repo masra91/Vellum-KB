@@ -371,11 +371,19 @@ export async function startPipeline(vaultPath: string): Promise<Orchestrator> {
   // The shared serialized canonical writer for this vault (§5). The watchdog logs a loud `lock.stuck`
   // (scope `lock`) + flips the OBS-7 `stuck` flag if any section is held past the threshold — so a
   // deadlocked/hung critical section surfaces (named by its label) instead of silently wedging (#163).
-  // #515: `sectionTimeoutMs` is a hard backstop ABOVE the watchdog threshold — every canonical-lock
-  // section is expected to be built from `boundedGit` calls (each capped at WORKTREE_GIT_TIMEOUT_MS =
-  // 20s) plus small fs/JSON work, so 60s comfortably covers a worst-case multi-call section while still
-  // guaranteeing the queue can never wedge forever on non-git work a bounded git client can't reach.
-  const lock = new Mutex({ log: log.child({ scope: 'lock' }), sectionTimeoutMs: 60_000 });
+  // #515: `Mutex.sectionTimeoutMs`/`RunOptions.timeoutMs` (stageLock.ts) give any FUTURE section a hard
+  // reject-and-release backstop, but deliberately NOT wired here as a blanket default (KB-QD review):
+  // this ONE lock is shared by every stage's heterogeneous sections (connect's linkOne/linkOrphansOnce,
+  // claims, compose, decompose, orchestrator…), each chaining a different number of `boundedGit` calls —
+  // there's no single constant that's provably ABOVE every section's git-call budget yet BELOW "actually
+  // wedged", and a timeout firing WHILE a git call is still in flight would let the next waiter start a
+  // concurrent write on the same working tree/index — the exact single-writer violation this issue
+  // fixes, not a mitigation of it. The safe, already-proven mechanism is `boundedGit`'s own per-call
+  // timeout: every git op in a `lock.run` section now goes through it, so a blocked call rejects on its
+  // OWN bound and the chain's `finally` releases normally — no orphaned in-flight write is possible. A
+  // per-section timeout is legitimate future work IF paired with a derived (not guessed) budget per
+  // section; until then this stays off.
+  const lock = new Mutex({ log: log.child({ scope: 'lock' }) });
   // SPEC-0028 RESEARCH-1 / WS-B: seed a default Web researcher on a virgin (or pre-feature) vault so
   // the research pipeline isn't INERT — an empty registry means nothing dispatches even once a
   // `research-request` is emitted. Keyed on the registry FILE's absence (not emptiness), so a
