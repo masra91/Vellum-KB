@@ -46,8 +46,9 @@ function summarize(c: Conversation): ConversationSummary {
   };
 }
 
-/** Write JSON via tmp + rename so a reader never observes a half-written file (crash-atomic on one fs). */
-async function writeJsonAtomic(file: string, data: unknown): Promise<void> {
+/** Write JSON via tmp + rename so a reader never observes a half-written file (crash-atomic on one fs).
+ *  Exported — `appConfig.ts` reuses this (BUG-13, #518) rather than duplicating the idiom. */
+export async function writeJsonAtomic(file: string, data: unknown): Promise<void> {
   const tmp = `${file}.${process.pid}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(data, null, 2) + '\n');
   await fs.rename(tmp, file);

@@ -11,12 +11,11 @@ import simpleGit from 'simple-git';
 import { ulid } from './ulid';
 import { ensureGitIdentity } from './vault';
 import { Mutex } from './stageLock';
-import { withOptimisticAdvance } from './canonicalAdvance';
+import { withConcurrentAdvance, type PrepareContext } from './canonicalAdvance';
 import { getReview } from './reviewStore';
 import { mergeNodes } from './mergeNodes';
 
-const WORKTREE_REL = path.join('.kb', 'cache', 'worktrees', 'consolidation');
-const WORK_BRANCH = 'kb/consolidation-work';
+const STAGE = 'consolidation';
 // Sink-inventory note (SPEC-0030 #30): `jobId` here is a path SEGMENT, not a rel — this is the
 // **Class B** id-injection axis, guarded by `isSafeJobId` (charset, no separators/traversal) at the
 // registry READ/WRITE/SINK boundaries (#73/#29), NOT by the Class-A `assertContainedRel` rel-
@@ -36,45 +35,28 @@ export interface ConsolidationResult {
   deleted?: string[]; // loser node rels removed (when executed)
 }
 
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function ensureWorktree(root: string): Promise<string> {
-  const git = simpleGit(root);
-  await ensureGitIdentity(git);
-  const branch = (await git.raw('rev-parse', '--abbrev-ref', 'HEAD')).trim();
-  const wt = path.join(root, WORKTREE_REL);
-  try {
-    await git.raw('worktree', 'prune');
-  } catch {
-    /* none yet */
-  }
-  const healthy =
-    (await pathExists(wt)) &&
-    (await simpleGit(wt)
-      .revparse(['--is-inside-work-tree'])
-      .then(() => true)
-      .catch(() => false));
-  if (!healthy) {
-    if (await pathExists(wt)) await fs.rm(wt, { recursive: true, force: true });
-    await fs.mkdir(path.dirname(wt), { recursive: true });
-    await git.raw('worktree', 'add', '-B', WORK_BRANCH, wt, branch);
-  }
-  return wt;
-}
-
 /**
  * Execute the consolidation a Review (`reviewId`) describes — but ONLY if it is an affirmatively-
  * answered (`verdict === 'confirm'`) consolidation Review (its merge plan rides in the markerKey).
  * Any other state (not found / not approved / not a consolidation / already merged) is a safe no-op
  * with a `reason`. MUST be called on the staging worktree; serializes its canonical advance through
  * `lock`. Returns what (if anything) it merged — the caller then promotes to mirror the deletion.
+ *
+ * BUG-4 (#518): used to `prepare` in ONE fixed, reused worktree/branch (`reset --hard` + commit) — a
+ * stage-owned "shared worktree" pattern. `pipeline.ts` fires `runAnsweredReviewEffects` unawaited per
+ * answered review, so two Principal approvals answered close together ran two concurrent calls here,
+ * sharing that ONE worktree+branch OFF the lock (only the advance itself is locked): the second call's
+ * `reset --hard` could wipe the first's in-flight merge, or its commit could overwrite the first's on
+ * the shared branch ref before the first's advance (which reads the branch by NAME, not a captured
+ * sha) ever ran — so the first call could report `executed:true` while its merge was silently
+ * discarded. Now uses {@link withConcurrentAdvance} — the SAME per-item ephemeral-worktree primitive
+ * decompose/claims/connect/archive already use (#508), one fresh worktree + unique branch per call, no
+ * sharing possible. Not a new pattern for `mergeNodes` specifically: `connectOne`'s own merge path
+ * already calls it from inside a `withConcurrentAdvance`-provided worktree. No `sparsePaths` — like
+ * connect, `mergeNodes`' write footprint (every claim pointing at a loser, potentially) isn't bounded
+ * in advance. Concurrency safety now rides on `advanceOrCollide`'s existing collision handling: two
+ * DISJOINT consolidations both land (cherry-pick replay); two touching the SAME node retry against the
+ * fresh canonical, bounded, before falling back to `already-merged` (never a silent half-merge).
  */
 export async function executeApprovedConsolidation(stagingWt: string, reviewId: string, lock: Mutex): Promise<ConsolidationResult> {
   stagingWt = path.resolve(stagingWt);
@@ -91,10 +73,9 @@ export async function executeApprovedConsolidation(stagingWt: string, reviewId: 
 
   let result: ConsolidationResult = { reviewId, executed: false, reason: 'already-merged' };
 
-  const prepare = async (base: string): Promise<boolean> => {
-    const wt = await ensureWorktree(stagingWt);
-    const wtGit = simpleGit(wt);
-    await wtGit.raw('reset', '--hard', base);
+  const prepare = async ({ wt }: PrepareContext): Promise<boolean> => {
+    const wtGit = simpleGit(wt); // the ephemeral per-call worktree, fresh off the checkpoint — no reset needed
+    await ensureGitIdentity(wtGit);
     const { deleted } = await mergeNodes(wt, canonicalRel, loserRels);
     if (deleted.length === 0) {
       result = { reviewId, executed: false, reason: 'already-merged' }; // idempotent: nothing to do
@@ -113,12 +94,12 @@ export async function executeApprovedConsolidation(stagingWt: string, reviewId: 
     result = { reviewId, executed: true, deleted };
     return true;
   };
-  // A same-path collision exhaustion leaves the canonical untouched (no half-merge); the Principal's
-  // approval persists on the Review, so a later poke/dispatch can retry. Rare (single canonical write).
+  // Same-path collision exhaustion leaves the canonical untouched (no half-merge); the Principal's
+  // approval persists on the Review, so a later poke/dispatch can retry.
   const onExhausted = async (): Promise<void> => {
     result = { reviewId, executed: false, reason: 'already-merged' };
   };
 
-  await withOptimisticAdvance({ root: stagingWt, lock, workBranch: WORK_BRANCH }, prepare, onExhausted);
+  await withConcurrentAdvance({ root: stagingWt, lock, stage: STAGE }, prepare, onExhausted);
   return result;
 }

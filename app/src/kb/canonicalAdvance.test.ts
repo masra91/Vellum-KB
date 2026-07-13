@@ -9,7 +9,17 @@ import simpleGit from 'simple-git';
 import { makeTempDir, rmTempDir } from '../../test/tempVault';
 import { gitAvailable } from '../../test/gitEnv';
 import { ensureGitIdentity } from './vault';
-import { canonicalHead, advanceOrCollide, withOptimisticAdvance, withConcurrentAdvance, withEphemeralWorktree, reapEphemeralWorktrees, type AdvanceOutcome } from './canonicalAdvance';
+import {
+  canonicalHead,
+  advanceOrCollide,
+  withOptimisticAdvance,
+  withConcurrentAdvance,
+  withEphemeralWorktree,
+  reapEphemeralWorktrees,
+  currentReplayEpoch,
+  bumpReplayEpoch,
+  type AdvanceOutcome,
+} from './canonicalAdvance';
 import { Mutex } from './stageLock';
 import { ulid } from './ulid';
 
@@ -693,6 +703,100 @@ describe.skipIf(!gitAvailable)('reapEphemeralWorktrees — #135 cascade recovery
       const { worktrees } = await reapEphemeralWorktrees(root);
       expect(worktrees).toBe(1);
       expect(await exists(root, path.join('.kb/cache/worktrees', `claims-${u}`))).toBe(false);
+    } finally {
+      await rmTempDir(dir);
+    }
+  });
+});
+
+// #518 BUG-8: a Full Replay purges + resets the canonical tree, but stopping the stage sweeps only
+// cancels their TIMERS — an item whose off-lock prepare() (cognition + write + commit) was already in
+// flight is never awaited. If that item's advance ran AFTER the purge, it would land now-stale,
+// pre-epoch derived content onto the freshly-reset tree. Prove the fence: bump the epoch DURING an
+// item's `prepare()` (simulating "a replay started while I was mid-flight") and confirm the advance is
+// dropped — never applied — even though the item's own work committed cleanly to its work branch.
+describe.skipIf(!gitAvailable)('replay-epoch fence (#518 BUG-8)', () => {
+  it('withOptimisticAdvance drops an advance whose prepare() started before a replay epoch bump', async () => {
+    const dir = await makeTempDir();
+    try {
+      const root = await makeCanonicalRepo(dir);
+      const lock = new Mutex();
+      const epochBefore = currentReplayEpoch();
+      const result = await withOptimisticAdvance(
+        { root, lock, workBranch: 'kb/epoch-test-work' },
+        async (base) => {
+          const wt = path.join(dir, 'epoch-wt');
+          await simpleGit(root).raw('worktree', 'add', '-B', 'kb/epoch-test-work', wt, base);
+          await fs.writeFile(path.join(wt, 'pre-epoch-work.txt'), 'stale by the time this lands');
+          const g = simpleGit(wt);
+          await ensureGitIdentity(g);
+          await g.raw('add', '-A');
+          await g.commit('pre-epoch work');
+          await simpleGit(root).raw('worktree', 'remove', '--force', wt);
+          // A replay starts WHILE this item is still mid-prepare — exactly the BUG-8 race window.
+          bumpReplayEpoch();
+          return true; // this item DID commit real work to its work branch
+        },
+        async () => {},
+      );
+      expect(currentReplayEpoch()).toBe(epochBefore + 1); // sanity: the bump really happened
+      expect(result).toBe('noop'); // dropped as stale — NOT 'advanced', despite a valid, committed workBranch
+      expect(await exists(root, 'pre-epoch-work.txt')).toBe(false); // the stale work never landed on the canonical tree
+    } finally {
+      await rmTempDir(dir);
+    }
+  });
+
+  it('withConcurrentAdvance drops an advance whose prepare() started before a replay epoch bump', async () => {
+    const dir = await makeTempDir();
+    try {
+      const root = await makeCanonicalRepo(dir);
+      const lock = new Mutex();
+      const epochBefore = currentReplayEpoch();
+      const result = await withConcurrentAdvance(
+        { root, lock, stage: 'decompose' },
+        async ({ wt }) => {
+          await fs.writeFile(path.join(wt, 'pre-epoch-candidate.json'), '{}');
+          const g = simpleGit(wt);
+          await ensureGitIdentity(g);
+          await g.raw('add', '-A');
+          await g.commit('pre-epoch candidate');
+          bumpReplayEpoch(); // a replay starts mid-prepare
+          return true;
+        },
+        async () => {},
+      );
+      expect(currentReplayEpoch()).toBe(epochBefore + 1);
+      expect(result).toBe('noop');
+      expect(await exists(root, 'pre-epoch-candidate.json')).toBe(false);
+    } finally {
+      await rmTempDir(dir);
+    }
+  });
+
+  it('a FRESH prepare that starts AFTER the bump (capturing the new epoch) advances normally — the fence is not permanent', async () => {
+    const dir = await makeTempDir();
+    try {
+      const root = await makeCanonicalRepo(dir);
+      const lock = new Mutex();
+      bumpReplayEpoch(); // simulate: a replay already happened before this item even started
+      const result = await withOptimisticAdvance(
+        { root, lock, workBranch: 'kb/epoch-test-work-2' },
+        async (base) => {
+          const wt = path.join(dir, 'epoch-wt-2');
+          await simpleGit(root).raw('worktree', 'add', '-B', 'kb/epoch-test-work-2', wt, base);
+          await fs.writeFile(path.join(wt, 'post-epoch-work.txt'), 'fresh, current generation');
+          const g = simpleGit(wt);
+          await ensureGitIdentity(g);
+          await g.raw('add', '-A');
+          await g.commit('post-epoch work');
+          await simpleGit(root).raw('worktree', 'remove', '--force', wt);
+          return true; // no further epoch bump during this prepare — it's current, not stale
+        },
+        async () => {},
+      );
+      expect(result).toBe('advanced'); // a normal item started under the CURRENT epoch lands fine
+      expect(await exists(root, 'post-epoch-work.txt')).toBe(true);
     } finally {
       await rmTempDir(dir);
     }
