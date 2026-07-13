@@ -28,6 +28,7 @@ import { parseEntityNode, type ParsedNode } from './connectDoc';
 import { claimStatementsFromMd } from './claimDoc';
 import { computeEnrichmentGap, isFacetThin, type EnrichmentGap } from './enrichGap';
 import { RESEARCH_REQUEST_SIGNAL, dedupKeyFor } from './researchers';
+import { walkVaultFiles } from './vaultWalk';
 
 /**
  * The max corroborating-source count at which an entity is "sparse" / a "little reference" worth
@@ -66,24 +67,11 @@ export function enrichmentNeed(node: Pick<ParsedNode, 'derivedFrom'>, gap: Enric
 }
 
 /** Recursively collect every entity node markdown file under `entities/` (vault-relative paths).
- *  Skips dotfiles/dirs and the `.gitkeep` scaffold; tolerant of a missing tree (empty result). */
+ *  Skips dotfiles/dirs and the `.gitkeep` scaffold; tolerant of a missing tree (empty result).
+ *  SPEC-0061 T1 / ENG-9: delegates to the shared `walkVaultFiles` walker (this file is not owned by
+ *  another wave-1 lane, so it's one of the ad-hoc-walker retirements landing in this slice). */
 async function walkEntityFiles(root: string): Promise<string[]> {
-  const out: string[] = [];
-  async function rec(dir: string): Promise<void> {
-    let entries: import('node:fs').Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return; // no entities/ tree yet
-    }
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory() && !e.name.startsWith('.')) await rec(full);
-      else if (e.isFile() && e.name.endsWith('.md')) out.push(path.relative(root, full));
-    }
-  }
-  await rec(path.join(root, 'entities'));
-  return out;
+  return walkVaultFiles(root, 'entities', { keep: (n) => n.endsWith('.md') });
 }
 
 export interface FlagSparseOptions {

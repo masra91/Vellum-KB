@@ -18,6 +18,7 @@ import { recordDisambiguationDirective, recordConsolidationDirective, recordCont
 import { blockKey as computeBlockKey } from './connect';
 import { parseEntityNode } from './connectDoc';
 import type { Mutex } from './stageLock';
+import { walkVaultFiles } from './vaultWalk';
 
 /** Repo-relative directory for a review id. */
 export function reviewRel(id: string): string {
@@ -45,26 +46,17 @@ export async function readAllReviews(root: string): Promise<Review[]> {
   return allReviews(root);
 }
 
-/** Recursively collect every `review.json` under `reviews/`, repo-relative dir + parsed. */
+/** Recursively collect every `review.json` under `reviews/`, repo-relative dir + parsed.
+ *  SPEC-0061 T1 / ENG-9: delegates to the shared `walkVaultFiles` walker (this file is not owned by
+ *  another wave-1 lane, so it's one of the ad-hoc-walker retirements landing in this slice). */
 async function allReviews(root: string): Promise<Review[]> {
+  const resolvedRoot = path.resolve(root);
+  const rels = await walkVaultFiles(resolvedRoot, 'reviews', { keep: (n) => n === 'review.json' });
   const out: Review[] = [];
-  async function walk(dir: string): Promise<void> {
-    let entries: import('node:fs').Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory() && !e.name.startsWith('.')) await walk(full);
-      else if (e.isFile() && e.name === 'review.json') {
-        const r = await readReviewFile(full);
-        if (r) out.push(r);
-      }
-    }
+  for (const rel of rels) {
+    const r = await readReviewFile(path.join(resolvedRoot, rel));
+    if (r) out.push(r);
   }
-  await walk(path.join(path.resolve(root), 'reviews'));
   return out;
 }
 
