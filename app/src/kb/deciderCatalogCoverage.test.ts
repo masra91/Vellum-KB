@@ -27,7 +27,7 @@ interface DeciderFixture {
 const FIXTURES: DeciderFixture[] = [
   {
     agentKey: 'archivist',
-    invoke: () => {
+    invoke: async () => {
       const meta: CapturedMeta = {
         id: '01JABCDEF7Q2ABCDEFGHJKMNPQ',
         kind: 'text',
