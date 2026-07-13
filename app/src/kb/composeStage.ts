@@ -35,6 +35,7 @@ import { withConcurrentAdvance, withEphemeralWorktree, advanceOrCollide, canonic
 import { noopDevLog, type DevLog } from './devlog';
 import { noopTracer, noopActiveSpan, STAGE_RUN_OP, type Tracer, type ActiveSpan } from './tracing';
 import { CanonicalQueueCache } from './queueCache';
+import { fastHeadSha } from './gitHeadFast';
 
 const STAGE = 'compose';
 /** Default attempts (per claims-signature) before an un-composable entity is set aside (ORCH-12). */
@@ -379,8 +380,11 @@ export class ComposeStage {
   private drainStartedAt: string | null = null;
   // #506: compose was the one Enrich stage without its sibling claims/connect/decompose's HEAD-keyed
   // queue memo — every drain pass re-walked the full compose queue even when idle. Both call sites in
-  // drainOnce share it (mirrors DecomposeStage.queueCache).
-  private readonly queueCache = new CanonicalQueueCache<string[]>();
+  // drainOnce share it (mirrors DecomposeStage.queueCache). Uses the spawn-free `fastHeadSha` (not the
+  // sibling stages' default git-spawn `canonicalHead`) — compose's poke() fires fire-and-forget from
+  // `start()`, so a git spawn here directly widens the async window other code (e.g. quiesce status)
+  // treats as "settles almost instantly"; fs-only reads keep that margin intact.
+  private readonly queueCache = new CanonicalQueueCache<string[]>(fastHeadSha);
 
   /**
    * @param afterDrain optional hook run (serialized under the shared lock) after a drain that

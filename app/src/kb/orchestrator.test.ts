@@ -377,7 +377,7 @@ describe.skipIf(!gitAvailable)('Orchestration engine (SPEC-0014)', () => {
   });
 });
 
-describe.skipIf(!gitAvailable)('#506 — an idle sweep on an empty inbox skips the canonical lock entirely', () => {
+describe.skipIf(!gitAvailable)('#506 — an idle sweep on an empty inbox skips the normalize lock', () => {
   let dir: string;
   let vault: string;
   beforeEach(async () => {
@@ -389,7 +389,7 @@ describe.skipIf(!gitAvailable)('#506 — an idle sweep on an empty inbox skips t
     await rmTempDir(dir);
   });
 
-  it('poke() on an empty inbox never takes the lock (no normalize, no afterDrain)', async () => {
+  it('poke() on an empty inbox skips the normalize lock, but afterDrain STILL runs (STAGING-8/9 promotion backstop)', async () => {
     const lock = new Mutex();
     const runSpy = vi.spyOn(lock, 'run');
     let afterDrainCalls = 0;
@@ -397,8 +397,10 @@ describe.skipIf(!gitAvailable)('#506 — an idle sweep on an empty inbox skips t
       afterDrainCalls += 1;
     });
     await orch.poke();
-    expect(runSpy).not.toHaveBeenCalled(); // was: lock.run('normalize') + lock.run('afterDrain') even when empty
-    expect(afterDrainCalls).toBe(0);
+    const labels = runSpy.mock.calls.map((c) => c[1]);
+    expect(labels).not.toContain('normalize'); // was: lock.run('normalize') even on a totally empty inbox
+    expect(labels).toContain('archive:afterDrain'); // unconditional — afterDrain is the crash-recovery/promotion sweep, not inbox-gated
+    expect(afterDrainCalls).toBe(1);
     expect(await readQueue(vault)).toEqual([]);
   });
 

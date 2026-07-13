@@ -78,7 +78,7 @@ describe.skipIf(!gitAvailable)('gitHeadFast (#506 — no git spawn for gating)',
       const root = await makeRepo(dir);
       const git = simpleGit(root);
       await git.raw('pack-refs', '--all'); // moves refs/heads/main out of the loose-ref file
-      expect(await fs.stat(path.join(root, '.git', 'refs', 'heads', 'main')).catch(() => null)).toBeNull(); // sanity: loose ref really gone
+      expect(await fs.stat(path.join(root, '.git', 'refs', 'heads', 'main')).catch((): null => null)).toBeNull(); // sanity: loose ref really gone
       expect(await fastHeadSha(root)).toBe(await canonicalHead(root));
     } finally {
       await rmTempDir(dir);
