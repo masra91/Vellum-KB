@@ -15,6 +15,7 @@
 // scripts tool calls — no real CLI is spawned. Pull-only (ASK-2), ephemeral session (F5).
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { walkVaultFiles } from './vaultWalk';
 import type { AgentTrace } from './archivist';
 import { makeReadOnlyTools } from './recallTools';
 import { RECALL_SKILL, makeSdkRecallClient } from './recallAgent';
@@ -272,23 +273,11 @@ export { RECALL_BUDGET, recallBudget };
 
 /** Count canonical entity nodes — the `.md` files anywhere under `entities/` — as the budget's
  *  graph-size input. Cheap recursive readdir; missing/empty `entities/` → 0. Ignores dotdirs
- *  (working state never lives under entities/). */
+ *  (working state never lives under entities/).
+ *  SPEC-0061 T1 / ENG-9 (#539): delegates to the shared `walkVaultFiles` (see recallTools.ts's swap
+ *  for the symlink-safety + deterministic-order notes — irrelevant to a bare count either way). */
 export async function countEntityNodes(root: string): Promise<number> {
-  let count = 0;
-  async function walk(dir: string): Promise<void> {
-    let entries: import('node:fs').Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      if (e.isDirectory() && !e.name.startsWith('.')) await walk(path.join(dir, e.name));
-      else if (e.isFile() && e.name.endsWith('.md')) count++;
-    }
-  }
-  await walk(path.join(path.resolve(root), 'entities'));
-  return count;
+  return (await walkVaultFiles(path.resolve(root), 'entities', { keep: (n) => n.endsWith('.md') })).length;
 }
 
 const nowIso = (): string => new Date().toISOString();

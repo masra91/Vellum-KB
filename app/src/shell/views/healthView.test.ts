@@ -237,12 +237,44 @@ describe('Health view — VUX-16 remediation affordances', () => {
     expect(c.querySelector('.health-actions [class*="ember"]')).toBeNull();
   });
 
-  it('Relink calls healthRemediate with the SOURCE node, then re-scans on ok (the finding resolves away)', async () => {
+  // #511: a full re-scan+repaint on every apply/dismiss reset scroll + rebuilt every row for a one-row
+  // change. Now: a REAL change (res.changed) removes just that row immediately (no re-scan wait), and a
+  // burst of actions coalesces into ONE debounced background rescan (reconciling the tile/count) instead
+  // of one `healthReport()` call per click.
+  it('Relink calls healthRemediate with the SOURCE node; a real change removes ONLY that row immediately, then one debounced rescan reconciles the tile', async () => {
     const c = await mount();
-    rowFor(c, 'Ada Lovelace').querySelector<HTMLButtonElement>('.health-act--relink')!.click();
-    expect(healthRemediate).toHaveBeenCalledWith({ action: 'relink', nodeRel: 'entities/person/ada.md' });
-    await flush();
-    expect(healthReport.mock.calls.length).toBeGreaterThanOrEqual(2); // re-scan after the apply
+    vi.useFakeTimers();
+    try {
+      rowFor(c, 'Ada Lovelace').querySelector<HTMLButtonElement>('.health-act--relink')!.click();
+      expect(healthRemediate).toHaveBeenCalledWith({ action: 'relink', nodeRel: 'entities/person/ada.md' });
+      await vi.advanceTimersByTimeAsync(0); // let the healthRemediate() promise resolve
+      await vi.advanceTimersByTimeAsync(340); // the optimistic-remove fallback timer (reduced-motion path)
+      const names = Array.from(c.querySelectorAll('.health-finding-name')).map((el) => el.textContent);
+      expect(names).not.toContain('Ada Lovelace'); // the row is gone — no re-scan needed to see that
+      expect(healthReport.mock.calls.length).toBe(1); // NOT re-scanned yet — the rescan is still debounced
+      await vi.advanceTimersByTimeAsync(1200); // let the debounced background rescan fire
+      expect(healthReport.mock.calls.length).toBeGreaterThanOrEqual(2); // now reconciled (tile/count catch up)
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('Relink that reports changed:false (idempotent no-op) restores the row instead of removing it', async () => {
+    healthRemediate = vi.fn(async () => ({ ok: true, message: 'No change.', changed: false }));
+    setApi();
+    const c = await mount();
+    vi.useFakeTimers();
+    try {
+      const btn = rowFor(c, 'Ada Lovelace').querySelector<HTMLButtonElement>('.health-act--relink')!;
+      btn.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(340);
+      const names = Array.from(c.querySelectorAll('.health-finding-name')).map((el) => el.textContent);
+      expect(names).toContain('Ada Lovelace'); // NOT removed — nothing actually changed
+      expect(btn.disabled).toBe(false); // restored, retryable
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('Find homes calls healthRemediate find-homes with the orphan node', async () => {
@@ -251,12 +283,36 @@ describe('Health view — VUX-16 remediation affordances', () => {
     expect(healthRemediate).toHaveBeenCalledWith({ action: 'find-homes', nodeRel: 'entities/x/lonely.md' });
   });
 
-  it('Dismiss calls dismissHealthFinding with the content-stable key + kind, then re-scans (immediate, no confirm)', async () => {
+  it('Dismiss calls dismissHealthFinding with the content-stable key + kind; removes ONLY that row immediately, then one debounced rescan (immediate, no confirm)', async () => {
     const c = await mount();
-    rowFor(c, 'Lonely').querySelector<HTMLButtonElement>('.health-dismiss')!.click();
-    expect(dismissHealthFinding).toHaveBeenCalledWith({ findingKey: 'orphan:concept|lonely', kind: 'orphan' });
-    await flush();
-    expect(healthReport.mock.calls.length).toBeGreaterThanOrEqual(2);
+    vi.useFakeTimers();
+    try {
+      rowFor(c, 'Lonely').querySelector<HTMLButtonElement>('.health-dismiss')!.click();
+      expect(dismissHealthFinding).toHaveBeenCalledWith({ findingKey: 'orphan:concept|lonely', kind: 'orphan' });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(340);
+      const names = Array.from(c.querySelectorAll('.health-finding-name')).map((el) => el.textContent);
+      expect(names).not.toContain('Lonely');
+      expect(healthReport.mock.calls.length).toBe(1); // not re-scanned yet
+      await vi.advanceTimersByTimeAsync(1200);
+      expect(healthReport.mock.calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a burst of N dismissals coalesces into exactly ONE background rescan (not N)', async () => {
+    const c = await mount();
+    vi.useFakeTimers();
+    try {
+      rowFor(c, 'Lonely').querySelector<HTMLButtonElement>('.health-dismiss')!.click();
+      await vi.advanceTimersByTimeAsync(50);
+      rowFor(c, 'Stub').querySelector<HTMLButtonElement>('.health-dismiss')!.click(); // arrives before the debounce fires — resets it
+      await vi.advanceTimersByTimeAsync(1200); // only ONE full debounce window elapses after the LAST click
+      expect(healthReport.mock.calls.length).toBe(2); // the initial mount scan + exactly one reconciling rescan
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a failed apply shows a calm inline (oxide) error on the row, re-enabled (retryable) — no re-scan', async () => {

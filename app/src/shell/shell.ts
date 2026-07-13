@@ -25,6 +25,7 @@ import { NAVIGATE_EVENT, TOPBAR_CONTEXT_EVENT, type NavigateDetail, type TopbarC
 import { wireTopbarSearch } from './topbarSearch';
 import { reviewBadgeText, reviewBadgeAria } from './reviewBadge';
 import { createVisibilityPoll, type VisibilityPoll } from './visibilityPoll';
+import { renderLoadError, reportLoadFailure } from './loadGuard';
 import { mountToday } from './views/todayView';
 import { mountCapture } from './views/captureView';
 import { mountReviews } from './views/reviewsView';
@@ -177,6 +178,34 @@ export function mountShell(root: HTMLElement, vaultPath: string, name: string): 
   // deactivate on the NEXT render (the shell must hide the PREVIOUSLY active view, not the new one).
   let previousActiveId: string | null = null;
 
+  // BUG-12 (#518): the container used to be cached (containers.set, above) BEFORE the (possibly async)
+  // mount settled, via a bare `void Promise.resolve(mounts[activeId]?.(el)).then(...)` with no `.catch` —
+  // a rejecting (or synchronously throwing) mount was telemetry-silent, and since `containers.has(activeId)`
+  // stayed true forever, every later revisit fell into the "already mounted" branch below and found no
+  // `handle` — a permanently blank pane until relaunch. Now a mount failure (sync throw OR async rejection)
+  // is un-swallowed to the app-log (reportLoadFailure) and renders the shared retryable error face directly
+  // into the SAME already-appended container (loadGuard's renderLoadError, the same primitive every view
+  // uses for its own internal load failures) — Retry re-invokes this same attempt against that container,
+  // no orphaned DOM nodes, no dead end.
+  function attemptMount(activeId: string, el: HTMLElement): void {
+    const onFailure = (err: unknown): void => {
+      reportLoadFailure(activeId, err);
+      handles.delete(activeId); // a half-registered handle from a partial mount must not receive show()/hide()
+      const label = NAV_VIEWS.find((v) => v.id === activeId)?.label ?? activeId;
+      renderLoadError(el, `<h1 class="viz-voice">${esc(label)}</h1>`, () => attemptMount(activeId, el));
+    };
+    try {
+      Promise.resolve(mounts[activeId]?.(el))
+        .then((handle) => {
+          if (handle) handles.set(activeId, handle);
+          if (model.activeId === activeId) handle?.show?.();
+        })
+        .catch(onFailure);
+    } catch (err) {
+      onFailure(err); // a mount that throws SYNCHRONOUSLY (never returns a promise to reject) needs the same fallback
+    }
+  }
+
   function render(): void {
     const activeId = model.activeId;
 
@@ -189,10 +218,7 @@ export function mountShell(root: HTMLElement, vaultPath: string, name: string): 
       el.dataset.view = activeId;
       host.appendChild(el);
       containers.set(activeId, el);
-      void Promise.resolve(mounts[activeId]?.(el)).then((handle) => {
-        if (handle) handles.set(activeId, handle);
-        if (model.activeId === activeId) handle?.show?.();
-      });
+      attemptMount(activeId, el);
     } else {
       // Already mounted — reactivating. `show()` re-reads the (instant, possibly push-updated)
       // projection and resumes any live subscription (STATE-8 AC1: switching back repaints fresh data

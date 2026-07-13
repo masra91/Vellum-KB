@@ -158,7 +158,10 @@ function topctxHtml(state: ExploreState): string {
 }
 
 /** Render the current cached neighborhood as the UX v2 surface: a full-bleed radial graph (center +
- *  1-hop neighbors) on a drifting field, with a right rail carrying the focused entity's detail. No IPC. */
+ *  1-hop neighbors) on a drifting field, with a right rail carrying the focused entity's detail. No IPC.
+ *  This is the FULL rebuild — every region, including the search bar/datalist — used for a genuine data
+ *  load (fresh IPC read, re-center, breadcrumb jump). A filter-only change uses `repaintFiltered` instead
+ *  (#511), which never touches this function's search-bar markup. */
 function paint(container: HTMLElement, state: ExploreState): void {
   setTopbarContext(topctxHtml(state));
   const cache = state.cache;
@@ -175,15 +178,44 @@ function paint(container: HTMLElement, state: ExploreState): void {
   container.innerHTML = `<div class="explore explore-v2 viz-surface">
     <section class="exp-graph viz-grain">
       ${graphBar(entities, nb, state)}
-      ${graphSvg(nb, state)}
-      ${graphLegend(nb)}
+      <div class="exp-svg-region">${graphSvg(nb, state)}</div>
+      <div class="exp-legend-region">${graphLegend(nb)}</div>
     </section>
     <aside class="exp-rail">${railContent(nb)}</aside>
   </div>`;
   wire(container, state);
 }
 
-/** The floating control bar over the graph (UX v2): focus search + the filter chips, on `.viz-float`. */
+/**
+ * #511: a filter-chip toggle (or "clear filters") is an in-memory, no-IPC state change — it only affects
+ * `graphSvg` (which neighbors are shown) and the filter bar's own pressed-state; the search input +
+ * datalist, the rail, and the legend are unaffected. The old `paint()`-on-every-toggle rebuilt the WHOLE
+ * surface via one `innerHTML =`, which — because a browser destroys and recreates every descendant node
+ * on an innerHTML replace — wiped any in-progress (unsubmitted) text in the search `<input>` and forced a
+ * full `<option>`-list-per-entity datalist rebuild for no reason. Scoped to two regions instead, wired
+ * independently, so the search input (and whatever the Principal was mid-typing into it) survives.
+ */
+function repaintFiltered(container: HTMLElement, state: ExploreState): void {
+  setTopbarContext(topctxHtml(state)); // the Filters/confidence chip labels reflect state.filters live
+  const cache = state.cache;
+  if (!cache || !cache.nb.found) return;
+  const svgRegion = container.querySelector<HTMLElement>('.exp-svg-region');
+  if (svgRegion) {
+    svgRegion.innerHTML = graphSvg(cache.nb, state);
+    wireGraphNodes(container, state);
+  }
+  const filterRegion = container.querySelector<HTMLElement>('.exp-filterbar-region');
+  if (filterRegion) {
+    filterRegion.innerHTML = filterBar(cache.nb.neighbors, state.filters);
+    wireFilterBar(container, state);
+  }
+}
+
+/** The floating control bar over the graph (UX v2): focus search + the filter chips, on `.viz-float`.
+ *  The search region (`.exp-search`, holding the entities datalist) and the trail are their OWN sub-
+ *  containers, never touched by `repaintFiltered` — that's what keeps the input + its datalist stable
+ *  across a filter toggle (#511). `.exp-filterbar-region` holds ONLY the filter chips, which
+ *  `repaintFiltered` DOES rebuild (cheap — no datalist, no breadcrumb re-wiring needed). */
 function graphBar(entities: readonly ExploreEntityRef[], nb: ExploreNeighborhood, state: ExploreState): string {
   const opts = entities.map((e) => `<option value="${esc(e.name)}"></option>`).join('');
   return `<div class="exp-bar">
@@ -193,7 +225,7 @@ function graphBar(entities: readonly ExploreEntityRef[], nb: ExploreNeighborhood
       <datalist id="exploreEntities">${opts}</datalist>
     </div>
     ${trailBar(state)}
-    ${filterBar(nb.neighbors, state.filters)}
+    <div class="exp-filterbar-region">${filterBar(nb.neighbors, state.filters)}</div>
   </div>`;
 }
 
@@ -417,40 +449,29 @@ function filterBar(neighbors: readonly ExploreNeighbor[], f: ExploreFilters): st
 
 /** One neighbor row (EXPLORE-5/7): direction glyph + relationship label, name, kind chip, confidence
  *  (speculative-aware), an expand-in-place toggle, and — when expanded — its own links nested inline. */
-function wire(container: HTMLElement, state: ExploreState): void {
-  const focusTo = (rel: string | undefined, name: string): void => {
-    // Record the current center on the trail before moving (retrace, EXPLORE-6), then re-center.
-    const headEl = container.querySelector<HTMLElement>('.rail-head');
-    const curRel = headEl?.dataset.rel;
-    const curName = container.querySelector('.rail-name')?.textContent ?? '';
-    if (curRel && curName) state.trail.push({ rel: curRel, name: curName });
-    state.focus = rel ?? name;
-    resetViewState(state);
-    void load(container, state);
-  };
+/** Re-center the view: record the current center on the trail (retrace, EXPLORE-6), then re-focus + load.
+ *  Standalone (not a closure) so both the full `wire()` and the scoped `wireGraphNodes` (called again
+ *  after a filter-only `repaintFiltered` rebuilds the SVG region, #511) can bind the SAME logic without
+ *  either needing to thread it through as a parameter. */
+function focusTo(container: HTMLElement, state: ExploreState, rel: string | undefined, name: string): void {
+  const headEl = container.querySelector<HTMLElement>('.rail-head');
+  const curRel = headEl?.dataset.rel;
+  const curName = container.querySelector('.rail-name')?.textContent ?? '';
+  if (curRel && curName) state.trail.push({ rel: curRel, name: curName });
+  state.focus = rel ?? name;
+  resetViewState(state);
+  void load(container, state);
+}
 
-  // Search-to-focus: pick from the datalist or type a name + Enter.
-  const search = container.querySelector<HTMLInputElement>('.explore-focus');
-  const submitSearch = (): void => {
-    const v = search?.value.trim();
-    if (v) {
-      state.trail = []; // a fresh search starts a new path
-      state.focus = v;
-      resetViewState(state);
-      void load(container, state);
-    }
-  };
-  search?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') submitSearch();
-  });
-  search?.addEventListener('change', submitSearch); // datalist selection fires change
-
-  // Re-center on a clicked graph node (EXPLORE-6 navigate) — keyboard-reachable (Enter/Space).
+/** Wire the radial graph's node hover/click/keyboard handlers (EXPLORE-6 navigate). Re-runnable
+ *  standalone after `repaintFiltered` rebuilds just the `.exp-svg-region` (#511) — a filter toggle
+ *  doesn't call the full `wire()`, so this can't be a one-time-at-mount closure. */
+function wireGraphNodes(container: HTMLElement, state: ExploreState): void {
   // Hover/focus a node → light ITS incident edge gold (§3 hover-life signature): the edge shares the
   // node's data-rel, so we toggle `.exp-edge--hot` on the matching edge (they live in separate <g>s).
   for (const node of Array.from(container.querySelectorAll<SVGGElement>('.exp-node'))) {
     const rel = node.dataset.rel ?? '';
-    const go = (): void => focusTo(node.dataset.rel, node.dataset.name ?? '');
+    const go = (): void => focusTo(container, state, node.dataset.rel, node.dataset.name ?? '');
     const edge = container.querySelector<SVGPathElement>(`.exp-edge[data-rel="${CSS.escape(rel)}"]`);
     const gild = (on: boolean): void => {
       edge?.classList.toggle('exp-edge--hot', on);
@@ -467,20 +488,45 @@ function wire(container: HTMLElement, state: ExploreState): void {
     node.addEventListener('focus', () => gild(true));
     node.addEventListener('blur', () => gild(false));
   }
+}
 
-  // Filter chips (EXPLORE-9): toggle a value in its group, repaint from cache (no IPC round-trip).
+/** Wire the filter chips (EXPLORE-9): toggle a value in its group, then a SCOPED repaint (no IPC round-
+ *  trip, and — #511 — no longer a full-surface `paint()` that would wipe the search input). Re-runnable
+ *  standalone after `repaintFiltered` rebuilds `.exp-filterbar-region`. */
+function wireFilterBar(container: HTMLElement, state: ExploreState): void {
   for (const chip of Array.from(container.querySelectorAll<HTMLButtonElement>('.explore-filter-chip'))) {
     chip.addEventListener('click', () => {
       toggleFilter(state, chip.dataset.group ?? '', chip.dataset.value ?? '');
-      paint(container, state);
+      repaintFiltered(container, state);
     });
   }
   for (const clr of Array.from(container.querySelectorAll<HTMLButtonElement>('.explore-filter-clear'))) {
     clr.addEventListener('click', () => {
       state.filters = freshFilters();
-      paint(container, state);
+      repaintFiltered(container, state);
     });
   }
+}
+
+function wire(container: HTMLElement, state: ExploreState): void {
+  // Search-to-focus: pick from the datalist or type a name + Enter.
+  const search = container.querySelector<HTMLInputElement>('.explore-focus');
+  const submitSearch = (): void => {
+    const v = search?.value.trim();
+    if (v) {
+      state.trail = []; // a fresh search starts a new path
+      state.focus = v;
+      resetViewState(state);
+      void load(container, state);
+    }
+  };
+  search?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submitSearch();
+  });
+  search?.addEventListener('change', submitSearch); // datalist selection fires change
+
+  wireGraphNodes(container, state);
+  wireFilterBar(container, state);
 
   // Breadcrumb: jump back to a prior focus (truncates the trail to that point).
   for (const crumb of Array.from(container.querySelectorAll<HTMLButtonElement>('.explore-crumb[data-rel]'))) {
@@ -510,7 +556,7 @@ function wire(container: HTMLElement, state: ExploreState): void {
 
   // WS-A: a `[[Name]]` woven into a claim → re-center on that entity (resolved by name in the panel).
   for (const link of Array.from(container.querySelectorAll<HTMLButtonElement>('.explore-statement-link'))) {
-    link.addEventListener('click', () => focusTo(undefined, link.dataset.name ?? ''));
+    link.addEventListener('click', () => focusTo(container, state, undefined, link.dataset.name ?? ''));
   }
 }
 

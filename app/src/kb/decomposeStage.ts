@@ -78,7 +78,18 @@ async function readDecomposeState(sourceDir: string): Promise<{ terminal: boolea
   return { terminal, failures };
 }
 
-/** Recursively find every archived source directory (one containing a `source.md`). */
+/**
+ * Recursively find every archived source directory (one containing a `source.md`).
+ *
+ * SPEC-0061 T1 / ENG-9 (#539): deliberately NOT swapped to the shared `walkVaultFiles` — that helper
+ * collects FILES matching a name filter, while this walk collects DIRECTORIES via leaf-detection
+ * (stop descending the instant a `source.md` marker is found; the directories inside a source unit,
+ * e.g. attachments, are never visited). The two are structurally different collection shapes, not a
+ * config variant of the same one — same judgment call as `watchConnectors.ts`'s `collectWatchedFiles`
+ * staying its own bespoke walker (the shared helper's own header cites it as the richer safety-model
+ * template, not a retirement target). Symlinks are still never followed here, matching the safety
+ * uplift applied everywhere else in this consolidation.
+ */
 export async function findSourceDirs(root: string): Promise<string[]> {
   const sourcesRoot = path.join(path.resolve(root), 'sources');
   const out: string[] = [];
@@ -94,7 +105,7 @@ export async function findSourceDirs(root: string): Promise<string[]> {
       return; // a source unit is a leaf; don't descend into it
     }
     for (const e of entries) {
-      if (e.isDirectory() && !e.name.startsWith('.')) await walk(path.join(dir, e.name));
+      if (e.isDirectory() && !e.isSymbolicLink() && !e.name.startsWith('.')) await walk(path.join(dir, e.name));
     }
   }
   await walk(sourcesRoot);

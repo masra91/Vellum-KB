@@ -8,6 +8,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { applyClaimsBlock, type ClaimBacklink } from './claimDoc';
 import { checkContainedRel } from './pathContainment';
+import { walkVaultFiles } from './vaultWalk';
 
 /** Minimal claim view for repointing + regenerating the canonical node's claims block. */
 interface ClaimRef {
@@ -50,26 +51,16 @@ function parseClaim(md: string, rel: string): ClaimRef | null {
   return { rel, subject, statement, status, confidence, derivedFrom };
 }
 
-/** Every claim under `wtRoot/claims`, repo-relative. */
+/** Every claim under `wtRoot/claims`, repo-relative.
+ *  SPEC-0061 T1 / ENG-9 (#539): file collection delegates to the shared `walkVaultFiles`; parsing
+ *  (previously fused into the walk) is now a separate pass, same skip-on-null behavior. */
 async function readClaims(wtRoot: string): Promise<ClaimRef[]> {
   const out: ClaimRef[] = [];
-  async function walk(dir: string): Promise<void> {
-    let entries: import('node:fs').Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory() && !e.name.startsWith('.')) await walk(full);
-      else if (e.isFile() && e.name.endsWith('.md')) {
-        const c = parseClaim(await fs.readFile(full, 'utf8'), path.relative(wtRoot, full));
-        if (c) out.push(c);
-      }
-    }
+  const rels = await walkVaultFiles(wtRoot, 'claims', { keep: (n) => n.endsWith('.md') });
+  for (const rel of rels) {
+    const c = parseClaim(await fs.readFile(path.join(wtRoot, rel), 'utf8'), rel);
+    if (c) out.push(c);
   }
-  await walk(path.join(wtRoot, 'claims'));
   return out;
 }
 

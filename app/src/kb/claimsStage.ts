@@ -36,6 +36,7 @@ import { withConcurrentAdvance, withEphemeralWorktree, advanceOrCollide, canonic
 import { CanonicalQueueCache } from './queueCache';
 import { noopDevLog, type DevLog } from './devlog';
 import { noopTracer, noopActiveSpan, STAGE_RUN_OP, type Tracer, type ActiveSpan } from './tracing';
+import { walkVaultFiles } from './vaultWalk';
 
 const STAGE = 'claims';
 /** Default attempts before a poison entity is set aside (CLAIMS-12). */
@@ -138,25 +139,11 @@ export async function readClaimsState(sourceDir: string, entityId: string): Prom
   return { terminal, terminalReason, failures, parked, rounds, answered };
 }
 
-/** Recursively find every entity node file (`entities/.../<ULID>.md`), repo-relative. */
+/** Recursively find every entity node file (`entities/.../<ULID>.md`), repo-relative.
+ *  SPEC-0061 T1 / ENG-9 (#539): delegates to the shared `walkVaultFiles` (see recallTools.ts's swap
+ *  for the symlink-safety + deterministic-order notes, which apply identically here). */
 export async function findEntityFiles(root: string): Promise<string[]> {
-  const entitiesRoot = path.join(path.resolve(root), 'entities');
-  const out: string[] = [];
-  async function walk(dir: string): Promise<void> {
-    let entries: import('node:fs').Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory() && !e.name.startsWith('.')) await walk(full);
-      else if (e.isFile() && e.name.endsWith('.md')) out.push(path.relative(path.resolve(root), full));
-    }
-  }
-  await walk(entitiesRoot);
-  return out;
+  return walkVaultFiles(path.resolve(root), 'entities', { keep: (n) => n.endsWith('.md') });
 }
 
 interface EntityRef {

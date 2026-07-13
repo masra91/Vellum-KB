@@ -9,6 +9,7 @@ import { ulid, isUlid } from './ulid';
 import { boundedGit } from './canonicalAdvance';
 import { ensureGitIdentity } from './vault';
 import { mimeForName, rawNameFor } from './media';
+import { appendAuditEvent } from './audit';
 import type { ResearchProvenance } from './researchers';
 
 export interface TextPayload {
@@ -100,10 +101,12 @@ export async function captureToInbox(
   const captureBatch = ulid(now);
   const capturedAt = new Date(now).toISOString();
   const ids: string[] = [];
+  const dirsWritten: string[] = []; // #516 BUG-9: cleaned up if the commit below fails
 
   for (const p of payloads) {
     const id = ulid(now);
     const dir = path.join(root, 'inbox', id);
+    dirsWritten.push(dir);
     await fs.mkdir(dir, { recursive: true });
 
     let meta: CapturedMeta;
@@ -161,8 +164,20 @@ export async function captureToInbox(
   // just `inbox` keeps capture from sweeping up unrelated working state.
   const git = boundedGit(root, opts.timeoutMs); // #163: bounded — runs under the canonical-writer lock
   await ensureGitIdentity(git);
-  await git.raw('add', 'inbox');
-  await git.commit(`capture: ${payloads.length} item(s) [${surface}]`);
+  try {
+    await git.raw('add', 'inbox');
+    await git.commit(`capture: ${payloads.length} item(s) [${surface}]`);
+  } catch (err) {
+    // #516 BUG-9: the commit failed AFTER the unit files were already written to disk. Left in place,
+    // they'd sit as orphaned UNCOMMITTED litter — invisible to `readQueue` (git-blind) but silently
+    // swept up and rescue-committed by the NEXT successful capture's `git add inbox` (which stages the
+    // whole inbox tree, not just its own new files) under an unrelated commit message, while the UI
+    // already told the Principal THIS capture failed — a re-capture then mints a duplicate. The bytes
+    // are still in the user's hands at this surface (clipboard/dropped file), so removing the
+    // half-committed unit is safe: nothing is lost that the commit failure hadn't already lost.
+    for (const dir of dirsWritten) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw err;
+  }
 
   return { ids, captureBatch, committed: true };
 }
@@ -177,14 +192,27 @@ export async function readCapturedMeta(unitDir: string): Promise<CapturedMeta> {
   return obj as CapturedMeta;
 }
 
+// #516 BUG-3: a foreign drop bigger than this is REFUSED (audited `capture-refused`), never attempted —
+// `fs.readFile`ing a multi-GiB file risks Node's own Buffer-size ceiling throwing mid-read, and that
+// throw used to propagate straight out of normalizeInbox (called under `lock.run('normalize')` in
+// drainOnce with no try/catch at all): ONE oversized drop wedged the entire archive drain permanently,
+// not just that file — every subsequent poke/sweep re-hit the same throw before the queue was ever even
+// read. 2GiB comfortably clears any real capture while staying well under Node's Buffer ceiling.
+export const MAX_FOREIGN_DROP_BYTES = 2 * 1024 * 1024 * 1024;
+
 /**
  * Adopt foreign drops (SPEC-0014 ORCH-14): the inbox is a contract that also accepts loose
  * files dropped by another app / directly on disk (no ULID, no audit). Wrap each into a
  * canonical `inbox/<ULID>/` unit (`origin: external`, `surface: folder-drop`) and commit,
  * so the archivist can process them like any capture. Idempotent: canonical `<ULID>/`
  * units are left untouched. Returns the ids minted this pass.
+ *
+ * #516 BUG-3: each file is isolated (its own try/catch) — an oversized or otherwise-unreadable drop is
+ * audited + skipped, never a whole-pass throw that would wedge archiving entirely (the "ingestion halts
+ * entirely at cap=1" failure mode this bug produced). `maxBytes` defaults to {@link
+ * MAX_FOREIGN_DROP_BYTES}; injectable so tests can exercise the refusal path without a real multi-GiB file.
  */
-export async function normalizeInbox(root: string, now: number = Date.now()): Promise<string[]> {
+export async function normalizeInbox(root: string, now: number = Date.now(), maxBytes: number = MAX_FOREIGN_DROP_BYTES): Promise<string[]> {
   root = path.resolve(root);
   const inbox = path.join(root, 'inbox');
   let entries: import('node:fs').Dirent[];
@@ -200,31 +228,57 @@ export async function normalizeInbox(root: string, now: number = Date.now()): Pr
     if (e.isDirectory() && isUlid(e.name)) continue; // already a canonical unit
     if (!e.isFile()) continue; // non-canonical dirs: left for the archivist's failure path
 
-    const id = ulid(now);
-    const dir = path.join(inbox, id);
-    await fs.mkdir(dir, { recursive: true });
-    const raw = rawNameFor(e.name);
-    const data = await fs.readFile(path.join(inbox, e.name));
+    const srcPath = path.join(inbox, e.name);
+    let dir: string | undefined;
+    try {
+      const stat = await fs.stat(srcPath);
+      if (stat.size > maxBytes) {
+        await appendAuditEvent(root, {
+          actor: 'archivist',
+          subjects: {},
+          eventType: 'capture-refused',
+          payload: { name: e.name, bytes: stat.size, capBytes: maxBytes, reason: 'exceeds the per-file ingest size cap', why: 'folder-drop normalize (ORCH-14)' },
+        });
+        continue; // never attempted — the original is left untouched (still on disk, never lost)
+      }
 
-    const meta: CapturedMeta = {
-      id,
-      kind: 'file',
-      raw,
-      contentHash: sha256(data),
-      capturedAt: new Date(now).toISOString(),
-      surface: 'folder-drop',
-      captureBatch: id,
-      origin: 'external',
-      originalName: e.name,
-      mimeType: mimeForName(e.name),
-      bytes: data.byteLength,
-    };
-    // Write the canonical unit fully BEFORE removing the original — the raw bytes are
-    // never at risk (the original survives until its copy + audit are on disk).
-    await fs.writeFile(path.join(dir, raw), data);
-    await fs.writeFile(path.join(dir, 'audit.jsonl'), JSON.stringify({ action: 'captured', ...meta }) + '\n', 'utf8');
-    await fs.rm(path.join(inbox, e.name));
-    minted.push(id);
+      const id = ulid(now);
+      dir = path.join(inbox, id);
+      await fs.mkdir(dir, { recursive: true });
+      const raw = rawNameFor(e.name);
+      const data = await fs.readFile(srcPath);
+
+      const meta: CapturedMeta = {
+        id,
+        kind: 'file',
+        raw,
+        contentHash: sha256(data),
+        capturedAt: new Date(now).toISOString(),
+        surface: 'folder-drop',
+        captureBatch: id,
+        origin: 'external',
+        originalName: e.name,
+        mimeType: mimeForName(e.name),
+        bytes: data.byteLength,
+      };
+      // Write the canonical unit fully BEFORE removing the original — the raw bytes are
+      // never at risk (the original survives until its copy + audit are on disk).
+      await fs.writeFile(path.join(dir, raw), data);
+      await fs.writeFile(path.join(dir, 'audit.jsonl'), JSON.stringify({ action: 'captured', ...meta }) + '\n', 'utf8');
+      await fs.rm(srcPath);
+      minted.push(id);
+    } catch (err) {
+      // A per-file failure (unreadable, vanished mid-scan, a write hiccup, …) is isolated — the
+      // original stays exactly where it was (never partially adopted), and every OTHER file in this
+      // pass still normalizes. Clean up any half-written unit dir so it never sits as orphaned litter.
+      if (dir) await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+      await appendAuditEvent(root, {
+        actor: 'archivist',
+        subjects: {},
+        eventType: 'capture-refused',
+        payload: { name: e.name, reason: err instanceof Error ? err.message : String(err), why: 'folder-drop normalize (ORCH-14)' },
+      }).catch(() => {}); // audit is best-effort transparency; never let it mask the original skip
+    }
   }
 
   if (minted.length > 0) {

@@ -18,6 +18,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parseEntityNode } from './connectDoc';
 import { parseClaimMd, makeReadOnlyTools } from './recallTools';
+import { walkVaultFiles } from './vaultWalk';
 import type { RecallTools, EntityHit, ClaimHit, LinkHit, GrepHit } from './recall';
 
 /** A precomputed, serializable snapshot of the evergreen knowledge graph (STATE-2). Carries exactly what
@@ -161,24 +162,12 @@ export async function computeGraphProjection(root: string, now: () => string = (
 }
 
 /** Recursively list `.md` rel-paths under `root/dir` (skips dotdirs; a missing dir → []). Mirrors the
- *  private `walkFiles` in recallTools so the backlink-source set matches the live scan exactly. */
+ *  private `walkFiles` in recallTools so the backlink-source set matches the live scan exactly.
+ *  SPEC-0061 T1 / ENG-9 (#539): delegates to the shared `walkVaultFiles` (see recallTools.ts's own
+ *  swap for the two behavior-improvement notes — symlink-safe, deterministic order — that apply
+ *  identically here). */
 async function walkMdFiles(root: string, dir: string): Promise<string[]> {
-  const out: string[] = [];
-  async function rec(d: string): Promise<void> {
-    let entries: import('node:fs').Dirent[];
-    try {
-      entries = await fs.readdir(d, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      const full = path.join(d, e.name);
-      if (e.isDirectory() && !e.name.startsWith('.')) await rec(full);
-      else if (e.isFile() && e.name.endsWith('.md')) out.push(path.relative(root, full));
-    }
-  }
-  await rec(path.join(root, dir));
-  return out;
+  return walkVaultFiles(root, dir, { keep: (n) => n.endsWith('.md') });
 }
 
 /** The same generous entity cap the live read surface uses (recallTools/explorePanel ENTITY_SCAN_LIMIT). */
