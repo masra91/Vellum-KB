@@ -116,8 +116,9 @@ export async function ingestWatchedFile(
     text !== null
       ? captureToInbox(root, surface, [{ kind: 'text', text: renderWatchSourceBody(c, name, fetchedAt, { textContent: text, ...(priorSourceId ? { priorSourceId } : {}) }) }], stampMs, opts)
       : captureToInbox(root, surface, [{ kind: 'file', name, data }], stampMs, opts);
-  // #517: serialize ONLY this commit against other writers on the same git index.
-  const out = lock ? await lock.run(doCapture, surface) : await doCapture();
+  // #517: serialize ONLY this commit against other writers on the same git index. #507 item 4:
+  // priority — a watch-ingest capture must never queue behind Connect's bulk sweep tail.
+  const out = lock ? await lock.run(doCapture, surface, { priority: true }) : await doCapture();
   return out.ids[0];
 }
 

@@ -162,8 +162,9 @@ export async function runIntakeConnector(root: string, c: IntakeConnectorConfig,
           scope: c.scope,
           sensitivity: c.sensitivity,
         });
-      // #517: serialize ONLY this commit against other writers on the same git index.
-      const out = deps.lock ? await deps.lock.run(doCapture, `intake:${c.id}`) : await doCapture();
+      // #517: serialize ONLY this commit against other writers on the same git index. #507 item 4:
+      // priority — an intake-ingest capture must never queue behind Connect's bulk sweep tail.
+      const out = deps.lock ? await deps.lock.run(doCapture, `intake:${c.id}`, { priority: true }) : await doCapture();
       sourceIds.push(...out.ids);
       ingestedKeys.push(intakeDedupKey(it));
       seen.add(intakeDedupKey(it));

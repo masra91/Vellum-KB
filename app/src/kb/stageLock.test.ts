@@ -191,3 +191,138 @@ describe('Mutex (canonical writer)', () => {
     expect(warns.some((w) => w.event === 'lock.stuck' && w.fields?.holder === 'outer:reentrant')).toBe(true);
   });
 });
+
+// #507 item 4: a priority lane (mirrors copilotConcurrency's Semaphore priorityWaiters/pump()) so a
+// capture-shaped write is never stuck behind a long queue of background sections (Connect's
+// link/orphan/dedup sweep, PERF-E3) — without ever running two sections concurrently.
+describe('Mutex priority lane (#507 item 4)', () => {
+  it('a priority section queued behind N background sections runs BEFORE all of them', async () => {
+    const lock = new Mutex();
+    const order: string[] = [];
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((r) => (releaseFirst = r));
+
+    // Occupy the lock so everything below queues (never runs) until we release it.
+    const first = lock.run(async () => {
+      order.push('first');
+      await firstGate;
+    }, 'first');
+    await tick(); // let `first` acquire
+
+    // Queue 3 background sections, THEN a priority one — priority must still run before all 3.
+    const bg1 = lock.run(async () => { order.push('bg1'); }, 'bg1');
+    const bg2 = lock.run(async () => { order.push('bg2'); }, 'bg2');
+    const bg3 = lock.run(async () => { order.push('bg3'); }, 'bg3');
+    const prio = lock.run(async () => { order.push('prio'); }, 'prio', { priority: true });
+
+    releaseFirst();
+    await Promise.all([first, bg1, bg2, bg3, prio]);
+    expect(order).toEqual(['first', 'prio', 'bg1', 'bg2', 'bg3']); // priority jumped the background queue
+  });
+
+  it('multiple priority sections still serialize FIFO among themselves', async () => {
+    const lock = new Mutex();
+    const order: string[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const holder = lock.run(async () => { await gate; }, 'holder');
+    await tick();
+
+    const p1 = lock.run(async () => { order.push('p1'); }, 'p1', { priority: true });
+    const p2 = lock.run(async () => { order.push('p2'); }, 'p2', { priority: true });
+    const p3 = lock.run(async () => { order.push('p3'); }, 'p3', { priority: true });
+
+    release();
+    await Promise.all([holder, p1, p2, p3]);
+    expect(order).toEqual(['p1', 'p2', 'p3']); // FIFO within the priority lane, no reordering
+  });
+
+  it('priority NEVER preempts an already-RUNNING section — still exactly one section active at a time', async () => {
+    const lock = new Mutex();
+    let bgRunning = false;
+    let overlapped = false;
+    let releaseBg: () => void = () => {};
+    const bgGate = new Promise<void>((r) => (releaseBg = r));
+
+    const bg = lock.run(async () => {
+      bgRunning = true;
+      await bgGate;
+      bgRunning = false;
+    }, 'bg');
+    await tick(); // let `bg` acquire and start running
+
+    const prio = lock.run(async () => {
+      if (bgRunning) overlapped = true; // would mean two sections ran concurrently — must never happen
+    }, 'prio', { priority: true });
+
+    await tick(); // give the priority section every chance to (wrongly) start early
+    expect(lock.state().holder).toBe('bg'); // bg is still the one holding the lock
+    releaseBg();
+    await Promise.all([bg, prio]);
+    expect(overlapped).toBe(false);
+  });
+
+  it('a priority capture completes promptly even with a long queue of background sections ahead of it (the AC)', async () => {
+    const lock = new Mutex();
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((r) => (releaseFirst = r));
+    const first = lock.run(async () => { await firstGate; }, 'connect:sweep-start');
+
+    await tick();
+    // Simulate a long queue of background (connect-sweep-shaped) sections already waiting. Generous
+    // per-section duration (100ms ⇒ ≥1s to drain all 10) so the race margin stays robust under
+    // full-suite parallel load (a shared-machine timing-flake source, not a correctness one).
+    const backgrounds = Array.from({ length: 10 }, (_, i) => lock.run(async () => sleep(100), `connect:link-${i}`));
+
+    const startedAt = Date.now();
+    const capture = lock.run(async () => 'captured', 'capture', { priority: true });
+
+    releaseFirst();
+    const result = await Promise.race([capture, sleep(700).then(() => 'timed-out' as const)]);
+    expect(result).toBe('captured'); // resolved well before the 10 background sections could have drained
+    expect(Date.now() - startedAt).toBeLessThan(700); // generous secondary check — well under the ~1s the 10 backgrounds alone would take
+    await first;
+    await Promise.all(backgrounds); // drain cleanly (no leaked timers/state)
+  });
+
+  it('state().waiters counts BOTH lanes combined', async () => {
+    const lock = new Mutex();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const holder = lock.run(async () => { await gate; }, 'holder');
+    await tick();
+
+    const bg = lock.run(async () => {}, 'bg');
+    const p1 = lock.run(async () => {}, 'p1', { priority: true });
+    const p2 = lock.run(async () => {}, 'p2', { priority: true });
+    await tick();
+
+    expect(lock.state().waiters).toBe(3); // 1 background + 2 priority, regardless of lane
+    release();
+    await Promise.all([holder, bg, p1, p2]);
+    expect(lock.state()).toMatchObject({ held: false, waiters: 0 });
+  });
+
+  it('sectionTimeoutMs still rejects + advances the queue for a priority section (the #515 backstop applies to both lanes)', async () => {
+    const lock = new Mutex({ sectionTimeoutMs: 20 });
+    const neverSettles = new Promise<void>(() => {});
+    const wedged = lock.run(async () => { await neverSettles; }, 'wedged', { priority: true });
+    await expect(wedged).rejects.toThrow(/timed out after 20ms/);
+    const after = await Promise.race([lock.run(async () => 'ran', 'after'), sleep(200).then(() => 'lock-still-wedged' as const)]);
+    expect(after).toBe('ran'); // the queue advanced — a later section (even non-priority) isn't stuck behind it
+  });
+
+  it('an unlabeled/no-options run() still defaults to the background lane (backward-compatible)', async () => {
+    const lock = new Mutex();
+    const order: string[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const holder = lock.run(async () => { await gate; });
+    await tick();
+    const bg = lock.run(async () => { order.push('bg'); }); // no label, no opts — plain call, matches every pre-#507 call site
+    const prio = lock.run(async () => { order.push('prio'); }, 'prio', { priority: true });
+    release();
+    await Promise.all([holder, bg, prio]);
+    expect(order).toEqual(['prio', 'bg']); // the plain call defaulted to background, priority still jumped it
+  });
+});
