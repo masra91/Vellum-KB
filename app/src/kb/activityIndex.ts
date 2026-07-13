@@ -18,8 +18,8 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { boundedGit } from './canonicalAdvance';
 import { normalizeAuditLine, CONTROL_AUDIT_REL, type AuditEvent, type AuditActor, type NormalizeContext } from './audit';
+import { fastHeadSha } from './gitHeadFast';
 
 /** Bump when the cached shape changes so a stale cache from an older build is discarded. */
 export const ACTIVITY_INDEX_VERSION = 1;
@@ -141,14 +141,10 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
-/** Parse + normalize one audit file's lines into canonical events (skipping malformed/foreign). */
-async function readAuditFile(f: AuditFile): Promise<AuditEvent[]> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(f.abs, 'utf8');
-  } catch {
-    return [];
-  }
+/** Parse + normalize a chunk of raw audit lines into canonical events (skipping malformed/foreign).
+ *  `lineOffset` is the physical line number the chunk STARTS at (0 for a full-file read, or however
+ *  many raw lines the file's cached prefix already consumed for an incremental delta read). */
+function parseAuditLines(raw: string, f: AuditFile, lineOffset: number): AuditEvent[] {
   const out: AuditEvent[] = [];
   const lines = raw.split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -160,20 +156,93 @@ async function readAuditFile(f: AuditFile): Promise<AuditEvent[]> {
     } catch {
       continue; // malformed line — never an event
     }
-    const ctx: NormalizeContext = { file: f.rel, line: i, sourceId: f.sourceId, jobId: f.jobId };
+    const ctx: NormalizeContext = { file: f.rel, line: lineOffset + i, sourceId: f.sourceId, jobId: f.jobId };
     const ev = normalizeAuditLine(parsed, ctx);
     if (ev) out.push(ev);
   }
   return out;
 }
 
+/** #508 item 3: audit files are APPEND-ONLY by construction (every writer in this codebase only ever
+ *  `fs.appendFile`s a new JSONL line) — so re-reading a file's full content on every activity-index
+ *  rebuild is wasted work once we already have its earlier bytes parsed. This in-process cache tracks,
+ *  per (root, file rel-path), how many bytes + raw lines were already consumed and the events already
+ *  parsed from them; a later read of the same file re-reads ONLY the bytes appended since. Keyed by
+ *  root so multiple vaults (tests) never collide; never evicted (bounded by "one entry per audit file
+ *  this process has ever read" — one vault's worth in production). */
+interface FileReadCacheEntry {
+  size: number; // bytes of `abs` already consumed
+  rawLines: number; // raw (pre-filter) lines already consumed — keeps provenance.line numbering accurate
+  events: AuditEvent[]; // events parsed from those bytes
+}
+const fileReadCache = new Map<string, Map<string, FileReadCacheEntry>>();
+
+/** Read the bytes of `abs` in `[fromByte, toByte)`. A write mid-line at the tail is common (a torn
+ *  read of a line still being appended) — only bytes up to the LAST complete `\n` are consumed; the
+ *  torn remainder is left for the next read (never silently dropped). */
+async function readFileByteRange(abs: string, fromByte: number, toByte: number): Promise<{ text: string; newSize: number }> {
+  if (toByte <= fromByte) return { text: '', newSize: fromByte };
+  const fh = await fs.open(abs, 'r');
+  try {
+    const len = toByte - fromByte;
+    const buf = Buffer.alloc(len);
+    const { bytesRead } = await fh.read(buf, 0, len, fromByte);
+    const chunk = buf.toString('utf8', 0, bytesRead);
+    const lastNl = chunk.lastIndexOf('\n');
+    if (lastNl === -1) return { text: '', newSize: fromByte }; // no complete line yet
+    const complete = chunk.slice(0, lastNl + 1);
+    return { text: complete, newSize: fromByte + Buffer.byteLength(complete, 'utf8') };
+  } finally {
+    await fh.close();
+  }
+}
+
+/** Read one audit file through the incremental cache: a byte-identical file (common on an idle poll)
+ *  costs a single `fs.stat`, zero content reads; a grown file re-reads only its new bytes. New files
+ *  and shrunk/replaced files (not the append-only steady state) fall through to a full re-read from
+ *  byte 0 — but STILL via {@link readFileByteRange}'s torn-tail guard, so a full read that happens to
+ *  land mid-write doesn't advance the cursor past bytes it never actually parsed (losing that line
+ *  forever once the cursor moves past it — the risk a naive `size = fs.stat().size` would create). */
+async function readAuditFileIncremental(root: string, f: AuditFile): Promise<AuditEvent[]> {
+  let rootCache = fileReadCache.get(root);
+  if (!rootCache) {
+    rootCache = new Map();
+    fileReadCache.set(root, rootCache);
+  }
+  const prior = rootCache.get(f.rel);
+  let fileSize: number;
+  try {
+    fileSize = (await fs.stat(f.abs)).size;
+  } catch {
+    rootCache.delete(f.rel); // vanished — drop any stale entry
+    return [];
+  }
+  if (prior && prior.size === fileSize) return prior.events; // unchanged — zero content read
+  const growing = prior !== undefined && fileSize >= prior.size;
+  const fromByte = growing ? prior.size : 0; // shrink/replace/new-file → re-read from scratch
+  const basePrior = growing ? prior : undefined;
+  const { text, newSize } = await readFileByteRange(f.abs, fromByte, fileSize);
+  if (text.length === 0) {
+    // No NEW complete line since last time (a torn tail, mid-write) — nothing to update yet.
+    if (basePrior) return basePrior.events;
+    rootCache.set(f.rel, { size: fromByte, rawLines: 0, events: [] });
+    return [];
+  }
+  const deltaLines = text.split('\n').length;
+  const deltaEvents = parseAuditLines(text, f, basePrior?.rawLines ?? 0);
+  const events = basePrior ? [...basePrior.events, ...deltaEvents] : deltaEvents;
+  rootCache.set(f.rel, { size: newSize, rawLines: (basePrior?.rawLines ?? 0) + deltaLines, events });
+  return events;
+}
+
 /** Read + normalize EVERY conforming audit event in the vault, newest-first. Unbounded — callers
- *  that want the bounded feed use {@link buildActivityIndex}; lineage uses this directly. */
+ *  that want the bounded feed use {@link buildActivityIndex}; lineage uses this directly. Each file is
+ *  read through the incremental cache (#508 item 3) — an unchanged file costs one `fs.stat`. */
 export async function readAllAuditEvents(root: string): Promise<AuditEvent[]> {
   root = path.resolve(root);
   const files = await listAuditFiles(root);
   const all: AuditEvent[] = [];
-  for (const f of files) all.push(...(await readAuditFile(f)));
+  for (const f of files) all.push(...(await readAuditFileIncremental(root, f)));
   all.sort(byTsDescending);
   return all;
 }
@@ -186,10 +255,12 @@ function byTsDescending(a: AuditEvent, b: AuditEvent): number {
 }
 
 /** Read the current git HEAD of `root` for the freshness key; null when not a git repo / no commits.
- *  #515: bounded — an off-lock, unbounded read against a wedged repo would silently hang the feed. */
+ *  Spawn-free (#506/#508's `fastHeadSha`) with a git-spawn fallback on any unrecognized on-disk shape —
+ *  and that fallback (`canonicalHead`) is itself now bounded (#515), so an off-lock read against a
+ *  wedged repo still can't silently hang the feed even on the fallback path. */
 async function readHead(root: string): Promise<string | null> {
   try {
-    return (await boundedGit(root).revparse(['HEAD'])).trim();
+    return await fastHeadSha(root);
   } catch {
     return null;
   }

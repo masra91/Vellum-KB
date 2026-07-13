@@ -12,6 +12,7 @@
 // ref-advance serialize through it.
 import { promises as fs, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { createStatusSnapshotStore, type StatusSnapshotStore } from './statusSnapshot';
 import { createProjectionStore, type ProjectionStore, type Projection } from './projectionStore';
 import { computeGraphProjection, type GraphProjection } from '../kb/graphProjection';
@@ -834,34 +835,63 @@ export function refreshReviewProjection(): Promise<void> {
 const GRAPH_REFRESH_MS = 5000; // richer compute than status/reviews → a calmer backstop cadence
 
 /** Where the last-known-good graph projection is persisted (gitignored cache; never promoted). */
-function graphProjectionPath(vaultPath: string): string {
+export function graphProjectionPath(vaultPath: string): string {
   return path.join(vaultPath, '.kb', 'cache', 'graph-projection.json');
 }
 
-/** Load the persisted last-known-good graph projection (sync — a one-time read at activation, so launch
- *  paints Explore/Health instantly). Any error (missing/corrupt) → null. */
-function loadGraphProjection(vaultPath: string): GraphProjection | null {
+/** Load the persisted last-known-good graph projection. Async (#508 item 4 — was a `readFileSync` at
+ *  vault-activation time; on a large vault the persisted JSON is big enough that a synchronous read
+ *  briefly blocked the main thread on launch). `projectionStore.start()` races this against the first
+ *  live refresh and only uses it if the live one hasn't already landed, so the async hop costs nothing
+ *  observable. Any error (missing/corrupt) → null. Exported for direct testing (pure given `vaultPath`). */
+export async function loadGraphProjection(vaultPath: string): Promise<GraphProjection | null> {
   try {
-    return JSON.parse(readFileSync(graphProjectionPath(vaultPath), 'utf8')) as GraphProjection;
+    return JSON.parse(await fs.readFile(graphProjectionPath(vaultPath), 'utf8')) as GraphProjection;
   } catch {
     return null;
   }
 }
 
-/** Persist `graph` as the new last-known-good (best-effort, off the render path). */
-async function saveGraphProjection(vaultPath: string, graph: GraphProjection): Promise<void> {
+// #508 item 4: `entityMd`/`sourceMd` (every entity's + cited source's full raw markdown) are the
+// dominant byte-size of a GraphProjection — stringifying them on every 5s refresh was a synchronous
+// main-thread block (50ms-1s+) that stalled ALL IPC, and rewriting that much JSON to disk repeatedly
+// is real write amplification. The IN-MEMORY graph (served by graphProjectionForActive) keeps full
+// bodies — the render path's "zero fs" guarantee (readNode/readSource/linkTraversal) is unaffected,
+// only the ON-DISK snapshot shrinks. A cold-start load briefly serves body-less nodes (already-`stale`
+// by construction) until the first live refresh fills them in — seconds, not user-visible.
+export function stripBodiesForPersist(graph: GraphProjection): GraphProjection {
+  return { ...graph, entityMd: {}, sourceMd: {} };
+}
+
+/** The sha256 of the last-WRITTEN (body-stripped, `builtAt`-excluded) persisted graph, per vault path
+ *  — the content-hash gate below. Keyed per-path (like `activityIndex.ts`'s file-read cache) rather than
+ *  a bare global so two different vaults' content can never collide/mask each other. */
+const graphPersistedHash = new Map<string, string>();
+
+/** Persist `graph` as the new last-known-good (best-effort, off the render path) — but ONLY when its
+ *  content actually changed (#508 item 4: "persist on content-hash change only"). A canonical advance
+ *  that HEAD-gating (#505) can't skip — e.g. compose rewriting an entity's PROSE body — still forces a
+ *  recompute, but the body-stripped persisted shape is often byte-identical to what's already on disk
+ *  (bodies are exactly what's stripped), so the write itself would be pure waste without this gate.
+ *  Exported for direct testing (pure given `vaultPath`+`graph`). */
+export async function saveGraphProjection(vaultPath: string, graph: GraphProjection): Promise<void> {
+  const stripped = stripBodiesForPersist(graph);
+  // builtAt always differs — exclude it from the hash (JSON.stringify drops an `undefined` value entirely).
+  const hash = createHash('sha256').update(JSON.stringify({ ...stripped, builtAt: undefined })).digest('hex');
+  if (graphPersistedHash.get(vaultPath) === hash) return;
+  graphPersistedHash.set(vaultPath, hash);
   const file = graphProjectionPath(vaultPath);
   await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify(graph), 'utf8');
+  await fs.writeFile(file, JSON.stringify(stripped), 'utf8');
 }
 
 // #505: the interval tick used to run the full O(N+M+S) `computeGraphProjection` walk every 5s
-// regardless of whether anything changed. HEAD-gate it: a spawn-free sha read (`fastHeadSha`) costs a
-// couple of small fs reads, so an idle vault's 5s tick is nearly free instead of walking every entity/
-// claim/source file for nothing. `lastHeadSha`/`lastResult` are this closure's memo, reset per vault
-// activation (module-level `active` swap) since they're only ever touched from here.
-let graphMemoHead: string | null = null;
-let graphMemoResult: GraphProjection | null = null;
+// regardless of whether anything changed. HEAD-gate it with the SAME well-tested `CanonicalQueueCache`
+// primitive the stage drain loops already use (queueCache.test.ts covers hit/miss/HEAD-unreadable
+// directly) — a spawn-free sha read (`fastHeadSha`) costs a couple of small fs reads, so an idle vault's
+// 5s tick is nearly free instead of walking every entity/claim/source file for nothing. One instance,
+// reset per vault activation (module-level `active` swap) since it's only ever touched from here.
+const graphMemo = new CanonicalQueueCache<GraphProjection>(fastHeadSha);
 
 /** The graph-projection compute (background cadence): one precomputed-backlink pass over the EVERGREEN
  *  graph at the active vault root (STATE-7 — the settled main tree, like the rest of Explore/recall,
@@ -870,16 +900,11 @@ let graphMemoResult: GraphProjection | null = null;
  *  skips the restamp/save/push too — a true no-op tick, not just a skipped walk). */
 async function computeGraph(): Promise<GraphProjection | null> {
   if (!active) {
-    graphMemoHead = null;
-    graphMemoResult = null;
+    graphMemo.invalidate();
     return null;
   }
-  const head = await fastHeadSha(active.vaultPath).catch((): null => null);
-  if (head !== null && head === graphMemoHead && graphMemoResult !== null) return graphMemoResult;
-  const result = await computeGraphProjection(active.vaultPath);
-  graphMemoHead = head;
-  graphMemoResult = result;
-  return result;
+  const vaultPath = active.vaultPath;
+  return graphMemo.read(vaultPath, () => computeGraphProjection(vaultPath));
 }
 
 /** The maintained graph projection (SPEC-0058 STATE-2). Started/stopped with the stage sweeps. */

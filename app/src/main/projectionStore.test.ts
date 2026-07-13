@@ -166,4 +166,82 @@ describe('createProjectionStore (SHELL-12 spine)', () => {
     expect(() => store.start()).not.toThrow();
     expect(store.current()).toBeNull(); // a failed seed leaves it empty, then the live refresh fills it
   });
+
+  // #508 item 4: `load` may now return a Promise (a large persisted payload's disk read shouldn't
+  // block the vault-activation path). `start()` itself must stay synchronous regardless.
+  it('start() stays synchronous even when load() returns a Promise', () => {
+    const store = createProjectionStore<string>({
+      compute: vi.fn().mockResolvedValue('live'),
+      intervalMs: 1000,
+      load: () => Promise.resolve('persisted'),
+      scheduler: fakeScheduler().sched,
+    });
+    expect(() => store.start()).not.toThrow(); // start() returns before the load Promise ever settles
+  });
+
+  it('an async load() seeds the stale snapshot once it resolves, if the live refresh has not already landed', async () => {
+    let resolveLoad!: (v: string | null) => void;
+    const loadPromise = new Promise<string | null>((r) => {
+      resolveLoad = r;
+    });
+    let resolveCompute!: (v: string) => void;
+    const computePromise = new Promise<string>((r) => {
+      resolveCompute = r;
+    });
+    const store = createProjectionStore<string>({
+      compute: () => computePromise,
+      intervalMs: 1000,
+      load: () => loadPromise,
+      now: fakeClock(),
+      scheduler: fakeScheduler().sched,
+    });
+    store.start();
+    expect(store.current()).toBeNull(); // neither the async load nor the live compute has resolved yet
+
+    resolveLoad('persisted'); // the async load resolves first — the live compute is still pending
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.current()).toMatchObject({ data: 'persisted', stale: true });
+
+    resolveCompute('live'); // now the live refresh lands and takes over
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.current()).toMatchObject({ data: 'live', stale: false });
+  });
+
+  it('a live refresh that lands FIRST is never overwritten by a late-resolving async load', async () => {
+    let resolveLoad!: (v: string | null) => void;
+    const loadPromise = new Promise<string | null>((r) => {
+      resolveLoad = r;
+    });
+    const store = createProjectionStore<string>({
+      compute: vi.fn().mockResolvedValue('live'),
+      intervalMs: 1000,
+      load: () => loadPromise,
+      now: fakeClock(),
+      scheduler: fakeScheduler().sched,
+    });
+    store.start();
+    await store.refreshNow(); // the live refresh completes (coalesces onto start()'s own kick-off)
+    expect(store.current()).toMatchObject({ data: 'live', stale: false });
+
+    resolveLoad('stale-persisted'); // resolves LATE — must be a no-op now
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.current()).toMatchObject({ data: 'live', stale: false }); // unchanged
+  });
+
+  it('a rejected async load() never throws or breaks the store', async () => {
+    const store = createProjectionStore<string>({
+      compute: vi.fn().mockResolvedValue('live'),
+      intervalMs: 1000,
+      load: () => Promise.reject(new Error('disk read failed')),
+      now: fakeClock(),
+      scheduler: fakeScheduler().sched,
+    });
+    expect(() => store.start()).not.toThrow();
+    await store.refreshNow();
+    expect(store.current()).toMatchObject({ data: 'live' });
+  });
 });

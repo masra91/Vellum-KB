@@ -81,6 +81,10 @@ export interface LeakOptions {
   minSamples?: number;
   /** Minimum total RSS growth across the window to count as leaking, in MB (default 50). Guards noise. */
   minGrowthMb?: number;
+  /** Minimum sustained least-squares slope to count as leaking, MB/min (default `minGrowthMb / 30` —
+   *  the pace `minGrowthMb` over the sampler's nominal 30-sample default window works out to). A brief
+   *  spike that then plateaus has a shallow regression slope even if its raw first↔last delta is large. */
+  minSlopeMbPerMin?: number;
 }
 
 export interface MemTrend {
@@ -98,6 +102,22 @@ export interface MemTrend {
   leaking: boolean;
 }
 
+/** Least-squares slope of `ys` against `xs` (same length), robust to individual noisy points — a
+ *  handful of GC-timing dips/spikes don't swing it the way a bare first↔last delta or a step-by-step
+ *  check would. Returns 0 for a degenerate window (all `xs` identical). */
+function leastSquaresSlope(xs: number[], ys: number[]): number {
+  const n = xs.length;
+  const xBar = xs.reduce((a, b) => a + b, 0) / n;
+  const yBar = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (xs[i] - xBar) * (ys[i] - yBar);
+    den += (xs[i] - xBar) ** 2;
+  }
+  return den === 0 ? 0 : num / den;
+}
+
 /** Compute the trend + leak verdict over a window of samples (pure). Null if too few samples. */
 export function detectLeak(samples: MemorySample[], opts: LeakOptions = {}): MemTrend | null {
   const minSamples = opts.minSamples ?? 6;
@@ -110,17 +130,18 @@ export function detectLeak(samples: MemorySample[], opts: LeakOptions = {}): Mem
   const heapDeltaMb = (last.heapUsed - first.heapUsed) / MB;
   const spanMs = Math.max(0, Date.parse(last.ts) - Date.parse(first.ts));
   const windowMin = spanMs / 60_000;
-  const rssSlopeMbPerMin = windowMin > 0 ? rssDeltaMb / windowMin : 0;
 
-  // Monotonic = strictly increasing RSS at EVERY step (no plateau across the window, per OBS-21).
-  let monotonic = true;
-  for (let i = 1; i < samples.length; i++) {
-    if (samples[i].rss <= samples[i - 1].rss) {
-      monotonic = false;
-      break;
-    }
-  }
-  const leaking = monotonic && rssDeltaMb >= minGrowthMb;
+  // #508 item 4: OBS-21's original verdict required STRICTLY increasing RSS at every single step — one
+  // GC-timing dip/plateau anywhere in the window flipped a real, sustained leak to "not leaking" and
+  // made the sampler blind to it. A least-squares slope over the WHOLE window survives that noise: a
+  // genuine leak keeps a positive slope even with a dip or two; a one-off spike that then plateaus
+  // regresses toward a shallow/flat slope instead of reading as sustained growth.
+  const t0 = Date.parse(first.ts);
+  const xsMin = samples.map((s) => (Date.parse(s.ts) - t0) / 60_000);
+  const rssValuesMb = samples.map((s) => s.rss / MB);
+  const rssSlopeMbPerMin = leastSquaresSlope(xsMin, rssValuesMb);
+  const minSlopeMbPerMin = opts.minSlopeMbPerMin ?? minGrowthMb / 30;
+  const leaking = rssDeltaMb >= minGrowthMb && rssSlopeMbPerMin >= minSlopeMbPerMin;
 
   return {
     samples: samples.length,
