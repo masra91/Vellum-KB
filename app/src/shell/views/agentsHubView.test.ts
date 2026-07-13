@@ -38,7 +38,10 @@ afterEach(() => {
 async function mount(): Promise<HTMLElement> {
   const c = document.createElement('div');
   document.body.appendChild(c);
-  await mountAgentsHub(c);
+  // #510: mountAgentsHub() now only builds the frame + mounts each section, returning an aggregated
+  // lifecycle handle; show() (which the shell calls right after mount) is what triggers each section's
+  // own load — mirror that here.
+  mountAgentsHub(c).show?.();
   await flush();
   return c;
 }

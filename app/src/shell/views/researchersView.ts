@@ -30,6 +30,7 @@ import {
 import { EGRESS_TIERS, MIN_TOOL_CALLS, MAX_TOOL_CALLS, MIN_SESSION_TIMEOUT_MS, MAX_SESSION_TIMEOUT_MS, MIN_MAX_DEPTH, MAX_MAX_DEPTH, MIN_ORIENT_BUDGET, MAX_ORIENT_BUDGET } from '../../kb/researchers';
 import { navigateTo } from '../nav';
 import { VIEW_REVIEWS } from '../views';
+import type { ViewHandle } from '../viewLifecycle';
 import type { EgressTier } from '../../kb/researchers';
 import type { WorkIqStatus } from '../../kb/types'; // WORKIQ-UI contract — defined by DEV-3's WORKIQ-FIX
 import type { WorkIqCardModel, WorkIqCardPresentation } from '../../kb/researchersPanel';
@@ -54,9 +55,9 @@ const templateDesc = (t: ResearcherView['template']): string => TEMPLATE_BY_KEY.
 // header/naming, so this section drops its own page-title h1 and renders the field desk directly.
 const HEADER = `<p class="rdesk-sub viz-body">Agents you brief and dispatch outside your library — they bring back cited sources. Clearance shows how far each one's data can travel.</p>`;
 
-export async function mountResearchers(container: HTMLElement): Promise<void> {
+export function mountResearchers(container: HTMLElement): ViewHandle {
   paintSkeleton(container, HEADER, 'cards');
-  await render(container);
+  return { show: () => void render(container) }; // #510: re-read on every activation (no timers here)
 }
 
 async function render(container: HTMLElement): Promise<void> {

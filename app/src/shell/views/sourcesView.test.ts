@@ -57,7 +57,9 @@ beforeEach(() => {
 async function mount(): Promise<HTMLElement> {
   const c = document.createElement('div');
   document.body.appendChild(c);
-  await mountSources(c);
+  // #510: mountSources() now only builds the skeleton + returns lifecycle hooks; show() (which the
+  // shell calls right after mount) is what actually loads + paints — mirror that here.
+  mountSources(c).show?.();
   await flush();
   return c;
 }
