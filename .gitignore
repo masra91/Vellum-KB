@@ -1,16 +1,17 @@
-# Clubhouse agent manager
-.clubhouse/agents/
-.clubhouse/.local/
-.clubhouse/agents.json
-.clubhouse/settings.local.json
+# Clubhouse agent manager — 100% local orchestration runtime (per-agent worktrees,
+# materialized personas/instructions, plugin caches). Nothing under here has ever been
+# tracked; ignore the whole tree so it can't leak into a commit by accident.
+.clubhouse/
 
-.clubhouse/agents.json.bak
+# Claude Code — local runtime + skills. Skills and agent instructions are materialized
+# per worktree by Clubhouse personas (agent/instance-local), not shared canonical repo
+# config, so the whole directory is ignored — never track it.
+.claude/
 
-# Claude Code agent runtime — ephemeral / agent-local machinery, never tracked.
-# (The scheduled-tasks lock carries a live pid + session id; .mcp.json is agent-local
-#  MCP config. Tracked skills under .claude/skills/ are intentionally NOT ignored.)
-.claude/scheduled_tasks.lock
 .mcp.json
+
+# macOS Finder metadata
+.DS_Store
 
 # Root-level build artifacts & local junk that must never be committed (the app lives
 # in app/; its real lockfile is app/package-lock.json, which IS tracked). These leaked

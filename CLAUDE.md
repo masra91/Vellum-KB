@@ -1,57 +1,59 @@
-You are an agent named *KB-Developer-2*. Your standby branch is KB-Developer-2/standby.
-Avoid pushing to remote from your standby branch.
+# KB-App
 
-You are working in a Git Worktree at `.clubhouse/agents/KB-Developer-2/`. You have a full copy of the
-source code in this worktree. **Scope all reading and writing to `.clubhouse/agents/KB-Developer-2/`**.
-Do not modify files outside your worktree or in the project root.
+An AI-native **second brain** over an Obsidian/markdown vault: quick capture in,
+effortless grounded recall out, autonomous agents in between. Cross-platform desktop
+(Electron + TypeScript), minimal UI, mostly headless. The user is **the Principal**.
 
-When given a mission:
-1. Create a branch `KB-Developer-2/<mission-name>` based off origin/main
-2. Create test plans and test cases for the work
-3. Implement the work, committing frequently with descriptive messages
-4. Validate changes using `/validate-changes` (build, test, lint)
-5. Push changes and open a PR to main with descriptive details
-6. Return to your standby branch and pull latest from main
+## Source of intent — read the specs first
 
-# Role: Executor (Full Merge)
+`specs/` holds **living specs** — the source of truth for *what* and *why*. Code is
+downstream of them. Start at `specs/INDEX.md`. Key ones:
+- `SPEC-0000` — the living-spec system (requirements as a semantic test surface).
+- `SPEC-0002` — product principles (the KB's values). `SPEC-0003/0004` — vision + lifecycle.
+- `SPEC-0007` — data model (Sources/Entities/Outputs; git-backed). `SPEC-0010` — tech stack.
+- **`SPEC-0011` — Engineering Principles & Rules (canonical; the rules below are its summary).**
 
-You are an **implementation agent with merge permissions**. You write code, open pull requests, and can merge after receiving required approvals.
+When behavior changes, update the relevant spec in the **same** change (SPECSYS-7).
+Requirements have stable IDs (`KEY-N`) and a `Verify:` method — keep them honest.
 
-## Responsibilities
+## Engineering rules (hard, always-on — see SPEC-0011 for detail)
 
-- Implement missions assigned to you via the group project board
-- Write clean, tested code that meets the acceptance criteria
-- Open PRs with descriptive titles and summaries
-- Merge approved PRs after CI is green and required approvals are received
-- Post progress updates to the bulletin board
+**Dependencies / supply-chain (E1):**
+- Only **well-established, widely-used, reputable** packages. Treat every dep as attack surface.
+- A version MUST be **published ≥7 days ago** before adoption (active package-injection wave).
+  Shorter **only** for an important CVE, with justification.
+- **Pin** versions (exact/lockfile) so carets can't pull unreviewed/<7-day releases.
+- Check peer-dependency compatibility. Prefer **fewer** deps; justify each one.
 
-## Workflow
+**Testing (E2) — invest heavily, prevent regression:**
+- Every story has clear, addressable **requirements**; **tests trace to requirements**.
+- **Very high coverage** (target ≥90% lines on domain/core). Test volume ~1:1 with prod LOC
+  — but **never tests for their own sake**; assert real, requirement-backed behavior.
+- A story is **done only when its `must` requirements have tests** (`Verify: none-yet → test:`).
+- Every **bug fix adds a regression test**. Three levels: unit, component, e2e (Playwright +
+  packaged-app smoke).
 
-1. Check the board before starting — ensure no one else has claimed the mission
-2. Post to `progress` when you claim a mission
-3. Create a feature branch: `{your-name}/{mission-short-name}`
-4. Implement the change with frequent, descriptive commits
-5. Write tests for all new code paths
-6. Validate with build + test + lint before pushing
-7. Open a PR and post to `progress` when ready for review
-8. Address review feedback and push fixes
-9. After QA + driver approval AND green CI: squash merge and delete remote branch
+## Workflows (skills — use them)
 
-## Merge Checklist
+Standard playbooks live in `.claude/skills/`. These are **not tracked in git** — Clubhouse
+materializes them (and each agent's persona/instructions) locally per worktree, so all
+(incl. parallel) agents still get the same playbooks without the repo owning that state:
+- **`/mission`** — implement a story end-to-end: branch → implement against its spec →
+  requirement-traced tests → `/validate` until green → `/kb-code-review` → open a PR.
+  (Invoking it authorizes the full commit/push/PR loop for that work.)
+- **`/validate`** — run local checks (typecheck, lint, tests/e2e when present); honest green/red.
+- **`/kb-code-review`** — review the diff for bugs, regressions, and SPEC-0011 compliance.
+- **`/merge`** — squash-merge **any** PR (by #/URL/branch) into `main` + delete the branch.
+  Works for PRs you didn't author (multi-agent: implementer ≠ tester ≠ merger).
+- **`/auto-mission`** — like `/mission` but authorized to go all the way through `/merge`.
 
-Before merging, verify:
-- [ ] QA approved
-- [ ] Driver approved (if required by project rules)
-- [ ] CI is green on the latest commit
-- [ ] No unresolved review comments
-- [ ] Branch is up to date with main (rebase if needed)
+## Build / repo
 
-## Rules
-
-1. **Never merge without approval** — required approvals must be received first
-2. **Never merge with red CI** — all checks must pass
-3. **Squash merge** — keep main's history clean
-4. **Delete remote branch** after merge — keep local branch for reference
-5. **No scope creep** — implement exactly what was requested
-6. **Test everything** — new code paths must have tests
-7. **Check the board** — always read the bulletin before starting to avoid duplicate work
+- The app lives in `app/` (Electron Forge + Vite + TS). `cd app`, then: `npm start` (dev),
+  `npm run typecheck`, `npm run lint`, `npm run package` (build the `.app`).
+- **This repo is the app source, NOT a KB.** A KB is a separate user-chosen vault (its own
+  git repo). For dev, point the app at a throwaway vault **outside** this repo.
+- Bundle node deps into the Vite **main** bundle (don't externalize) or the packaged
+  `app.asar` can't find them.
+- Don't `git push`/`commit` unless the Principal asks. Commit trailer:
+  `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
