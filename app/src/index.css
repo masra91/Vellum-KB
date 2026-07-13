@@ -326,7 +326,7 @@ body.shell-active #app {
   color: var(--ink); font: inherit; font-size: 0.78rem; padding: 0;
 }
 .topsearch::placeholder { color: var(--faint); }
-/* VUX-DARK #521 §4: was a hand-hex #9a927e (the pre-token --faint value) — the same survival-patch
+/* VUX-DARK #521 §4: was a hand-hex literal (the pre-token --faint value) — the same survival-patch
    class of bug the dark re-point sweep converted everywhere else. --stone re-points on dark for free. */
 .kbd {
   flex: none; margin-left: auto; font-family: var(--mono); font-size: 0.68rem; color: var(--stone);
@@ -378,7 +378,7 @@ body.shell-active #app {
 .quickadd:focus-visible { outline: none; box-shadow: var(--ring); }
 
 /* "You" identity card (SPEC-0060 §7, VUX-21) — the rail's first-class self, at the foot of the rail. */
-/* VUX-DARK #521 §4: background was a hand-hex #fbf6ea (the pre-token --linen value) — same survival-
+/* VUX-DARK #521 §4: background was a hand-hex literal (the pre-token --linen value) — same survival-
    patch class of bug the dark re-point sweep converted everywhere else. --linen re-points on dark for free. */
 .user { margin-top: auto; display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem; border-radius: 11px; border: 0.5px solid var(--hair); background: var(--linen); cursor: default; transition: var(--dur-quick) var(--e-out); }
 .user:hover { box-shadow: var(--shadow-card); transform: translateY(-1px); }
