@@ -102,7 +102,8 @@ vi.mock('./pipeline', () => ({
 
 vi.mock('../kb/recall', () => ({ recall: mocks.recall }));
 
-import { registerIpc, initPipeline } from './ipc';
+import { registerIpc, initPipeline, stopRecallClient } from './ipc';
+import { setStageDefaultModels, setResolvedLaunchModel } from '../kb/copilotModel';
 import { createKb } from '../kb/vault';
 import { computeGraphProjection } from '../kb/graphProjection';
 import { obsidianOpenUri } from '../kb/citationLink';
@@ -351,6 +352,94 @@ describe('SPEC-0026 ASK — kb:ask grounded recall', () => {
     expect(res.grounded).toBe(true);
     expect(res.citations[0].ref).toBe('claims/person/ada-lovelace.md');
     expect(mocks.recall).not.toHaveBeenCalled();
+  });
+});
+
+// #514: kb:ask previously built a fresh RecallClient (→ a fresh CLI server) on every call. ipc.ts now
+// passes ONE process-wide client via opts.client — proven here at the wiring level by identity (the
+// underlying "one CopilotClient" guarantee is recallAgent.test.ts's job).
+describe('#514 — kb:ask reuses ONE process-wide RecallClient across questions', () => {
+  async function configureVault(p: string): Promise<void> {
+    await fs.writeFile(path.join(state.userData, 'kb-app.config.json'), JSON.stringify({ activeVaultPath: p }) + '\n');
+  }
+
+  it('passes the SAME client instance (opts.client) on every kb:ask call — 2nd+ question skips the server boot', async () => {
+    await configureVault(vaultDir);
+    await invoke('kb:ask', { question: 'Q1', history: [] });
+    await invoke('kb:ask', { question: 'Q2', history: [] });
+    const client1 = (mocks.recall.mock.calls[0] as unknown[])[2] as { client?: unknown };
+    const client2 = (mocks.recall.mock.calls[1] as unknown[])[2] as { client?: unknown };
+    expect(client1.client).toBeDefined();
+    expect(client1.client).toBe(client2.client); // identical reference — reused, not rebuilt
+  });
+
+  it('stopRecallClient() is safe to call before any ask ever ran (idempotent no-op)', async () => {
+    await expect(stopRecallClient()).resolves.toBeUndefined();
+    await expect(stopRecallClient()).resolves.toBeUndefined();
+  });
+
+  it('a subsequent ask after stopRecallClient() builds a FRESH client (a clean client for the next question, not a stale disconnected one)', async () => {
+    await configureVault(vaultDir);
+    await invoke('kb:ask', { question: 'Q1', history: [] });
+    const before = (mocks.recall.mock.calls[0] as unknown[])[2] as { client?: unknown };
+    await stopRecallClient();
+    await invoke('kb:ask', { question: 'Q2', history: [] });
+    const after = (mocks.recall.mock.calls[1] as unknown[])[2] as { client?: unknown };
+    expect(after.client).not.toBe(before.client);
+  });
+});
+
+// #514: Quick routes to the 'recall-quick' tiered model + reasoningEffort:'low' (honest tier — supersedes
+// VUX-11's depth-only ruling for this specific lever, per the 2026-07-12 deep review). Considered keeps
+// the untiered global model + no reasoningEffort override, unchanged.
+describe('#514 — honest Quick tier: model preference + reasoningEffort', () => {
+  async function configureVault(p: string): Promise<void> {
+    await fs.writeFile(path.join(state.userData, 'kb-app.config.json'), JSON.stringify({ activeVaultPath: p }) + '\n');
+  }
+
+  afterEach(() => {
+    setStageDefaultModels({});
+    setResolvedLaunchModel(null);
+  });
+
+  it('effort:"quick" resolves the recall-quick tiered model and forwards reasoningEffort:"low"', async () => {
+    await configureVault(vaultDir);
+    setStageDefaultModels({ 'recall-quick': 'claude-haiku-4.5' });
+    await invoke('kb:ask', { question: 'Who?', history: [], effort: 'quick' });
+    const opts = (mocks.recall.mock.calls[0] as unknown[])[2] as { model?: string; reasoningEffort?: string; effort?: string };
+    expect(opts.model).toBe('claude-haiku-4.5');
+    expect(opts.reasoningEffort).toBe('low');
+    expect(opts.effort).toBe('quick');
+  });
+
+  it('effort:"considered" (or omitted) resolves the untiered global model, no reasoningEffort override', async () => {
+    await configureVault(vaultDir);
+    setStageDefaultModels({ 'recall-quick': 'claude-haiku-4.5' }); // present but must NOT be picked
+    setResolvedLaunchModel('claude-opus-4.8');
+    await invoke('kb:ask', { question: 'Who?', history: [], effort: 'considered' });
+    const opts = (mocks.recall.mock.calls[0] as unknown[])[2] as { model?: string; reasoningEffort?: string; effort?: string };
+    expect(opts.model).toBe('claude-opus-4.8'); // the global model, NOT the quick tier
+    expect(opts.reasoningEffort).toBeUndefined();
+    expect(opts.effort).toBe('considered');
+  });
+});
+
+// #514: a live Ask pushes tool-call progress back to the SAME renderer that invoked it, so the status
+// line can name the in-flight tool + call count instead of a static "Searching…" line for the whole run.
+describe('#514 — kb:ask pushes live progress to the invoking renderer', () => {
+  async function configureVault(p: string): Promise<void> {
+    await fs.writeFile(path.join(state.userData, 'kb-app.config.json'), JSON.stringify({ activeVaultPath: p }) + '\n');
+  }
+
+  it('passes an onProgress callback that sends kb:askProgress on the invoking sender', async () => {
+    await configureVault(vaultDir);
+    const send = vi.fn();
+    const fn = state.handlers.get('kb:ask')!;
+    await fn({ sender: { send } }, { question: 'Who?', history: [] });
+    const opts = (mocks.recall.mock.calls[0] as unknown[])[2] as { onProgress?: (evt: unknown) => void };
+    expect(typeof opts.onProgress).toBe('function');
+    opts.onProgress!({ phase: 'tool-call', tool: 'entityLookup', used: 1, max: 4 });
+    expect(send).toHaveBeenCalledWith('kb:askProgress', { phase: 'tool-call', tool: 'entityLookup', used: 1, max: 4 });
   });
 });
 
