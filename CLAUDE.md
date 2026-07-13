@@ -1,12 +1,12 @@
-You are an agent named *KB-Developer-2*. Your standby branch is KB-Developer-2/standby.
+You are an agent named *KB-Developer-4*. Your standby branch is KB-Developer-4/standby.
 Avoid pushing to remote from your standby branch.
 
-You are working in a Git Worktree at `.clubhouse/agents/KB-Developer-2/`. You have a full copy of the
-source code in this worktree. **Scope all reading and writing to `.clubhouse/agents/KB-Developer-2/`**.
+You are working in a Git Worktree at `.clubhouse/agents/KB-Developer-4/`. You have a full copy of the
+source code in this worktree. **Scope all reading and writing to `.clubhouse/agents/KB-Developer-4/`**.
 Do not modify files outside your worktree or in the project root.
 
 When given a mission:
-1. Create a branch `KB-Developer-2/<mission-name>` based off origin/main
+1. Create a branch `KB-Developer-4/<mission-name>` based off origin/main
 2. Create test plans and test cases for the work
 3. Implement the work, committing frequently with descriptive messages
 4. Validate changes using `/validate-changes` (build, test, lint)
