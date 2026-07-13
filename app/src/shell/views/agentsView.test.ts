@@ -235,21 +235,46 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
     });
   });
 
-  it('pauses the status poll while its view is hidden, resumes when shown (efficiency — PANEL-9)', async () => {
+  // #509 regression: the Librarians section (this `root`) lives NESTED inside the Agents hub's `.view`
+  // wrapper — the shell toggles `.hidden` on that ANCESTOR, never on this container directly. The old
+  // guard checked `root`'s own class (never matched in production → the poll never paused); test the
+  // real shape, a `.view.hidden` parent, so this fails-before/passes-after on the actual bug.
+  it('pauses the status poll while its ANCESTOR `.view` is hidden, resumes when shown (#509 / PANEL-9)', async () => {
     vi.useFakeTimers();
     try {
+      const view = document.createElement('div');
+      view.className = 'view';
+      document.body.appendChild(view);
+      view.appendChild(root); // root (the Librarians section) is nested inside the `.view`, not it
+
       const listAgents = vi.fn(async () => AGENTS);
       setApi(listAgents);
       await mountAgents(root); // initial render → one listAgents call
       const initial = listAgents.mock.calls.length;
 
-      root.classList.add('hidden'); // the shell toggles `.hidden` when another view is active
+      view.classList.add('hidden'); // the shell toggles `.hidden` on the `.view` ancestor
       await vi.advanceTimersByTimeAsync(5000);
       expect(listAgents.mock.calls.length).toBe(initial); // no IPC while hidden
 
-      root.classList.remove('hidden');
+      view.classList.remove('hidden');
       await vi.advanceTimersByTimeAsync(5000);
       expect(listAgents.mock.calls.length).toBeGreaterThan(initial); // resumes when shown
+
+      view.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a container with no `.view` ancestor at all still polls normally (e.g. mounted standalone in a test harness)', async () => {
+    vi.useFakeTimers();
+    try {
+      const listAgents = vi.fn(async () => AGENTS);
+      setApi(listAgents);
+      await mountAgents(root);
+      const initial = listAgents.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(listAgents.mock.calls.length).toBeGreaterThan(initial);
     } finally {
       vi.useRealTimers();
     }

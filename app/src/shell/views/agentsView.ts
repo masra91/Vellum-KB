@@ -11,6 +11,7 @@
 // slate=interactive). Status-first: the live `status` field drives the pill, no render-path vault scan.
 import { esc } from '../html';
 import { withTimeout, renderLoadError } from '../loadGuard';
+import { createVisibilityPoll } from '../visibilityPoll';
 import type { AgentView, ModelCatalogView } from '../../kb/types';
 
 // Mounted as the **Librarians** section of the Agents hub (SPEC-0053 WS-E) — the hub owns the group
@@ -18,16 +19,11 @@ import type { AgentView, ModelCatalogView } from '../../kb/types';
 export async function mountAgents(container: HTMLElement): Promise<void> {
   container.innerHTML = `<p class="ag-loading viz-body">Loading…</p>`;
   await render(container);
-  const timer = setInterval(() => {
-    if (!document.contains(container)) {
-      clearInterval(timer);
-      return;
-    }
-    // Skip the status IPC when the Agents view isn't showing (the shell mounts once + toggles `.hidden`,
-    // so the container stays in the DOM) or the window is backgrounded — don't poll status no one sees.
-    if (container.classList.contains('hidden') || document.hidden) return;
-    void refreshStatus(container);
-  }, 5000);
+  // #509: this container is the Librarians SECTION nested inside the Agents hub, not the `.view` the
+  // shell toggles `.hidden` on — checking `container`'s own class (the old guard) never engaged, so the
+  // poll ran every 5s for the rest of the session regardless of which view was active. The shared helper
+  // walks up to the ancestor `.view` instead, so the intended pause actually engages.
+  createVisibilityPoll(container, 5000, () => refreshStatus(container));
 }
 
 async function render(container: HTMLElement): Promise<void> {

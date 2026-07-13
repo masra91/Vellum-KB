@@ -64,6 +64,29 @@ describe('shell review-count badge (SPEC-0027 PANEL-8)', () => {
     await tick();
     expect(reviewsBtn(root).querySelector('.nav-badge')).toBeNull();
   });
+
+  // #509 — "the review-badge interval is the one thing mountShell doesn't re-mount-clean": a vault switch
+  // calls `mountShell` again on the SAME root (root.innerHTML is replaced, root itself never leaves the
+  // document), so the PRIOR interval's own `document.contains(root)` self-stop check never fired — every
+  // re-mount stacked another permanent poller. Regression: mount twice on one root, one tick fires ONE
+  // listReviews call, not two (or N, after N re-mounts).
+  it('mountShell twice on one root: one badge poll per tick, not two (#509)', async () => {
+    vi.useFakeTimers();
+    try {
+      const listReviews = vi.fn(async () => [review('a')]);
+      setApi(listReviews);
+      mountShell(root, '/vault', 'KB'); // first mount → starts a badge poll
+      await vi.advanceTimersByTimeAsync(0);
+      mountShell(root, '/vault', 'KB'); // vault-switch re-mount on the SAME root → must stop the first poll
+      await vi.advanceTimersByTimeAsync(0);
+      const callsAtRemount = listReviews.mock.calls.length;
+
+      await vi.advanceTimersByTimeAsync(5000); // one poll tick
+      expect(listReviews.mock.calls.length).toBe(callsAtRemount + 1); // exactly one call, not two
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('shell kb:navigate view→view nav primitive (SHELL — Field Desk escalation deep-link)', () => {
