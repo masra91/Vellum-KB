@@ -485,6 +485,41 @@ describe.skipIf(!gitAvailable)('withEphemeralWorktree sparsePaths — cone-mode 
       await rmTempDir(dir);
     }
   });
+
+  // #516 QA follow-up: cone-mode `sparse-checkout init`/`set` write to the repo's SHARED `.git/config`
+  // (not a per-worktree file — that needs `extensions.worktreeConfig`, which cone-mode init doesn't
+  // set), so concurrent ephemeral worktrees under ORCH-20 cap>1 raced on git's config lockfile and one
+  // or more calls threw `could not lock config file ...: File exists` before `fn` ever ran — surfaced as
+  // flaky failures in orchestrator.test.ts's #516 BUG-7 batch tests. FAILS-BEFORE the fix (a module-level
+  // mutex serializing just the init/set step in `checkoutWorktree`): running enough concurrent
+  // sparsePaths-using worktrees reliably reproduces the config-lock race; PASSES-AFTER: every item lands.
+  it('3+ concurrent ephemeral worktrees WITH sparsePaths never race on the shared .git/config lock', async () => {
+    const dir = await makeTempDir();
+    try {
+      const root = await makeCanonicalRepo(dir);
+      const base = await canonicalHead(root);
+      const names = Array.from({ length: 6 }, (_, i) => `item${i}`);
+      const run = (name: string): Promise<string> =>
+        withEphemeralWorktree(
+          root,
+          'archive',
+          base,
+          async ({ wt }) => {
+            await fs.mkdir(path.join(wt, `sources/${name}`), { recursive: true });
+            await fs.writeFile(path.join(wt, `sources/${name}/x`), name);
+            const g = simpleGit(wt);
+            await ensureGitIdentity(g);
+            await g.raw('add', '-A');
+            await g.commit(`work ${name}`);
+            return 'ok';
+          },
+          [`sources/${name}`],
+        );
+      await expect(Promise.all(names.map(run))).resolves.toEqual(names.map(() => 'ok'));
+    } finally {
+      await rmTempDir(dir);
+    }
+  });
 });
 
 describe.skipIf(!gitAvailable)('withConcurrentAdvance — ephemeral-worktree wrapper for cap>1 (ORCH-20)', () => {
