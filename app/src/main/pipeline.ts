@@ -48,6 +48,8 @@ import * as jobsControlPanel from './registries/jobsControlPanel';
 import { readJournal } from '../kb/jobStage';
 import * as watchControlPanel from './registries/watchControlPanel';
 import * as researchersControlPanel from './registries/researchersControlPanel';
+import * as intakeControlPanel from './registries/intakeControlPanel';
+import * as sourceSensitivityControlPanel from './registries/sourceSensitivityControlPanel';
 import { researchDepsOptions, intakeDepsOptions, mediaExtractOptions } from './researchWiring';
 import { createVaultTracer } from '../kb/tracing';
 import { loadPerfIndex } from '../kb/perfIndex';
@@ -80,7 +82,7 @@ import { JobScheduler } from '../kb/jobScheduler';
 import { exampleJobBehavior, EXAMPLE_JOB_TYPE } from '../kb/exampleJob';
 import { makeReflectJobBehavior, REFLECT_JOB_TYPE } from '../kb/reflectJob';
 import { makeReflectDecider } from '../kb/reflectAgent';
-import { isSchedulePreset, isAutonomyPosture } from '../kb/jobsPanel';
+import { isAutonomyPosture } from '../kb/jobsPanel';
 import { readInstanceConfig, writeInstanceConfig, instanceConfigPath, defaultInstanceConfig, clampRecallBudgetMs, resolveRecallMaxToolCallsWrite, resolveStageCaps, clampStageCap, resolveCeilingWrite, SCALE_STAGES, DEV_LOG_LEVELS, DEFAULT_DEV_LOG_LEVEL, DEFAULT_QUICK_CAPTURE_ACCELERATOR, DEFAULT_RECALL_BUDGET_MS, type DevLogLevel, type ScaleStage, type InstanceConfig } from '../kb/instanceConfig';
 import { applyCopilotCeiling } from '../kb/copilotConcurrency';
 import { getQuickCaptureAgent } from './quickCaptureService';
@@ -88,26 +90,18 @@ import { AGENT_CATALOG, buildAgentViews } from '../kb/agentCatalog';
 import { resolveCopilotModel, setResolvedLaunchModel, setAgentModelOverrides } from '../kb/copilotModel';
 import { initLaunchModel, probeAcceptedModels, validateModel } from '../kb/copilotModelProbe';
 import { appendAuditEvent } from '../kb/audit';
-import { readEvents } from '../kb/activityIndex';
 import { researcherRegistryPath } from '../kb/researcherRegistry';
 import { seedDefaultResearcherIfAbsent } from '../kb/researcherSeed';
 import { ResearcherScheduler } from '../kb/researcherScheduler';
-import { IntakeScheduler, selectIntakeFn } from '../kb/intakeScheduler';
+import { IntakeScheduler } from '../kb/intakeScheduler';
 import { WatchScheduler } from '../kb/watchScheduler';
-import { readIntakeRegistry, upsertIntakeConnector, patchIntakeConnector, deleteIntakeConnector, intakeRegistryPath } from '../kb/intakeRegistry';
-import { runIntakeConnector } from '../kb/intakeRun';
-import { DEFAULT_INTAKE_SCOPE, DEFAULT_INTAKE_SENSITIVITY, isSafeConnectorId, type IntakeConnectorConfig } from '../kb/intakeConnectors';
-import { buildIntakeConnectorViews, isIntakeConnectorType, clampMaxItems, intakeConfigAuditEvents } from '../kb/intakeSourcingPanel';
 import type { WatchFolderView, WatchFolderPatch, IntakeConnectorView, IntakeConnectorConfigPatch, RunIntakeConnectorResult } from '../kb/types';
-import { ulid, dateShard, isUlid } from '../kb/ulid';
-import { setSensitivityOverride, sensitivityOverridesPath } from '../kb/sensitivityOverride';
-import { readSourceSensitivities, type SourceSensitivity } from '../kb/sensitivityRead';
-import { applySensitivityOverrideToSourceMd } from '../kb/sourceDoc';
+import { ulid } from '../kb/ulid';
+import type { SourceSensitivity } from '../kb/sensitivityRead';
 import { buildRecallOutput } from '../kb/outputDoc';
 import type { JobBehavior } from '../kb/jobs';
 import type { Review } from '../kb/reviews';
 import { reviewToSummary } from '../kb/reviewSummary';
-import type { AuditEvent } from '../kb/audit';
 import type { AskResult } from '../kb/recall';
 import type { FullReplayResult, ComposeBacklogResult, JobView, JobConfigPatch, JobLastRun, RunJobResult, InstanceSettings, AgentView, ModelCatalogView, SetModelResult, ResearcherView, ResearcherConfigPatch, ResearcherLastRun, RunResearcherResult, SaveRecallOutputResult, PipelineControlRequest, PipelineControlResult, QuiesceStatus, ReviewSummary } from '../kb/types';
 
@@ -1596,193 +1590,36 @@ export async function listResearcherRunsForActive(id: string): Promise<Researche
 }
 
 // --- Control Panel · Sources — INTAKE feed connectors (SPEC-0027 PANEL-4 / INTAKE-14) ---
+// Full implementation lives in registries/intakeControlPanel.ts + registries/sourceSensitivityControlPanel.ts (#528 ENG-7).
 
-/** The intake connector registry as the Sources view needs it, with each connector's last pull. */
 export async function listIntakeConnectorsForActive(): Promise<IntakeConnectorView[]> {
   if (!active) return [];
-  const root = active.stagingWt;
-  const registry = await readIntakeRegistry(root);
-  const events = await readEvents(root, { actors: ['intake'] }); // newest-first
-  const lastByConnector: Record<string, AuditEvent | undefined> = {};
-  for (const c of registry) lastByConnector[c.id] = events.find((e) => e.subjects.intakeId === c.id);
-  return buildIntakeConnectorViews(registry, lastByConnector);
+  return intakeControlPanel.listIntakeConnectors(active.stagingWt);
 }
 
-/**
- * Apply a Sources-view connector config change (INTAKE-14) + return the refreshed list. Untrusted IPC
- * input is validated at this boundary (type/schedule dropped unless known enums; `maxItemsPerPass`
- * clamped; an unsafe `id` is rejected by the registry guard). The write + git commit run under the
- * shared lock; then a conforming `panel` audit event records the change (PANEL-7-style).
- */
 export async function setActiveIntakeConnectorConfig(patch: IntakeConnectorConfigPatch): Promise<IntakeConnectorView[]> {
   if (!active) return [];
-  const root = active.stagingWt;
-  if (typeof patch.id !== 'string' || patch.id.length === 0) return listIntakeConnectorsForActive();
-
-  // Validate untrusted IPC into a `clean` patch (drop unknown enums; clamp the item cap). apply + audit
-  // both use `clean`, so a dropped-invalid field is never recorded as applied (mirrors researchers #81).
-  const clean: IntakeConnectorConfigPatch = { id: patch.id };
-  if (isIntakeConnectorType(patch.type)) clean.type = patch.type;
-  if (typeof patch.label === 'string') clean.label = patch.label;
-  if (typeof patch.enabled === 'boolean') clean.enabled = patch.enabled;
-  if (isSchedulePreset(patch.schedule)) clean.schedule = patch.schedule;
-  if (typeof patch.scope === 'string' && patch.scope.trim()) clean.scope = patch.scope.trim();
-  if (typeof patch.sensitivity === 'string' && patch.sensitivity.trim()) clean.sensitivity = patch.sensitivity.trim();
-  const cleanMax = clampMaxItems(patch.maxItemsPerPass);
-  if (cleanMax !== undefined) clean.maxItemsPerPass = cleanMax;
-  if (typeof patch.feedUrl === 'string' && patch.feedUrl.trim()) clean.feedUrl = patch.feedUrl.trim();
-  if (typeof patch.tenantId === 'string' && patch.tenantId.trim()) clean.tenantId = patch.tenantId.trim();
-  if (typeof patch.folder === 'string' && patch.folder.trim()) clean.folder = patch.folder.trim();
-
-  let prior: IntakeConnectorConfig | undefined;
-  let applied = false;
-  await active.lock.run(async () => {
-    const registry = await readIntakeRegistry(root);
-    prior = registry.find((c) => c.id === clean.id);
-    if (prior) {
-      await patchIntakeConnector(root, clean.id, {
-        ...(clean.enabled !== undefined ? { enabled: clean.enabled } : {}),
-        ...(clean.schedule !== undefined ? { schedule: clean.schedule } : {}),
-        ...(clean.scope !== undefined ? { scope: clean.scope } : {}),
-        ...(clean.sensitivity !== undefined ? { sensitivity: clean.sensitivity } : {}),
-        ...(clean.label !== undefined ? { label: clean.label } : {}),
-        ...(clean.maxItemsPerPass !== undefined ? { maxItemsPerPass: clean.maxItemsPerPass } : {}),
-        // Merge type-specific config (RSS feedUrl / M365 tenantId+folder), preserving other keys.
-        ...(clean.feedUrl !== undefined || clean.tenantId !== undefined || clean.folder !== undefined
-          ? {
-              config: {
-                ...(prior.config ?? {}),
-                ...(clean.feedUrl !== undefined ? { feedUrl: clean.feedUrl } : {}),
-                ...(clean.tenantId !== undefined ? { tenantId: clean.tenantId } : {}),
-                ...(clean.folder !== undefined ? { folder: clean.folder } : {}),
-              },
-            }
-          : {}),
-      });
-    } else {
-      // New connector: derive a safe config from the (validated) type + conservative defaults.
-      const type = clean.type ?? 'rss';
-      clean.type = type;
-      await upsertIntakeConnector(root, {
-        id: clean.id,
-        type,
-        ...(clean.label ? { label: clean.label } : {}),
-        enabled: clean.enabled ?? false,
-        schedule: clean.schedule ?? 'off',
-        scope: clean.scope ?? DEFAULT_INTAKE_SCOPE,
-        sensitivity: clean.sensitivity ?? DEFAULT_INTAKE_SENSITIVITY,
-        ...(clean.maxItemsPerPass !== undefined ? { maxItemsPerPass: clean.maxItemsPerPass } : {}),
-        ...(clean.feedUrl || clean.tenantId || clean.folder
-          ? { config: { ...(clean.feedUrl ? { feedUrl: clean.feedUrl } : {}), ...(clean.tenantId ? { tenantId: clean.tenantId } : {}), ...(clean.folder ? { folder: clean.folder } : {}) } }
-          : {}),
-      });
-    }
-    applied = true;
-    await commitControlFile(root, intakeRegistryPath(root), `intake ${clean.id} config change`);
-  }, 'intake-config:write');
-  if (applied) {
-    // Conforming `panel` audit: one event per changed behavior-relevant field (validated values only).
-    for (const event of intakeConfigAuditEvents(prior, clean)) await appendAuditEvent(root, event);
-  }
-  return listIntakeConnectorsForActive();
+  return intakeControlPanel.setIntakeConnectorConfig(patch, { root: active.stagingWt, lock: active.lock });
 }
 
-/**
- * Delete an intake feed connector (PANEL-11 lifecycle delete): PURGE its config row from the registry,
- * audit the removal (`panel` actor, `removed: true`), and let the scheduler tear its standing pull down
- * naturally (it re-reads the registry each tick — PANEL-6). Already-produced sources + the full audit
- * trail are RETAINED — only the config/registration is purged (ground truth is sacred, PANEL-11). An
- * unsafe id is a no-op (the registry guard rejects it anyway). Mirrors `removeActiveResearcher`.
- */
 export async function removeActiveIntakeConnector(id: string): Promise<IntakeConnectorView[]> {
   if (!active) return [];
-  if (!isSafeConnectorId(id)) return listIntakeConnectorsForActive();
-  const root = active.stagingWt;
-  let removed = false;
-  await active.lock.run(async () => {
-    const registry = await readIntakeRegistry(root);
-    if (!registry.some((c) => c.id === id)) return;
-    await deleteIntakeConnector(root, id);
-    removed = true;
-    await commitControlFile(root, intakeRegistryPath(root), `intake ${id} removed`);
-  }, 'intake-config:remove');
-  if (removed) {
-    await appendAuditEvent(root, { actor: 'panel', eventType: 'intake-config-change', subjects: { intakeId: id }, payload: { removed: true, why: 'Principal removed an intake feed via Control Panel (config purged; sources + audit retained)' } });
-  }
-  return listIntakeConnectorsForActive();
+  return intakeControlPanel.removeIntakeConnector(id, { root: active.stagingWt, lock: active.lock });
 }
 
-/**
- * Principal override of a source's sensitivity label (SENSE-7/8). Validates the id is a real archived
- * source; under the canonical-writer lock it (1) persists the override to the Replay-sticky store so a
- * rebuild re-applies it (the classifier never overwrites a `by: principal` label), (2) re-stamps the
- * source's `source.md` frontmatter to the new label + `by: principal` (committing both atomically), then
- * (3) audits the change (`panel` event, from→to + why, SENSE-8). An empty label CLEARS the override (back
- * to the classifier/default). A custom label is accepted verbatim (SENSE-1); the comparator handles unknowns.
- */
-export async function setActiveSourceSensitivity(sourceId: string, label: string): Promise<{ ok: boolean; reason?: string; sensitivity?: string }> {
-  if (!active) return { ok: false, reason: 'no-kb' };
-  if (typeof sourceId !== 'string' || !isUlid(sourceId)) return { ok: false, reason: 'bad-id' }; // #29: only a real ULID → a real source path
-  const clean = typeof label === 'string' ? label.trim() : '';
-  const root = active.stagingWt;
-  const srcMdRel = path.join('sources', dateShard(sourceId), sourceId, 'source.md');
-  const srcMdAbs = path.join(root, srcMdRel);
-  try {
-    await fs.access(srcMdAbs); // early not-found before taking the lock
-  } catch {
-    return { ok: false, reason: 'not-found' };
-  }
-  const at = new Date().toISOString();
-  let fromLabel = '';
-  await active.lock.run(async () => {
-    // Read the authoritative base INSIDE the lock so a concurrent archive of the same source can't make
-    // the re-stamp clobber a stale base (KB-QD-2 #267).
-    const before = await fs.readFile(srcMdAbs, 'utf8');
-    fromLabel = (before.match(/^sensitivity: (.*)$/m)?.[1] ?? '').trim();
-    await setSensitivityOverride(root, sourceId, clean, at); // clean === '' clears the override
-    // Setting: re-stamp the live source.md now so the Panel reflects it without a rebuild. Clearing: leave
-    // the frontmatter as-is (a later Replay re-derives the classifier/default label).
-    if (clean.length > 0) await fs.writeFile(srcMdAbs, applySensitivityOverrideToSourceMd(before, clean, at), 'utf8');
-    const git = boundedGit(root);
-    await git.add([path.relative(root, sensitivityOverridesPath(root)), srcMdRel]);
-    const staged = (await git.diff(['--cached', '--name-only'])).trim();
-    if (staged.length > 0) await git.commit(`control-panel: sensitivity ${sourceId} → ${clean || '(cleared)'}`);
-  }, 'sensitivity-override:write');
-  await appendAuditEvent(root, {
-    actor: 'panel',
-    eventType: 'sensitivity-override',
-    subjects: { sourceId },
-    payload: { field: 'sensitivity', from: fromLabel, to: clean || '(cleared → classifier/default)', by: 'principal', why: 'Principal overrode a source sensitivity via Control Panel' },
-  });
-  return { ok: true, sensitivity: clean || fromLabel };
-}
-
-/** Read the current sensitivity label + provenance for a set of sources (SENSE-10) — for the Control
- *  Panel (the Activity-lineage drill-down) to show a chip + offer the Principal an edit. Read-only. */
-export async function getActiveSourceSensitivities(sourceIds: string[]): Promise<Record<string, SourceSensitivity>> {
-  if (!active || !Array.isArray(sourceIds)) return {};
-  return readSourceSensitivities(active.stagingWt, sourceIds.filter((s): s is string => typeof s === 'string'));
-}
-
-/**
- * Manual "Run now" for an intake connector (INTAKE-14, "run-now to test") — a single on-demand pull
- * via the real run-pass + the real per-type fetch (RSS = the SSRF-safe gated fetch; M365 = env-gated,
- * surfaces a clear `intake-failed` until wired). Never ingests synthetic scaffolding. The Principal's
- * trigger is audited as a `panel` event; the pull's own work is audited by the run-pass (actor `intake`).
- */
 export async function runActiveIntakeConnectorNow(id: string): Promise<RunIntakeConnectorResult> {
   if (!active) return { ran: false, reason: 'no-kb' };
-  const root = active.stagingWt;
-  const c = (await readIntakeRegistry(root)).find((x) => x.id === id);
-  if (!c) return { ran: false, reason: 'not-found' };
-  const res = await runIntakeConnector(root, c, { fetch: selectIntakeFn(c) });
-  await appendAuditEvent(root, {
-    actor: 'panel',
-    eventType: 'intake-run-now',
-    subjects: { intakeId: id },
-    payload: { outcome: res.failed ? 'failed' : res.sourceIds.length > 0 ? 'intook' : 'no-new-items', why: 'Principal manual run via Control Panel' },
-  });
-  return { ran: true, sourceIds: res.sourceIds, note: res.note, ...(res.failed ? { failed: true, ...(res.error ? { error: res.error } : {}) } : {}) };
+  return intakeControlPanel.runIntakeConnectorNow(id, active.stagingWt);
+}
+
+export async function setActiveSourceSensitivity(sourceId: string, label: string): Promise<{ ok: boolean; reason?: string; sensitivity?: string }> {
+  if (!active) return { ok: false, reason: 'no-kb' };
+  return sourceSensitivityControlPanel.setSourceSensitivity(sourceId, label, { root: active.stagingWt, lock: active.lock });
+}
+
+export async function getActiveSourceSensitivities(sourceIds: string[]): Promise<Record<string, SourceSensitivity>> {
+  if (!active) return {};
+  return sourceSensitivityControlPanel.getSourceSensitivities(active.stagingWt, sourceIds);
 }
 
 /** Stop and clear the active pipeline (used on shutdown / vault switch). */
