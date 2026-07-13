@@ -11,7 +11,7 @@
 // PANEL-7: risky changes (enabling a job, going Autonomous, Run now) reveal an inline confirm before
 // they apply + audit; read-only viewing needs none. PANEL-9: the view degrades to a friendly message
 // when no KB is active or IPC fails.
-import { esc } from '../html';
+import { esc, emptyState } from '../html';
 import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import { schedulePresetLabel, SCHEDULE_OPTIONS, isRiskyJobChange } from '../../kb/jobsPanel';
 import { drillChevronHtml, wireDrillIn, detailRowHtml, runsPendingHtml, runsLoadingHtml, runsTimelineHtml } from './agentDrillIn';
@@ -76,7 +76,9 @@ async function render(container: HTMLElement): Promise<void> {
     const jobs = await withTimeout(window.kbApi.listJobs());
 
     if (jobs.length === 0) {
-      container.innerHTML = `<div class="jobs-view viz-surface">${HEADER}<p class="job-empty viz-body">No jobs available — open a library to manage its jobs.</p></div>`;
+      // #406/BRAND-7: componentized onto the shared primitive (compact — a sub-panel inside the
+      // Agents hub's sectioned layout, not a full-page empty). Copy preserved verbatim.
+      container.innerHTML = `<div class="jobs-view viz-surface">${HEADER}${emptyState({ title: 'No jobs available — open a library to manage its jobs.', compact: true })}</div>`;
       return;
     }
 

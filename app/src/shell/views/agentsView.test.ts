@@ -62,12 +62,17 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
     expect(root.querySelector('.load-retry')).toBeTruthy();
   });
 
-  it('shows a friendly empty state when there are no agents', async () => {
+  // #406/BRAND-7: componentized onto the shared branded primitive (compact — a sub-panel inside the
+  // Agents hub, not a full-page empty), copy preserved verbatim.
+  it('shows the branded compact empty state when there are no agents', async () => {
     setApi(vi.fn(async () => []));
     mountAgents(root).show?.();
     await tick();
     await tick();
-    expect(root.textContent).toContain('open a library');
+    const empty = root.querySelector('.viz-empty');
+    expect(empty).not.toBeNull();
+    expect(empty?.classList.contains('viz-empty--compact')).toBe(true);
+    expect(empty?.querySelector('.viz-empty__title')?.textContent).toBe('No librarians to show — open a library.');
   });
 
   // SPEC-0060 VUX-1 — the v3 card language: status-first state pill (running flies the LOOM mark, idle a

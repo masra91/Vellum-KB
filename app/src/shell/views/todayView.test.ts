@@ -6,6 +6,8 @@
 // activity feed (with ref highlighting), the ONE ember "needs you" surface + its calm rest state, the
 // health glance, the deep-link navigation (kb:navigate), and per-row partial-data isolation (ENG-15/16).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { mountToday } from './todayView';
 import { NAVIGATE_EVENT, type NavigateDetail } from '../nav';
 import type { KbApi, TodayProjection, TodayProjectionView } from '../../kb/types';
@@ -307,5 +309,18 @@ describe('Today v2 — command-center home (SPEC-0058 STATE-7)', () => {
       expect(c.querySelector('.load-error')).toBeTruthy();
       expect(reportRendererError).toHaveBeenCalled();
     });
+  });
+});
+
+// #406/BRAND-7 verify-only item: `.viz-body` (design-system.css) only sets `font-family`, not `color` —
+// a class relying solely on it would inherit its container's ink color rather than resolving to the
+// quiet `--stone` tone. Guard the CSS source directly (jsdom/happy-dom don't apply a real cascade) so a
+// future edit that drops `.today-flow-empty`'s own explicit color rule doesn't silently regress it back
+// to inheriting `--ink`.
+describe('#406 verify-only — the pipeline-idle fragment resolves to --stone, not inherited --ink', () => {
+  it('.today-flow-empty sets its own explicit color: var(--stone) (does not rely on .viz-body inheritance)', () => {
+    const indexCss = readFileSync(path.resolve(process.cwd(), 'src/index.css'), 'utf8');
+    const rule = indexCss.match(/\.today-flow-empty\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(rule).toContain('color: var(--stone)');
   });
 });

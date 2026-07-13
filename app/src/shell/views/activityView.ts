@@ -10,7 +10,7 @@
 // NB: imports here are TYPE-ONLY from kb/types (erased at build) — the renderer must not pull the
 // audit domain modules' node:fs/simple-git runtime deps (STACK-6). The actor filter options are
 // derived from the loaded data, not imported from AUDIT_ACTORS (a runtime value).
-import { esc } from '../html';
+import { esc, emptyState } from '../html';
 import { withTimeout, skeletonFragmentHtml } from '../loadGuard';
 import { formatTimestamp, relativeCompact } from '../formatTime';
 import { stageDisplayName } from '../stageLabels';
@@ -301,7 +301,10 @@ export function bodyHtml(s: BodyState): string {
     const term = s.searchTerm || 'that';
     return `<div class="act-empty">${navIcon('search')}<b>Nothing matches <span class="term">${esc(term)}</span></b><span>No run summaries contain those words. Try a shorter term, an entity name, or a different source.</span><div><button type="button" class="v3-btn v3-btn--ghost v3-btn--sm" data-act="clear-filters">Clear filters</button></div></div>`;
   }
-  if (s.entries.length === 0) return `<p class="activity-note activity-empty">No activity yet — once your library starts processing, what it does shows up here.</p>`;
+  // #406/BRAND-7: true-empty (no entries at all, not filtered) is the hero variant — Activity is a
+  // primary rail view, matching Reviews/Explore's precedent. The filtered-to-zero branch above is a
+  // distinct, already-built state (SPEC-0060 §2 copy) and is untouched by this change.
+  if (s.entries.length === 0) return emptyState({ title: 'Nothing has happened yet.', body: 'As your library captures and connects, what it does shows up here.' });
   const note = s.truncated
     ? `<p class="activity-note activity-truncation">Showing the ${s.entries.length} most recent of ${s.total} events.</p>`
     : `<p class="activity-note activity-count">${s.total} event${s.total === 1 ? '' : 's'}.</p>`;

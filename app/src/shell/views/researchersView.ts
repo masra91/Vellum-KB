@@ -13,7 +13,7 @@
 //   (found=patina / nothing=calm / failed=oxide / paused-rate-limit=brass / escalation=brass), so
 //   failure/blocked never masquerade as empty (#160/#180; RESEARCH-11).
 // - schedule/autonomy + the add-kind picker are custom segmented/tile controls, never native <select>.
-import { esc } from '../html';
+import { esc, emptyState } from '../html';
 import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import { formatTimestamp } from '../formatTime';
 import { drillChevronHtml, wireDrillIn, detailRowHtml, runsPendingHtml, runsLoadingHtml, runsTimelineHtml } from './agentDrillIn';
@@ -105,9 +105,11 @@ async function render(container: HTMLElement): Promise<void> {
     renderLoadError(container, HEADER, () => void render(container));
     return;
   }
+  // #406/BRAND-7: componentized onto the shared primitive (compact — a sub-panel inside the Agents
+  // hub's sectioned layout, not a full-page empty). Copy preserved verbatim.
   const roster = researchers.length
     ? `<ul class="rdesk-roster">${researchers.map(strip).join('')}</ul>`
-    : `<p class="rdesk-empty viz-body">No researchers yet — dispatch one from a template below.</p>`;
+    : emptyState({ title: 'No researchers yet — dispatch one from a template below.', compact: true });
   container.innerHTML = `<div class="rdesk viz-surface">${HEADER}${roster}${addDock()}</div>`;
   wire(container, researchers);
 }

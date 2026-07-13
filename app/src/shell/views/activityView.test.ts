@@ -131,11 +131,19 @@ describe('Activity feed (AUDIT-5)', () => {
     expect(c.querySelector('.activity-truncation')?.textContent).toContain('most recent of 500');
   });
 
-  it('shows an empty state when there is no activity', async () => {
+  // #406/BRAND-7: true-empty (no entries at all, not filtered) renders the shared branded primitive's
+  // HERO variant (Activity is a primary rail view) — not the ad-hoc `.activity-empty` paragraph it used
+  // to be, and not the compact variant. The distinct filtered-to-zero state (`.act-empty`, tested below)
+  // is untouched by this change.
+  it('shows the branded true-empty hero state when there is no activity at all (not filtered)', async () => {
     activityFeed = vi.fn(async () => feed([]));
     setApi();
     const c = await mount();
-    expect(c.querySelector('.activity-empty')).not.toBeNull();
+    const empty = c.querySelector('.viz-empty');
+    expect(empty).not.toBeNull();
+    expect(empty?.classList.contains('viz-empty--compact')).toBe(false); // hero, not compact
+    expect(empty?.querySelector('.viz-empty__title')?.textContent).toBe('Nothing has happened yet.');
+    expect(empty?.querySelector('.viz-empty__body')?.textContent).toBe('As your library captures and connects, what it does shows up here.');
   });
 
   // ENG-15/16: a legacy/partial audit entry (null actor, missing `events`/`provenance`/`payload`) must
@@ -345,7 +353,7 @@ describe('Filter / search (AUDIT-7)', () => {
     const empty = c.querySelector('.act-empty');
     expect(empty).not.toBeNull();
     expect(empty?.querySelector('.term')?.textContent).toBe('zzz-no-match');
-    expect(c.querySelector('.activity-empty')).toBeNull(); // NOT the "no activity yet" state
+    expect(c.querySelector('.viz-empty')).toBeNull(); // NOT the branded true-empty state (#406) — this is filtered-to-zero
 
     activityFeed.mockResolvedValueOnce(feed(ENTRIES, 3));
     c.querySelector<HTMLButtonElement>('[data-act="clear-filters"]')!.click();

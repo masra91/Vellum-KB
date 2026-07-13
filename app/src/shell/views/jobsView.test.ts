@@ -96,11 +96,16 @@ describe('Jobs view (SPEC-0027 PANEL-2/7)', () => {
     expect(text).toContain('inspected —');
   });
 
-  it('shows a friendly empty state when there are no jobs (PANEL-9)', async () => {
+  // #406/BRAND-7: componentized onto the shared branded primitive (compact — a sub-panel inside the
+  // Agents hub, not a full-page empty), copy preserved verbatim.
+  it('shows the branded compact empty state when there are no jobs (PANEL-9)', async () => {
     setApi({ listJobs: vi.fn(async () => []), setJobConfig: vi.fn(), runJobNow: vi.fn() });
     mountJobs(root).show?.();
     await tick();
-    expect(root.textContent).toContain('open a library');
+    const empty = root.querySelector('.viz-empty');
+    expect(empty).not.toBeNull();
+    expect(empty?.classList.contains('viz-empty--compact')).toBe(true);
+    expect(empty?.querySelector('.viz-empty__title')?.textContent).toBe('No jobs available — open a library to manage its jobs.');
   });
 
   it('enabling a job is risky: confirms first, then persists on confirm (PANEL-7)', async () => {

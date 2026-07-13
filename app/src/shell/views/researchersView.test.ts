@@ -76,11 +76,16 @@ describe('Field Desk — render (RESEARCH-15)', () => {
     expect(c.querySelector('.rdesk-arm')?.textContent).toContain('Paused');
   });
 
-  it('shows the empty state + the add dock when there are no researchers', async () => {
+  // #406/BRAND-7: componentized onto the shared branded primitive (compact — a sub-panel inside the
+  // Agents hub, not a full-page empty), copy preserved verbatim.
+  it('shows the branded compact empty state + the add dock when there are no researchers', async () => {
     listResearchers = vi.fn(async () => []);
     setApi();
     const c = await mount();
-    expect(c.querySelector('.rdesk-empty')).not.toBeNull();
+    const empty = c.querySelector('.viz-empty');
+    expect(empty).not.toBeNull();
+    expect(empty?.classList.contains('viz-empty--compact')).toBe(true);
+    expect(empty?.querySelector('.viz-empty__title')?.textContent).toBe('No researchers yet — dispatch one from a template below.');
     expect(c.querySelectorAll('.rdesk-tile').length).toBeGreaterThan(0);
   });
 

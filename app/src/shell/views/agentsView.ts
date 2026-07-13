@@ -9,7 +9,7 @@
 // agent flies the LOOM mark (continuous work), an idle one a calm dot. The model is a quiet per-card
 // "Advanced" disclosure (rarely needed). NO ember — agent activity is not a decision (sprout=active,
 // slate=interactive). Status-first: the live `status` field drives the pill, no render-path vault scan.
-import { esc } from '../html';
+import { esc, emptyState } from '../html';
 import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import { createVisibilityPoll, type VisibilityPoll } from '../visibilityPoll';
 import { drillChevronHtml, wireDrillIn, pastRunsPlaceholderHtml, detailRowHtml } from './agentDrillIn';
@@ -67,7 +67,9 @@ async function render(container: HTMLElement): Promise<void> {
   }
   const catalog = await catalogPromise;
   if (agents.length === 0) {
-    container.innerHTML = `<p class="ag-empty viz-body">No librarians to show — open a library.</p>`;
+    // #406/BRAND-7: componentized onto the shared primitive (compact — a sub-panel inside the Agents
+    // hub's sectioned layout, not a full-page empty). Copy preserved verbatim.
+    container.innerHTML = emptyState({ title: 'No librarians to show — open a library.', compact: true });
     return;
   }
   container.innerHTML = `${modelControlHtml(catalog)}<div class="ag-grid">${agents.map((a) => agentCard(a, catalog)).join('')}</div>`;
