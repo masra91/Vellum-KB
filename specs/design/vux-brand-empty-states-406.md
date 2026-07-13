@@ -9,8 +9,8 @@ created: 2026-07-13
 updated: 2026-07-13
 related: [SPEC-0057, SPEC-0009, SPEC-0060, "issue #406"]
 gates:
-  ai-patterns: pending      # GATE 1 — re-review requested after §2 factual correction, 2026-07-13
-  boundaries: pending       # GATE 2 — KB-Quality-Driver-2 REJECTED then re-review, 2026-07-13
+  ai-patterns: approved     # GATE 1 — KB-AI-Detector, re-cleared 2026-07-13 (PR #568, corrected)
+  boundaries: approved      # GATE 2 — KB-Quality-Driver-2, re-cleared 2026-07-13 (PR #568, corrected)
 ---
 
 # Branded empty states — closing BRAND-7
@@ -122,3 +122,6 @@ spot-check) that the color resolves to `--stone`.
   and corrected before this draft). §1/§2/§4/§5 revised: moved both corrected items into §1's
   "already done" list, narrowed Activity's fix to the true-empty case only, updated ACs/tests to
   match. Re-requesting both gates on the corrected scope.
+- 2026-07-13 — **Both gates re-cleared on the corrected version.** GATE 1: confirmed a pure
+  narrowing, no distinctiveness-relevant change. GATE 2: re-verified both corrected claims directly
+  against `origin/main`, confirmed accurate. **Dev-ready.**
