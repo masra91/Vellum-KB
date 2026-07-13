@@ -320,7 +320,8 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
     try {
       const listAgents = vi.fn(async () => AGENTS);
       setApi(listAgents);
-      await mountAgents(root);
+      mountAgents(root).show?.(); // #510: mount() no longer self-loads — show() does (mirrors the shell)
+      await vi.advanceTimersByTimeAsync(0);
       const initial = listAgents.mock.calls.length;
       await vi.advanceTimersByTimeAsync(5000);
       expect(listAgents.mock.calls.length).toBeGreaterThan(initial);
