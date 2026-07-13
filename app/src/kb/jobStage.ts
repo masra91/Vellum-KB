@@ -267,6 +267,9 @@ export async function runJobOnce(
       deferred,
       ...(audited.length > 0 ? { findings: audited } : {}),
       ...(pass.cursor ? { cursor: pass.cursor } : {}),
+      // #528 fast-follow: persist an agent-backed pass's ORCH-16 provenance onto the journal — the
+      // durable audit trail other stages' AgentTrace already lands in.
+      ...(pass.agent ? { agent: pass.agent } : {}),
     };
     const journalPath = path.join(wt, journalRel(job.id));
     await fs.mkdir(path.dirname(journalPath), { recursive: true });

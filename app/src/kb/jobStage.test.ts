@@ -139,6 +139,23 @@ describe.skipIf(!gitAvailable)('runJobOnce — bounded pass, journal, promotion 
       expect(deferred?.reviewId).toBeTruthy();
     });
   });
+
+  // #528 fast-follow: an agent-backed behavior's JobPassResult.agent (ORCH-16 provenance) used to have
+  // nowhere to go — JournalEntry had no `agent` field, so the runner silently dropped it. FAILS-BEFORE
+  // (reverting the spread in the journal-entry construction drops `.agent`) / PASSES-AFTER this fix.
+  it("persists an agent-backed behavior's AgentTrace onto the journal entry (#528 fast-follow)", async () => {
+    await withVault(async (root, stagingWt, lock) => {
+      const behavior: JobBehavior = async () => ({
+        inspected: 'ran',
+        findings: [],
+        agent: { via: 'copilot', runtime: 'copilot', model: 'claude-x', params: ['--no-ask-user', '--model', 'claude-x'], ok: true, ms: 5, at: '2026-07-13T00:00:00Z' },
+      });
+      const job: JobConfig = { id: 'agent-backed', type: 'agent-backed', schedule: 'daily', enabled: true, posture: 'guarded', facing: 'internal' };
+      await runJobOnce(stagingWt, job, behavior, lock);
+      const journal = await readJournal(stagingWt, 'agent-backed');
+      expect(journal[0].agent).toEqual({ via: 'copilot', runtime: 'copilot', model: 'claude-x', params: ['--no-ask-user', '--model', 'claude-x'], ok: true, ms: 5, at: '2026-07-13T00:00:00Z' });
+    });
+  });
 });
 
 describe.skipIf(!gitAvailable)('JobRunner — single-flight (JOBS-6/11)', () => {

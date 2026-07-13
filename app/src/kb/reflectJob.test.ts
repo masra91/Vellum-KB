@@ -77,6 +77,27 @@ describe('makeReflectJobBehavior — bounded working-set selection (REFLECT-2)',
     }
   });
 
+  // #528 fast-follow: the decider's AgentTrace used to be built (deciderScaffold.ts) then silently
+  // dropped here — JobPassResult/JournalEntry had no `agent` field at all, so a Reflect pass's
+  // provenance never reached its own audit trail. FAILS-BEFORE (reverting the spread in
+  // makeReflectJobBehavior's return drops `.agent` back to undefined) / PASSES-AFTER this fix.
+  it("threads the decider result's AgentTrace onto the JobPassResult (#528 fast-follow)", async () => {
+    const dir = await makeTempDir();
+    try {
+      const root = path.join(dir, 'vault');
+      await seedEntities(root, 1); // non-empty KB — an empty one short-circuits before the decider runs
+      const agentDecider: ReflectDecider = async () => ({
+        inspected: 'ran',
+        findings: [],
+        agent: { via: 'copilot', runtime: 'copilot', model: 'claude-x', params: ['--no-ask-user', '--model', 'claude-x'], ok: true, ms: 5, at: '2026-07-13T00:00:00Z' },
+      });
+      const res = await makeReflectJobBehavior(agentDecider)(ctxWith(root));
+      expect(res.agent).toEqual({ via: 'copilot', runtime: 'copilot', model: 'claude-x', params: ['--no-ask-user', '--model', 'claude-x'], ok: true, ms: 5, at: '2026-07-13T00:00:00Z' });
+    } finally {
+      await rmTempDir(dir);
+    }
+  });
+
   it('feeds the decider a BOUNDED slice (≤ size) and advances the cursor', async () => {
     const dir = await makeTempDir();
     try {
