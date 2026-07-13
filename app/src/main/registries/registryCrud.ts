@@ -47,7 +47,9 @@ export interface RunRegistryRemoveOptions<TItem> {
   commitMessage: string;
   read: (root: string) => Promise<TItem[]>;
   findId: string;
-  remove: (root: string, id: string) => Promise<void>;
+  /** Delete the row for `findId`. Passed the registry array already read this pass (avoids a
+   *  redundant re-read — the caller typically filters it and writes the result back). */
+  remove: (root: string, id: string, registry: TItem[]) => Promise<void>;
 }
 
 /** Run one registry removal under the shared lock: no-op if the id isn't present, else delete + commit. */
@@ -56,7 +58,7 @@ export async function runRegistryRemove<TItem>(root: string, opts: RunRegistryRe
   await opts.lock.run(async () => {
     const registry = await opts.read(root);
     if (!(registry as Array<TItem & { id?: string }>).some((r) => r.id === opts.findId)) return;
-    await opts.remove(root, opts.findId);
+    await opts.remove(root, opts.findId, registry);
     removed = true;
     await commitControlFile(root, opts.registryPath(root), opts.commitMessage);
   }, opts.lockLabel);
