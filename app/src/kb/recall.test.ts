@@ -682,7 +682,7 @@ describe('recall — bounded prompt bytes independent of conversation length (#5
   it('caps a 20-turn history to the last 10, noting how many were omitted', async () => {
     v = await buildRecallVault();
     const history = Array.from({ length: 20 }, (_, i) => ({ question: `q${i}`, answer: `a${i}` }));
-    const { client, lastConfig: _lastConfig } = fakeClient([{ tool: 'submitAnswer', args: { answer: 'x', citations: [], grounded: false } }]);
+    const { client } = fakeClient([{ tool: 'submitAnswer', args: { answer: 'x', citations: [], grounded: false } }]);
     // Capture the actual prompt sent — sendAndWait's first arg.
     let sentPrompt = '';
     const capturingClient: RecallClient = {
