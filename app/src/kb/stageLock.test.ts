@@ -107,6 +107,47 @@ describe('Mutex (canonical writer)', () => {
     expect(lock.state().stuck).toBeUndefined();
   });
 
+  // #515: `sectionTimeoutMs` is the hard backstop UNDER the watchdog — a section that never settles
+  // (the exact #163 mechanism, e.g. non-git work in a section that boundedGit can't reach) must reject
+  // its caller AND release the chain for the next waiter, rather than wedging every future canonical
+  // write behind it forever.
+  it('#515 sectionTimeoutMs: a never-resolving section rejects its caller and the chain proceeds', async () => {
+    const lock = new Mutex({ sectionTimeoutMs: 20 });
+    const neverSettles = new Promise<void>(() => {}); // deliberately never resolves/rejects
+    const wedged = lock.run(async () => {
+      await neverSettles;
+    }, 'wedged');
+    await expect(wedged).rejects.toThrow(/timed out after 20ms/);
+    // The next queued section runs promptly — it was NOT stuck behind the orphaned `wedged` section.
+    const queued = lock.run(async () => 'ran', 'after');
+    const raced = await Promise.race([queued, sleep(200).then(() => 'lock-still-wedged' as const)]);
+    expect(raced).toBe('ran');
+  });
+
+  it('#515 sectionTimeoutMs: a per-call `timeoutMs` overrides the Mutex default', async () => {
+    const lock = new Mutex({ sectionTimeoutMs: 10_000 }); // Mutex default is generous…
+    const wedged = lock.run(async () => new Promise<void>(() => {}), 'wedged', { timeoutMs: 15 }); // …call override is not
+    await expect(wedged).rejects.toThrow(/timed out after 15ms/);
+  });
+
+  it('#515 sectionTimeoutMs: undefined (the default) never rejects — unchanged behavior for bare `new Mutex()`', async () => {
+    const lock = new Mutex();
+    let released: () => void = () => {};
+    const gate = new Promise<void>((r) => (released = r));
+    const p = lock.run(async () => {
+      await gate;
+      return 'ok';
+    }, 'slow');
+    await sleep(30); // comfortably past every timeout used in the other cases above
+    released();
+    await expect(p).resolves.toBe('ok'); // no timeout configured → never forced to reject
+  });
+
+  it('#515 sectionTimeoutMs: a section that settles well within the timeout is unaffected', async () => {
+    const lock = new Mutex({ sectionTimeoutMs: 500 });
+    await expect(lock.run(async () => { await tick(); return 7; }, 'quick')).resolves.toBe(7);
+  });
+
   it('#163: a RE-ENTRANT lock.run still deadlocks (known) but the watchdog SURFACES it — no silent wedge', async () => {
     const { log, warns } = capturingLog();
     const lock = new Mutex({ log, stuckMs: 20 });

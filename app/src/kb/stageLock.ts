@@ -40,6 +40,29 @@ export interface MutexOptions {
   /** Watchdog threshold (ms): a section held longer than this logs `lock.stuck` + sets `stuck`.
    *  Default 30s — far above any real canonical advance (a git ff/cherry-pick is sub-second). */
   stuckMs?: number;
+  /** #515: default per-section hard timeout (ms), applied to every `run()` call that doesn't pass its
+   *  own `opts.timeoutMs`. Undefined (default) disables enforcement — existing callers/tests that
+   *  construct a bare `new Mutex()` keep today's behavior (a wedged section wedges the chain forever;
+   *  `boundedGit`'s own process-level timeout is what unblocks a pure-git section in practice). Set
+   *  this on the shared per-vault lock as defense-in-depth for the non-git work inside a section
+   *  (fs writes, sidecar reads) that boundedGit can't bound. See `run()`. */
+  sectionTimeoutMs?: number;
+}
+
+export interface RunOptions {
+  /** Overrides the Mutex-level `sectionTimeoutMs` default for this one section. Pass `0`/`Infinity` is
+   *  not special-cased — pass `undefined` to fall back to the Mutex default (which may itself be off). */
+  timeoutMs?: number;
+}
+
+/** #515: a section timed out — the caller was rejected and the chain was released for the next
+ *  waiter. The original `fn()` may still be running in the background (never cancelled — Node has no
+ *  primitive to abort an arbitrary promise); its eventual result/error is discarded and logged. */
+export class LockSectionTimeoutError extends Error {
+  constructor(label: string | undefined, timeoutMs: number) {
+    super(`lock section "${label ?? '(unlabeled)'}" timed out after ${timeoutMs}ms`);
+    this.name = 'LockSectionTimeoutError';
+  }
 }
 
 /** A tiny async mutex: serializes async work so two critical sections never overlap. */
@@ -54,10 +77,12 @@ export class Mutex {
   private stuck = false; // the watchdog has flagged the current section as held-too-long (#163)
   private readonly log: DevLog;
   private readonly stuckMs: number;
+  private readonly sectionTimeoutMs: number | undefined;
 
   constructor(opts: MutexOptions = {}) {
     this.log = opts.log ?? noopDevLog;
     this.stuckMs = opts.stuckMs ?? 30_000;
+    this.sectionTimeoutMs = opts.sectionTimeoutMs;
   }
 
   /**
@@ -66,8 +91,18 @@ export class Mutex {
    * the prior section settles (success OR failure), and the chain advances on `finally` so a failed
    * section never wedges the lock. A section held past `stuckMs` logs a loud `lock.stuck` warning +
    * sets the `stuck` status flag (a silent wedge becomes a named, surfaced error — AUDIT-2).
+   *
+   * #515: if a section timeout is in effect (`opts.timeoutMs` or the Mutex's `sectionTimeoutMs`
+   * default), a section that hasn't settled by the deadline REJECTS ITS CALLER with
+   * `LockSectionTimeoutError` and RELEASES THE CHAIN — the next queued section runs immediately,
+   * rather than waiting on a wedge that may never clear. The timed-out `fn()` keeps running
+   * in the background (Node can't cancel an arbitrary promise); its eventual settlement only
+   * updates `state()` bookkeeping and is otherwise discarded. This is a backstop for non-git work
+   * in a section (fs writes, sidecar reads) — a section built entirely from `boundedGit` calls
+   * already self-unwedges via git's own process-level timeout.
    */
-  run<T>(fn: () => Promise<T>, label?: string): Promise<T> {
+  run<T>(fn: () => Promise<T>, label?: string, opts: RunOptions = {}): Promise<T> {
+    const timeoutMs = opts.timeoutMs ?? this.sectionTimeoutMs;
     const prev = this.tail;
     this.pending += 1;
     let release: () => void = () => {};
@@ -106,9 +141,42 @@ export class Mutex {
         this.stuck = false;
       }
     };
-    return prev.then(runFn, runFn).finally(() => {
+    const settled = prev.then(runFn, runFn);
+    let chainReleased = false;
+    const releaseChain = (): void => {
+      if (chainReleased) return;
+      chainReleased = true;
       this.pending -= 1;
       release();
+    };
+    settled.finally(releaseChain);
+    // Swallow a background rejection from the orphaned `fn()` after a timeout has already settled the
+    // caller — otherwise it surfaces as an unhandled rejection with nothing left to catch it.
+    settled.catch(() => {});
+    if (timeoutMs === undefined) return settled;
+    return new Promise<T>((resolve, reject) => {
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        this.log.error('lock.section-timeout', {
+          holder: label ?? '(unlabeled)',
+          timeoutMs,
+          waiters: Math.max(0, this.pending - 1),
+        });
+        releaseChain();
+        reject(new LockSectionTimeoutError(label, timeoutMs));
+      }, timeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
+      settled.then(
+        (value) => {
+          clearTimeout(timer);
+          if (!timedOut) resolve(value);
+        },
+        (err) => {
+          clearTimeout(timer);
+          if (!timedOut) reject(err);
+        },
+      );
     });
   }
 

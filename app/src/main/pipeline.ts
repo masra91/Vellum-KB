@@ -55,7 +55,7 @@ import { reapEphemeralWorktrees, boundedGit } from '../kb/canonicalAdvance';
 import { fastHeadSha, fastHeadBranch } from '../kb/gitHeadFast';
 import { CanonicalQueueCache } from '../kb/queueCache';
 import type { CandidateSet } from '../kb/connectAgent';
-import { reconcileStaleIndexLock, hasLiveIndexHolder } from '../kb/canonicalLockHeal';
+import { reconcileStaleIndexLock, hasLiveIndexHolder, reconcileCherryPickSequencer } from '../kb/canonicalLockHeal';
 import { promote } from '../kb/staging';
 import {
   remediateHealthFindingInVault,
@@ -362,10 +362,20 @@ export async function startPipeline(vaultPath: string): Promise<Orchestrator> {
     isLiveInProcHolder: () => hasLiveIndexHolder(stagingWt),
     log: log.child({ scope: 'lock' }),
   }).catch((err) => log.child({ scope: 'lock' }).error('startup.lock-reconcile-failed', { itemId: vaultPath, err }));
+  // #515 BUG-2: heal a stuck CHERRY_PICK_HEAD/sequencer left by a crash/kill mid-advance — BEFORE any
+  // stage drains, so the first capture's plain `add inbox` + commit never silently concludes a stale,
+  // possibly half-applied cherry-pick under a "capture:" message.
+  await reconcileCherryPickSequencer(stagingWt, { log: log.child({ scope: 'lock' }) }).catch((err) =>
+    log.child({ scope: 'lock' }).error('startup.cherry-pick-reconcile-failed', { itemId: vaultPath, err }),
+  );
   // The shared serialized canonical writer for this vault (§5). The watchdog logs a loud `lock.stuck`
   // (scope `lock`) + flips the OBS-7 `stuck` flag if any section is held past the threshold — so a
   // deadlocked/hung critical section surfaces (named by its label) instead of silently wedging (#163).
-  const lock = new Mutex({ log: log.child({ scope: 'lock' }) });
+  // #515: `sectionTimeoutMs` is a hard backstop ABOVE the watchdog threshold — every canonical-lock
+  // section is expected to be built from `boundedGit` calls (each capped at WORKTREE_GIT_TIMEOUT_MS =
+  // 20s) plus small fs/JSON work, so 60s comfortably covers a worst-case multi-call section while still
+  // guaranteeing the queue can never wedge forever on non-git work a bounded git client can't reach.
+  const lock = new Mutex({ log: log.child({ scope: 'lock' }), sectionTimeoutMs: 60_000 });
   // SPEC-0028 RESEARCH-1 / WS-B: seed a default Web researcher on a virgin (or pre-feature) vault so
   // the research pipeline isn't INERT — an empty registry means nothing dispatches even once a
   // `research-request` is emitted. Keyed on the registry FILE's absence (not emptiness), so a
@@ -2064,6 +2074,28 @@ export function stopPipeline(): void {
     void promoter.flushNow();
   }
   active = null;
+}
+
+/**
+ * #515 BUG-2: stop the pipeline for an actual app quit, AWAITING the pending coalesced promote flush —
+ * bounded by `timeoutMs` — before returning, so `main.ts`'s `before-quit` handler can hold the quit open
+ * just long enough for an in-flight commit/promote to land cleanly instead of being SIGKILLed mid-write.
+ * Best-effort past the deadline: staging is the durable source of truth, so an abandoned flush is simply
+ * re-promoted (idempotent + additive) on the next session's first drain — never a correctness gap, only
+ * a missed opportunity to publish a moment sooner.
+ */
+export async function stopPipelineForQuit(timeoutMs = 2000): Promise<void> {
+  if (!active) return;
+  const { promoter } = active;
+  stopAllStages(active);
+  active = null;
+  await Promise.race([
+    promoter.flushNow().catch(() => {}),
+    new Promise<void>((resolve) => {
+      const t = setTimeout(resolve, timeoutMs);
+      if (typeof t.unref === 'function') t.unref();
+    }),
+  ]);
 }
 
 let replaying = false;

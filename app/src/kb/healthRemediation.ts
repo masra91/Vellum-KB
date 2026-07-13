@@ -10,9 +10,9 @@
 //   - find-homes — the affinity orphan-linker pass (`linkOrphansOnce`) → reconnects degree-0 nodes.
 // HELD for a later slice: merge (DESTRUCTIVE — needs the guarded→working→review confirm model) and
 // enrich (its directive is consumed nowhere yet — a dead action today; excluded per the no-fake bar).
-import simpleGit from 'simple-git';
 import { Mutex } from './stageLock';
 import { ensureGitIdentity } from './vault';
+import { boundedGit } from './canonicalAdvance';
 import { noopDevLog, type DevLog } from './devlog';
 import { linkOne, linkOrphansOnce } from './connectStage';
 import { promote } from './staging';
@@ -95,14 +95,17 @@ export async function dismissHealthFindingInVault(
   req: HealthDismissRequest,
   decidedAt: string,
   log: DevLog = noopDevLog,
+  timeoutMs?: number,
 ): Promise<HealthDismissResult> {
   if (!req.findingKey) return { ok: false, message: 'A finding key is required.' };
   try {
     await lock.run(async () => {
       await recordHealthDismissal(stagingWt, { findingKey: req.findingKey, kind: req.kind, dismissed: req.dismissed, reason: req.reason, decidedAt });
-      const git = simpleGit(stagingWt);
+      // #163/#515: bounded — was raw unbounded `simpleGit`, able to wedge the shared lock forever.
+      // Pathspec-scoped to `directives/` (all `recordHealthDismissal` writes), not `-A`.
+      const git = boundedGit(stagingWt, timeoutMs);
       await ensureGitIdentity(git);
-      await git.raw('add', '-A');
+      await git.raw('add', 'directives');
       await git.commit(`health: ${req.dismissed === false ? 'restore' : 'dismiss'} ${req.findingKey}`);
       await promote(vaultPath, undefined, undefined, log);
     }, 'health:dismiss');
