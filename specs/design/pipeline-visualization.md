@@ -4,9 +4,9 @@ implements: SPEC-0032
 title: Pipeline Visualization — Visual Design ("The Line")
 type: design
 status: active   # both SPEC-0033 gates cleared 2026-06-02 → checked in as a living design spec
-owners: [KB-Design-Lead, KB-Lead, Principal]
+owners: [KB-Design-Lead, KB-Design-Lead-2, KB-Lead, Principal]
 created: 2026-06-02
-updated: 2026-06-02
+updated: 2026-07-13
 related: [SPEC-0032, SPEC-0033, SPEC-0030, SPEC-0017, SPEC-0031]
 gates:
   ai-patterns: approved     # GATE 1 — KB-AI-Detector (distinctiveness) — 2026-06-02, no rejections
@@ -395,6 +395,13 @@ requires are **not yet exposed** — flagged for the implementer + KB-Lead/PM (t
    break the `N == list` anti-#110 invariant). So: design = the brass unified queue (target); #196 =
    the baseline (now); the brass reframe is a **tracked follow-up** gated on this field, owned by
    DEV-4. (Documents the design-ahead-of-impl gap; no silent divergence.)
+   **IA home (2026-07-13 addendum, KB-Design-Lead-2):** this section was written pre-SPEC-0060 and
+   assumed the baseline siding lives in the standalone Status/"The Line" view. That view is
+   **dissolved** (SPEC-0060 §4: "stuck/set-aside items route to Reviews") — the baseline's home is
+   **Reviews**, not a resurrected Status view or Today's ember panel. Build it as its own distinct,
+   oxide-toned section inside Reviews, visually separate from Reviews' existing ember decision
+   cards (so there's no premature `N`-count collision with the still-not-built unified roster
+   above). Resolved for issue #192's implementation (KB-Developer-1, 2026-07-13).
 
 ## 10. Out of scope
 
@@ -494,3 +501,12 @@ requires are **not yet exposed** — flagged for the implementer + KB-Lead/PM (t
   live-state cluster apart from the projection, **latency** stays labeled — plus a once-per-spine **legend**
   and `title=` decode-on-hover. No new tokens; §3 contrast contract held. Net-new affordance → **KB-Lead
   HYBRID classify** (+ any VIZ requirement delta KB-Lead specs). Authored for the Status clarity-pass ask.
+- 2026-07-13 — **§9 item 4 IA-home addendum (KB-Design-Lead-2).** This section predates SPEC-0060 and
+  assumed the VIZ-7 baseline (oxide set-aside siding + Retry/Dismiss) lives in the standalone
+  Status/"The Line" view — that view is now dissolved (deleted entirely in #523) and SPEC-0060 §4
+  already routes "stuck/set-aside items" to **Reviews**. Added the explicit cross-reference so the
+  IA gap doesn't recur: the baseline lives in Reviews as its own distinct, oxide-toned section,
+  separate from Reviews' existing ember decision cards. Resolved for KB-Developer-1's #192
+  implementation, which found the backend (`pipelineStatusView`/`pipelineControl`) fully built with
+  zero renderer call sites since Status's deletion. Documentation-only amendment (no new visual
+  language) — reconciling two already-gated specs, not re-opening GATE 1.
