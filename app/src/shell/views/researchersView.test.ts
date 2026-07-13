@@ -104,6 +104,39 @@ describe('Field Desk — render (RESEARCH-15)', () => {
   });
 });
 
+// VUX-17 (#524 §5) — every strip gets a chevron cue + click-to-open detail (identity + current config).
+describe('Field Desk — VUX-17 drill-in shell', () => {
+  it('clicking the chevron opens the detail with kind/clearance/schedule/autonomy/limits + most-recent-run + placeholder', async () => {
+    listResearchers = vi.fn(async () => [
+      { ...webRow, schedule: 'daily', posture: 'autonomous', lastRun: { ts: '2026-06-02T01:00:00.000Z', eventType: 'researched', what: 'Atlas', citations: 3 } },
+    ]);
+    setApi();
+    const c = await mount();
+    const strip = c.querySelector<HTMLElement>('.rdesk-strip[data-id="web-1"]')!;
+    const chev = strip.querySelector<HTMLButtonElement>('.ag-drill')!;
+    expect(chev.getAttribute('aria-expanded')).toBe('false');
+    chev.click();
+    const detail = strip.querySelector<HTMLElement>('.ag-detail')!;
+    expect(detail.hidden).toBe(false);
+    expect(chev.getAttribute('aria-expanded')).toBe('true');
+    expect(detail.textContent).toContain('Public web'); // clearance
+    expect(detail.textContent).toContain('Daily'); // schedule
+    expect(detail.textContent).toContain('Autonomous'); // posture
+    expect(detail.textContent).toContain('8'); // budget.maxToolCalls (base fixture)
+    expect(detail.textContent).toContain('brought back'); // reportLine's real most-recent-run text
+    expect(detail.textContent).toContain('available yet'); // disclosed placeholder for deeper history
+    chev.click();
+    expect(detail.hidden).toBe(true);
+  });
+
+  it('does NOT open the detail when clicking an existing control (arm switch, clearance rung, Run button)', async () => {
+    const c = await mount();
+    const strip = c.querySelector<HTMLElement>('.rdesk-strip[data-id="web-1"]')!;
+    strip.querySelector<HTMLButtonElement>('.rdesk-arm')!.click();
+    expect(strip.querySelector<HTMLElement>('.ag-detail')?.hidden).toBe(true);
+  });
+});
+
 describe('Field Desk — escalation deep-link (RESEARCH-11; no dead affordance)', () => {
   const escalatedRow: ResearcherView = { ...webRow, lastRun: { ts: '2026-06-02T01:00:00.000Z', eventType: 'escalated', what: 'Atlas', citations: 0, reviewId: 'REV123' } };
 

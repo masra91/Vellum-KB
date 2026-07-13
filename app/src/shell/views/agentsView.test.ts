@@ -124,6 +124,60 @@ describe('Agents view (SPEC-0027 PANEL-3 · v3)', () => {
     });
   });
 
+  // VUX-17 (#524 §5) — every card gets a chevron cue + click-to-open detail (identity + current config).
+  describe('VUX-17 drill-in shell', () => {
+    it('renders a chevron cue and an initially-closed detail panel per card', async () => {
+      setApi(vi.fn(async () => AGENTS));
+      mountAgents(root).show?.();
+      await tick();
+      await tick();
+      const card = root.querySelector('.ag-card[data-key="decompose"]')!;
+      const chev = card.querySelector<HTMLButtonElement>('.ag-drill')!;
+      expect(chev).toBeTruthy();
+      expect(chev.getAttribute('aria-expanded')).toBe('false');
+      expect(card.querySelector<HTMLElement>('.ag-detail')?.hidden).toBe(true);
+    });
+
+    it('clicking the chevron opens the detail panel with identity + current config; clicking again closes it', async () => {
+      setApi(vi.fn(async () => AGENTS));
+      mountAgents(root).show?.();
+      await tick();
+      await tick();
+      const card = root.querySelector('.ag-card[data-key="decompose"]')!;
+      const chev = card.querySelector<HTMLButtonElement>('.ag-drill')!;
+      chev.click();
+      const detail = card.querySelector<HTMLElement>('.ag-detail')!;
+      expect(detail.hidden).toBe(false);
+      expect(chev.getAttribute('aria-expanded')).toBe('true');
+      expect(detail.textContent).toContain('Extracts candidates.'); // role
+      expect(detail.textContent).toContain('kb/decomposeAgent.ts'); // instructions
+      expect(detail.textContent).toContain('available yet'); // the disclosed past-runs placeholder
+      chev.click();
+      expect(detail.hidden).toBe(true);
+      expect(chev.getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('clicking elsewhere on the card also opens the detail (not just the chevron)', async () => {
+      setApi(vi.fn(async () => AGENTS));
+      mountAgents(root).show?.();
+      await tick();
+      await tick();
+      const card = root.querySelector('.ag-card[data-key="decompose"]')!;
+      card.querySelector<HTMLElement>('.ag-name')!.click(); // an inert part of the card, not a control
+      expect(card.querySelector<HTMLElement>('.ag-detail')?.hidden).toBe(false);
+    });
+
+    it('does NOT open the detail when clicking the existing Model disclosure (own interaction preserved)', async () => {
+      setApi(vi.fn(async () => AGENTS));
+      mountAgents(root).show?.();
+      await tick();
+      await tick();
+      const card = root.querySelector('.ag-card[data-key="decompose"]')!;
+      card.querySelector<HTMLElement>('.ag-adv summary')!.click();
+      expect(card.querySelector<HTMLElement>('.ag-detail')?.hidden).toBe(true);
+    });
+  });
+
   // SPEC-0048 — the global "Default model" picker over the live CLI catalog.
   describe('SPEC-0048 model picker', () => {
     const CATALOG: ModelCatalogView = {

@@ -1142,6 +1142,23 @@ button:disabled {
 .ag-adv summary .sub { margin-left: auto; font-family: var(--mono); font-size: 0.68rem; color: var(--faint); }
 .ag-adv-body { padding: 0.3rem 0.1rem 0.4rem; display: flex; flex-direction: column; gap: 0.2rem; }
 
+/* VUX-17 (#524 §5) drill-in shell — every Librarian/Schedule/Researcher card gets a chevron cue + a
+   click-to-open detail panel (identity + current config, all from data the card already carries). A
+   real <button>, not a bare span, so it's independently keyboard-focusable without making the whole
+   card (which contains OTHER real controls) an interactive role — see agentDrillIn.ts. */
+.ag-drill { appearance: none; flex: none; align-self: center; margin-left: auto; background: transparent; border: 0; padding: 0.2rem; cursor: pointer; color: var(--faint); font-size: 0.95rem; line-height: 1; border-radius: var(--r-chip); transition: color var(--dur-quick) var(--e-out), transform var(--dur-quick) var(--e-out); }
+.ag-card:hover .ag-drill { color: var(--viridian); }
+.ag-drill:focus-visible { outline: 2px solid var(--slate); outline-offset: 1px; }
+.ag-drill[aria-expanded="true"] { transform: rotate(90deg); color: var(--viridian); }
+.ag-detail { margin-top: 0.85rem; padding-top: 0.8rem; border-top: 1px solid var(--hair); display: flex; flex-direction: column; gap: 0.7rem; }
+.ag-detail[hidden] { display: none; }
+.ag-detail-rows { display: flex; flex-direction: column; gap: 0.35rem; }
+.ag-detail-row { display: flex; align-items: baseline; gap: 0.6rem; font-size: 0.8rem; }
+.ag-detail-k { flex: 0 0 8rem; color: var(--stone); font-family: var(--ui); }
+.ag-detail-v { flex: 1; min-width: 0; color: var(--ink); font-family: var(--ui); overflow-wrap: anywhere; }
+.ag-detail-h { margin: 0 0 0.3rem; font-family: var(--ui); font-weight: 600; font-size: 0.72rem; color: var(--stone); }
+.ag-detail-empty { margin: 0; font-size: 0.8rem; color: var(--stone); }
+
 /* Loading + empty (calm, never blank). */
 .ag-loading, .ag-empty { font-family: var(--ui); font-size: 0.86rem; color: var(--stone); padding: 0.6rem 0; }
 

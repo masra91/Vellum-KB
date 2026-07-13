@@ -16,6 +16,7 @@
 import { esc } from '../html';
 import { withTimeout, renderLoadError, paintSkeleton } from '../loadGuard';
 import { formatTimestamp } from '../formatTime';
+import { drillChevronHtml, wireDrillIn, pastRunsPlaceholderHtml, detailRowHtml } from './agentDrillIn';
 import {
   schedulePresetLabel,
   SCHEDULE_OPTIONS,
@@ -57,6 +58,7 @@ const HEADER = `<p class="rdesk-sub viz-body">Agents you brief and dispatch outs
 
 export function mountResearchers(container: HTMLElement): ViewHandle {
   paintSkeleton(container, HEADER, 'cards');
+  wireDrillIn(container); // VUX-17: delegated on the container (survives re-render) — wire once, not per-render.
   return { show: () => void render(container) }; // #510: re-read on every activation (no timers here)
 }
 
@@ -174,6 +176,7 @@ function strip(r: ResearcherView): string {
       <div class="rdesk-strip-head">
         <span class="rdesk-id viz-numeric">${esc(r.id)}</span>
         <button type="button" class="rdesk-arm viz-focusable" role="switch" aria-checked="${armed ? 'true' : 'false'}"><span class="dot" aria-hidden="true"></span>${armed ? 'Enabled' : 'Paused'}</button>
+        ${drillChevronHtml(r.id)}
       </div>
       <div class="rdesk-identity">
         <span class="rdesk-kind viz-signage" title="${esc(templateDesc(r.template))}">${esc(KIND_GLYPH[r.template])} ${esc(templateLabel(r.template))}</span>
@@ -206,7 +209,32 @@ function strip(r: ResearcherView): string {
         <button type="button" class="viz-btn viz-btn--danger rdesk-confirm-go researcher-confirm-go">Confirm</button>
       </div>
       <p class="rdesk-status researcher-status viz-body" role="status" aria-live="polite"></p>
+      ${researcherDetailHtml(r)}
     </li>`;
+}
+
+/** VUX-17 detail panel — identity + current config from ResearcherView's existing fields (richest of
+ *  the three hub sections: clearance, reach limits, schedule/autonomy already visible above). Reuses
+ *  `reportLine` for the most-recent dispatch ahead of the "earlier history" placeholder. Interaction
+ *  consistency across the hub, not because this item type hides anything. */
+function researcherDetailHtml(r: ResearcherView): string {
+  const maxCalls = r.budget?.maxToolCalls;
+  const maxDepth = r.budget?.maxDepth;
+  const timeoutMin = typeof r.timeoutMs === 'number' && Number.isFinite(r.timeoutMs) ? `${Math.max(1, Math.round(r.timeoutMs / 60_000))} min` : '—';
+  return `<div class="ag-detail" hidden>
+    <div class="ag-detail-rows">
+      ${detailRowHtml('Kind', templateLabel(r.template))}
+      ${detailRowHtml('Clearance', EGRESS_TIER_LABELS[r.egressTier])}
+      ${detailRowHtml('Schedule', schedulePresetLabel(r.schedule))}
+      ${detailRowHtml('Autonomy', POSTURE_LABEL[r.posture] ?? r.posture)}
+      ${detailRowHtml('Limits', `${maxCalls ?? '—'} searches · depth ${maxDepth ?? '—'} · ${timeoutMin}`)}
+    </div>
+    <div class="ag-detail-runs">
+      <h4 class="ag-detail-h">Most recent run</h4>
+      <p class="ag-detail-empty viz-body">${reportLine(r)}</p>
+    </div>
+    ${pastRunsPlaceholderHtml()}
+  </div>`;
 }
 
 /** A labeled instrument field (caption + input) — flat, captioned, not a loose input (§2). */
