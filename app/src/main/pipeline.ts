@@ -10,40 +10,22 @@
 //
 // All stages share ONE canonical-writer lock per vault (SPEC-0014 §5): promotion + every stage
 // ref-advance serialize through it.
-import { promises as fs, readFileSync } from 'node:fs';
+//
+// #574 (fast-follow to #528/#572): the ActivePipeline singleton + startPipeline's boot sequence +
+// QUIESCE + Full Replay live in `pipelineLifecycle.ts`; the four maintained projection stores (status/
+// review/graph/Today) live in `pipelineProjections.ts` — both were split out once this file grew back
+// past #528's <800-line AC even after #572's registry/decider extraction. This file re-exports both
+// modules' full public surface (so no importer needs to change its path — mirrors the `commitControlFile`
+// re-export precedent #572 established) and keeps the remaining IPC-facing action handlers: review
+// answer/remediation, saveRecallOutput, the registry-CRUD delegators (thin wrappers over
+// registries/*ControlPanel.ts, #572), and the compose-backlog / set-aside recovery actions.
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
-import { createStatusSnapshotStore, type StatusSnapshotStore } from './statusSnapshot';
-import { createProjectionStore, type ProjectionStore, type Projection } from './projectionStore';
-import { computeGraphProjection, type GraphProjection } from '../kb/graphProjection';
-// SPEC-0058 Today: the maintained command-center projection composes the other maintained reads.
-import { makeReadOnlyTools } from '../kb/recallTools'; // for the Today Health walk (buildHealthReport takes RecallTools)
-import { assembleTodayProjection, type TodaySources } from '../kb/todayProjection';
-import type { TodayProjection, TodayStation } from '../kb/types';
-import { buildStations } from '../kb/lineStations'; // "one Line, one truth" — byte-identical Status stations
-import { buildHealthReport } from '../kb/healthPanel';
-import { toHealthProjection } from '../kb/healthProjection';
-import { readContradictionDirectives } from '../kb/directives';
-import { loadActivityIndex } from '../kb/activityIndex';
-import { buildFeed, type ActivityFeedEntry } from '../kb/activityDigest';
-import { createCoalescingPromoter, type CoalescingPromoter } from '../kb/coalescingPromoter';
-import { Orchestrator, readQueue, listArchiveSetAsideItems, retryArchiveItem, dismissArchiveItem, type ArchiveSetAsideItem } from '../kb/orchestrator';
-import { makeCopilotDecider } from '../kb/copilotAgent';
-import { makeSensitivityClassifier } from '../kb/sensitivityClassifier';
-import { DecomposeStage, readDecomposeQueue } from '../kb/decomposeStage';
-import { makeDecomposeDecider } from '../kb/decomposeAgent';
-import { ClaimsStage, readClaimsQueue, listSetAsideItems, retryClaimsItem, dismissClaimsItem, type SetAsideItem } from '../kb/claimsStage';
-import { makeClaimsDecider } from '../kb/claimsAgent';
-import { ComposeStage, readComposeQueue, reopenComposeSetAside, composeBacklogStats } from '../kb/composeStage';
-import { makeComposeDecider } from '../kb/composeAgent';
-import { ConnectStage, readConnectQueue, listConnectSetAsideItems, retryConnectItem, dismissConnectItem, type ConnectSetAsideItem } from '../kb/connectStage';
-import { makeConnectDecider } from '../kb/connectAgent';
-import { Mutex } from '../kb/stageLock';
-import { createVaultDevLog, readRecentDevLogEntries, type DevLog } from '../kb/devlog';
-import { breadcrumbObserver } from '../kb/activityBreadcrumb';
-import { telemetryHealth } from './telemetry';
+import { listArchiveSetAsideItems, retryArchiveItem, dismissArchiveItem } from '../kb/orchestrator';
+import { listSetAsideItems, retryClaimsItem, dismissClaimsItem } from '../kb/claimsStage';
+import { reopenComposeSetAside, composeBacklogStats } from '../kb/composeStage';
+import { listConnectSetAsideItems, retryConnectItem, dismissConnectItem } from '../kb/connectStage';
 export { commitControlFile } from './commitControlFile';
-import { commitControlFile } from './commitControlFile';
 import * as jobsControlPanel from './registries/jobsControlPanel';
 import { readJournal } from '../kb/jobStage';
 import * as watchControlPanel from './registries/watchControlPanel';
@@ -52,20 +34,9 @@ import * as intakeControlPanel from './registries/intakeControlPanel';
 import * as sourceSensitivityControlPanel from './registries/sourceSensitivityControlPanel';
 import * as instanceSettingsControlPanel from './registries/instanceSettingsControlPanel';
 import * as modelsControlPanel from './registries/modelsControlPanel';
-import { researchDepsOptions, intakeDepsOptions, mediaExtractOptions } from './researchWiring';
-import { createVaultTracer } from '../kb/tracing';
-import { loadPerfIndex } from '../kb/perfIndex';
-import { assemblePipelineStatus, toSetAsideViews, deriveStageError, buildInFlightRoster, type PipelineStatusView, type StageInput, type RecentError, type WorktreeInfo } from '../kb/pipelineStatusView';
-import { displayItemName } from '../kb/pipelineStatusLabels';
-import { readSourceTitles } from '../kb/sourceTitleRead';
+import { researchDepsOptions } from './researchWiring';
 import { planSetAsideAction, type SetAsideTarget } from '../kb/pipelineControl';
-import { readConversionCounts, type ConversionCounts } from '../kb/conversionCounts';
-import { ensureStagingWorktree } from '../kb/stagingWorktree';
-import { reapEphemeralWorktrees, boundedGit, bumpReplayEpoch } from '../kb/canonicalAdvance';
-import { fastHeadSha, fastHeadBranch } from '../kb/gitHeadFast';
-import { CanonicalQueueCache } from '../kb/queueCache';
-import type { CandidateSet } from '../kb/connectAgent';
-import { reconcileStaleIndexLock, hasLiveIndexHolder, reconcileCherryPickSequencer } from '../kb/canonicalLockHeal';
+import { boundedGit } from '../kb/canonicalAdvance';
 import { promote } from '../kb/staging';
 import {
   remediateHealthFindingInVault,
@@ -79,1026 +50,54 @@ import { findOpenReviews, answerReview as answerReviewInVault, type AnswerReview
 import { executeApprovedConsolidation } from '../kb/executeApprovedConsolidation';
 import { reviewResumeStage } from '../kb/reviewResume';
 import { resumeApprovedResearchEscalation } from '../kb/researchResume';
-import { runFullReplay } from '../kb/replay';
-import { JobScheduler } from '../kb/jobScheduler';
-import { exampleJobBehavior, EXAMPLE_JOB_TYPE } from '../kb/exampleJob';
-import { makeReflectJobBehavior, REFLECT_JOB_TYPE } from '../kb/reflectJob';
-import { makeReflectDecider } from '../kb/reflectAgent';
-import { readInstanceConfig, defaultInstanceConfig, resolveStageCaps } from '../kb/instanceConfig';
-import { applyCopilotCeiling } from '../kb/copilotConcurrency';
-import { resolveCopilotModel, setAgentModelOverrides } from '../kb/copilotModel';
-import { initLaunchModel } from '../kb/copilotModelProbe';
+import { defaultInstanceConfig } from '../kb/instanceConfig';
+import { resolveCopilotModel } from '../kb/copilotModel';
 import { appendAuditEvent } from '../kb/audit';
-import { researcherRegistryPath } from '../kb/researcherRegistry';
-import { seedDefaultResearcherIfAbsent } from '../kb/researcherSeed';
-import { ResearcherScheduler } from '../kb/researcherScheduler';
-import { IntakeScheduler } from '../kb/intakeScheduler';
-import { WatchScheduler } from '../kb/watchScheduler';
 import type { WatchFolderView, WatchFolderPatch, IntakeConnectorView, IntakeConnectorConfigPatch, RunIntakeConnectorResult } from '../kb/types';
 import { ulid } from '../kb/ulid';
 import type { SourceSensitivity } from '../kb/sensitivityRead';
 import { buildRecallOutput } from '../kb/outputDoc';
-import type { JobBehavior } from '../kb/jobs';
 import type { Review } from '../kb/reviews';
-import { reviewToSummary } from '../kb/reviewSummary';
 import type { AskResult } from '../kb/recall';
-import type { FullReplayResult, ComposeBacklogResult, JobView, JobConfigPatch, JobLastRun, RunJobResult, InstanceSettings, AgentView, ModelCatalogView, SetModelResult, ResearcherView, ResearcherConfigPatch, ResearcherLastRun, RunResearcherResult, SaveRecallOutputResult, PipelineControlRequest, PipelineControlResult, QuiesceStatus, ReviewSummary } from '../kb/types';
-
-/** Factory to create a job behavior resolver with scoped vaultPath (SPEC-0023, Copilot context scope).
- *  v1 ships the deterministic example job and **Reflect** (SPEC-0024, the first real job);
- *  later job types register here as they land. An unknown type returns null and the scheduler skips it. */
-function createJobBehaviorResolver(vaultPath: string): (type: string) => JobBehavior | null {
-  return (type: string): JobBehavior | null => {
-    if (type === EXAMPLE_JOB_TYPE) return exampleJobBehavior;
-    if (type === REFLECT_JOB_TYPE) return makeReflectJobBehavior(makeReflectDecider({ vaultPath }));
-    return null;
-  };
-}
-
-interface ActivePipeline {
-  vaultPath: string; // the vault root — on `main`, what Obsidian sees (promotion target)
-  stagingWt: string; // the staging worktree — where every stage operates
-  orch: Orchestrator;
-  decompose: DecomposeStage;
-  connect: ConnectStage;
-  claims: ClaimsStage;
-  compose: ComposeStage; // SPEC-0046: the final Enrich stage — (re)writes entity prose from cited claims
-  jobs: JobScheduler; // SPEC-0023: wakes autonomous jobs on a schedule (concurrent, single-flight)
-  researchers: ResearcherScheduler; // SPEC-0028: wakes scheduled researchers (standing passes via ingest)
-  intake: IntakeScheduler; // SPEC-0041: wakes proactive-intake connectors (feed pulls → primary sources)
-  watch: WatchScheduler; // SPEC-0037: live folder watchers (stable files → primary sources, non-destructive)
-  lock: Mutex;
-  promoter: CoalescingPromoter; // STAGING-12: coalesces per-drain promotion into infrequent batched bursts
-  // BUG-11 (#518): consecutive coalesced-promote failures + the last error, since we started force-
-  // flushing for the current quiesce. Bounds `quiesceStatusForActive`'s auto-flush (below) so a
-  // persistently-failing promote() doesn't get hammered every ~1s poll forever — after
-  // MAX_QUIESCE_FLUSH_ATTEMPTS we stop forcing an immediate retry and surface the real cause instead of
-  // an eternal "Publishing…". The underlying promoter still retries on its own quiescent/max-wait cadence
-  // (`runPromote`'s `if (dirty) arm()`) — a later success resets this back to 0. A plain mutable object
-  // (not fields directly on `active`) so the promoter's closures — created before `active` is assigned —
-  // mutate ONE fixed target rather than the swappable `active` singleton.
-  quiesceFlush: { attempts: number; error: string | null };
-  log: DevLog; // the vault dev-log — reused by Run-now so a researcher failure is logged (#160)
-  quiescing: boolean; // SPEC-0045 QUIESCE: true once "Prepare for shutdown" paused new work (drain in progress)
-  // #506: the status tick used to re-walk decompose/connect/claims' queues + conversion counts + set-
-  // asides from scratch every 2.5s even when nothing had changed. HEAD-keyed memos (own instances, not
-  // shared with the stages' internal drain-loop caches) so an idle tick costs a spawn-free sha read
-  // instead of a full tree walk. One instance per active vault (mirrors the per-stage `queueCache` fields).
-  statusCache: {
-    decompose: CanonicalQueueCache<string[]>;
-    connect: CanonicalQueueCache<CandidateSet[]>;
-    claims: CanonicalQueueCache<string[]>;
-    conversion: CanonicalQueueCache<ConversionCounts>;
-    claimsSetAside: CanonicalQueueCache<SetAsideItem[]>;
-    connectSetAside: CanonicalQueueCache<ConnectSetAsideItem[]>;
-    archiveSetAside: CanonicalQueueCache<ArchiveSetAsideItem[]>;
-  };
-}
-
-// STAGING-12 promotion cadence — `main` is the live Obsidian vault, so promote in infrequent bursts,
-// not per-drain. Debounce: promote once drains go quiet for QUIESCENT_MS; cap: publish at least every
-// MAX_WAIT_MS under continuous processing so `main` isn't starved. (Tunable; an Obsidian-aware
-// "calm-vault" backoff is the tracked follow-up.)
-const PROMOTE_QUIESCENT_MS = 30_000; // 30s of quiet → promote
-const PROMOTE_MAX_WAIT_MS = 180_000; // …but at least every 3 min under a continuous drain
-// BUG-11 (#518): how many consecutive forced flushes `quiesceStatusForActive` will attempt before it
-// gives up hammering promote() every poll and defers to the promoter's own (much slower) backoff.
-export const MAX_QUIESCE_FLUSH_ATTEMPTS = 3;
-
-let active: ActivePipeline | null = null;
-
-// ── SPEC-0058 STATE-8 (#510): the maintained-projection PUSH sink ───────────────────────────────────
-// `main.ts` sets this once (`setProjectionPushSink`) to broadcast `webContents.send('kb:projection-
-// changed', event)` so a visible renderer view re-reads its (instant) projection immediately instead of
-// waiting on its poll interval. Injected rather than importing Electron here directly, so pipeline.ts
-// stays node-testable without a real BrowserWindow. Best-effort + never load-bearing: a push is a "go
-// re-read the cache" nudge — the render path's own IPC read is always the source of truth, so a dropped
-// push (no window yet, a listener throwing) just means the view catches up on its own next poll/switch.
-export type ProjectionPushEvent = { store: 'status' | 'review' | 'graph' | 'today'; builtAt: string };
-let projectionPushSink: ((event: ProjectionPushEvent) => void) | null = null;
-
-/** Register (or clear, with `null`) the push sink. Call once from `main.ts` after the window exists. */
-export function setProjectionPushSink(sink: ((event: ProjectionPushEvent) => void) | null): void {
-  projectionPushSink = sink;
-}
-
-function pushProjectionChanged(store: ProjectionPushEvent['store'], builtAt: string): void {
-  try {
-    projectionPushSink?.({ store, builtAt });
-  } catch {
-    /* push is best-effort — a listener failure must never break the projection */
-  }
-}
-
-/** The active vault's `.kb/cache` dir — where OBS-21 writes a heap snapshot (gitignored), or null
- *  when no vault is open (the sampler then skips the snapshot). Passed to the telemetry glue. */
-export function activeSnapshotDir(): string | null {
-  return active ? path.join(active.vaultPath, '.kb', 'cache') : null;
-}
-
-/** Start every active stage's poke/sweep loop. The SINGLE source of truth for "which stages run"
- *  — both `startPipeline` and `fullReplay`'s resume call this, so a replay can never diverge from
- *  normal startup (e.g. start a stage that startup deliberately leaves dormant). */
-function startActiveStages(a: ActivePipeline): void {
-  a.orch.start();
-  a.decompose.start();
-  a.connect.start();
-  a.claims.start();
-  a.compose.start(); // SPEC-0046: the Compose Enrich stage (entity prose from cited claims)
-  a.jobs.start(); // SPEC-0023: the autonomous-job scheduler tick (named-preset cadence)
-  a.researchers.start(); // SPEC-0028: the scheduled-researcher tick (standing external research)
-  a.intake.start(); // SPEC-0041: the proactive-intake tick (scheduled feed pulls → primary sources)
-  a.watch.start(); // SPEC-0037: live folder watchers (startup reconcile + chokidar stable-file events)
-  statusStore.start(); // OBS-24: maintain the status snapshot off the render path (seed from persisted, then live)
-  reviewStore.start(); // SHELL-12: maintain the review-queue projection off the render path
-  graphStore.start(); // SPEC-0058 STATE-2: maintain the graph projection (Explore/Health) off the render path
-  todayStore.start(); // SPEC-0058: maintain the Today home projection (composite) off the render path
-}
-
-/** Stop every stage's sweep loop (shutdown, vault switch, or pre-replay pause). */
-function stopAllStages(a: ActivePipeline): void {
-  a.orch.stop();
-  a.decompose.stop();
-  a.connect.stop();
-  a.claims.stop();
-  a.compose.stop();
-  a.jobs.stop();
-  a.researchers.stop();
-  a.intake.stop();
-  a.watch.stop(); // SPEC-0037: close all live folder watchers
-  a.promoter.stop(); // STAGING-12: cancel a pending promotion timer (no promotes while drains are stopped)
-  statusStore.stop(); // OBS-24: halt the background status refresh (retains the in-memory snapshot)
-  reviewStore.stop(); // SHELL-12: halt the review-queue projection refresh (retains the in-memory projection)
-  graphStore.stop(); // SPEC-0058 STATE-2: halt the graph projection refresh (retains the in-memory projection)
-  todayStore.stop(); // SPEC-0058: halt the Today projection refresh (retains the in-memory projection)
-}
-
-// ── SPEC-0045 QUIESCE — graceful shutdown (drain, don't kill) ───────────────────────────────────
-//
-// Quiesce stops the NEW-WORK PRODUCERS (the 4 schedulers + capture enqueue) but leaves the pipeline
-// DRAINERS (orchestrator + decompose/connect/claims) running, so already-captured work flows to clean
-// completion + commit (QUIESCE-2) — leaning entirely on the existing fault-tolerance floor (QUIESCE-4:
-// no new correctness code). It is a convenience: an abrupt stop mid-drain is just another restart the
-// reconcile/idempotency guarantees already cover.
-
-/** Stop only the new-work producers — the scheduled triggers. An in-flight run finishes (the scheduler
- *  `busy()` stays true until it does); only NEW runs are halted. The drainers keep processing the queue. */
-function stopProducers(a: ActivePipeline): void {
-  a.jobs.stop(); // SPEC-0023 — no new scheduled jobs
-  a.researchers.stop(); // SPEC-0028 — no new scheduled researcher passes
-  a.intake.stop(); // SPEC-0041 — no new feed pulls
-  a.watch.stop(); // SPEC-0037 — no new folder watching (restart-reconcile catches anything that lands while down)
-}
-
-/** Restart the new-work producers (Resume / normal start). */
-function startProducers(a: ActivePipeline): void {
-  a.jobs.start();
-  a.researchers.start();
-  a.intake.start();
-  a.watch.start();
-}
-
-/** Enter QUIESCING (QUIESCE-1): pause new ingestion + scheduled work; the pipeline keeps draining. */
-export async function quiesceActive(): Promise<QuiesceStatus> {
-  if (!active) return { quiescing: false, remaining: 0, safe: false, detail: 'No library is open.' };
-  if (!active.quiescing) {
-    active.quiescing = true;
-    // BUG-11 (#518): a fresh quiesce gets a fresh bounded-retry budget — a failure from a PRIOR
-    // shutdown attempt (that the Principal then resumed from) shouldn't poison this one.
-    active.quiesceFlush.attempts = 0;
-    active.quiesceFlush.error = null;
-    stopProducers(active);
-    active.log.child({ scope: 'quiesce' }).info('quiesce.start', { why: 'Principal requested Prepare for shutdown' });
-  }
-  return (await quiesceStatusForActive())!;
-}
-
-/** Leave QUIESCING (QUIESCE-5, reversible): un-pause — restart producers, resume normal running. */
-export async function resumeActive(): Promise<QuiesceStatus> {
-  if (!active) return { quiescing: false, remaining: 0, safe: false, detail: 'No library is open.' };
-  if (active.quiescing) {
-    active.quiescing = false;
-    startProducers(active);
-    active.log.child({ scope: 'quiesce' }).info('quiesce.resume', { why: 'Principal resumed before quitting' });
-  }
-  return (await quiesceStatusForActive())!;
-}
-
-/** Is the active pipeline quiescing? (the capture path checks this to pause new ingestion, QUIESCE-1). */
-export function isActiveQuiescing(): boolean {
-  return active?.quiescing === true;
-}
-
-/**
- * BUG-11 (#518): the flush-bounding + `detail` decision, pulled out pure (no I/O) so it's directly
- * testable without spinning up a whole pipeline. See the call site below for the retry-storm history.
- */
-export function quiesceFlushDecision(
-  quiescing: boolean,
-  remaining: number,
-  promotePending: boolean,
-  flush: { attempts: number; error: string | null },
-): { shouldFlush: boolean; safe: boolean; detail: string } {
-  const flushExhausted = flush.attempts >= MAX_QUIESCE_FLUSH_ATTEMPTS;
-  const shouldFlush = quiescing && remaining === 0 && promotePending && !flushExhausted;
-  const safe = quiescing && remaining === 0 && !promotePending;
-  const detail = !quiescing
-    ? 'Running normally.'
-    : safe
-      ? 'Safe to shut down — all work finished.'
-      : remaining === 0 && promotePending && flushExhausted
-        ? `Couldn't publish — ${flush.error ?? 'the last changes to your library are stuck.'}` // BUG-11: honest failure instead of an eternal "Publishing…"
-        : remaining === 0 && promotePending
-          ? 'Publishing the last changes to your library…'
-          : `Finishing up — ${remaining} item${remaining === 1 ? '' : 's'} remaining…`; // "items" matches Status/tray vocab (Design-Lead)
-  return { shouldFlush, safe, detail };
-}
-
-/**
- * The live drain status (QUIESCE-3): `remaining` = queued items across stages + anything in flight
- * (a busy stage or scheduler counts its current item); `safe` = quiescing AND fully idle — every stage
- * queue empty, no stage/scheduler in flight, AND the canonical writer lock free (so the last commit is
- * done). The same primitives the Status view reads — no separate source of truth.
- */
-export async function quiesceStatusForActive(): Promise<QuiesceStatus | null> {
-  if (!active) return null;
-  const { stagingWt, lock, orch, decompose, connect, claims, compose, jobs, researchers, intake, watch, quiescing } = active;
-  const [archiveQ, decompQ, connectQ, claimsQ, composeQ] = await Promise.all([
-    readQueue(stagingWt),
-    readDecomposeQueue(stagingWt),
-    readConnectQueue(stagingWt),
-    readClaimsQueue(stagingWt),
-    readComposeQueue(stagingWt),
-  ]);
-  const queued = archiveQ.length + decompQ.length + connectQ.length + claimsQ.length + composeQ.length;
-  const stagesBusy = [orch, decompose, connect, claims, compose].filter((s) => s.busy()).length;
-  const schedulersBusy = [jobs, researchers, intake, watch].filter((s) => s.busy()).length;
-  const lockBusy = lock.state().held ? 1 : 0;
-  // `remaining` counts queued items + everything in flight; the lock being held means a commit is still
-  // landing, so it must clear before "safe" even if the queues read empty mid-write.
-  const inFlight = stagesBusy + schedulersBusy + lockBusy;
-  const remaining = queued + inFlight;
-  // STAGING-12: a pending coalesced promotion means `main` still owes its last batch — NOT safe to quit
-  // yet. When everything else is idle, flush it now (don't wait the debounce window) so the vault is
-  // current and "safe" is reached promptly + honestly.
-  //
-  // BUG-11 (#518): settingsView polls this every ~1s while quiescing, and `flushNow()` never throws (a
-  // failed promote() is swallowed internally — see coalescingPromoter's onError/dirty-retry). Calling it
-  // unconditionally forced an IMMEDIATE retry on every single poll — bypassing the promoter's own
-  // debounce/cap backoff entirely — with the failure never surfaced beyond a dev-log line, so a
-  // persistently-failing promote() looked like a permanently-stuck "Publishing…" and hammered promote()
-  // forever. Now bounded: stop forcing an immediate retry after MAX_QUIESCE_FLUSH_ATTEMPTS consecutive
-  // failures (the promoter still retries on its own slower cadence in the background) and report the
-  // real cause instead of pretending it's still in progress.
-  const promotePending = active.promoter.pending();
-  const { shouldFlush, safe, detail } = quiesceFlushDecision(quiescing, remaining, promotePending, active.quiesceFlush);
-  if (shouldFlush) void active.promoter.flushNow();
-  return { quiescing, remaining, safe, detail };
-}
-
-/**
- * Start (or reuse) the pipeline for `vaultPath`, replacing any prior one. The stages run on the
- * vault's persistent `staging` worktree; the archivist promotes `sources/` to `main` after each
- * drain. All stages share one canonical-writer lock (§5). Async because it provisions the
- * staging worktree before the stages start.
- */
-export async function startPipeline(vaultPath: string): Promise<Orchestrator> {
-  if (active?.vaultPath === vaultPath) return active.orch;
-  if (active) stopAllStages(active);
-
-  // OBS-1/2: per-vault diagnostic dev-log (<vault>/.kb/cache/logs/, gitignored, never promoted).
-  // Passed to every stage so failures land here with their cause (OBS-3/4); also captures the
-  // worktree-provision failure below — the silent-stall cause that motivated SPEC-0030.
-  // OBS-10: verbosity comes from the Instance config (Settings; default info, debug to troubleshoot).
-  // The config lives on the persistent `staging` worktree; read best-effort (absent first-run → info).
-  // A level change applies on the next pipeline start (vault switch / app restart).
-  const stagingInstance = await readInstanceConfig(path.join(vaultPath, '.kb', 'cache', 'worktrees', 'staging'));
-  // OBS-18: the breadcrumb observer records the last {stage,runId,itemId} a pipeline line carried, so
-  // a crash handler can name what we were mid-flight on. Best-effort + never throws into logging.
-  const log = createVaultDevLog(vaultPath, { level: stagingInstance.devLogLevel, onEmit: breadcrumbObserver });
-  // OBS-12/13: per-vault latency tracer (<vault>/.kb/cache/spans.jsonl, never promoted). Threaded
-  // into every stage so each per-item `stage.run` span + its `copilot.invoke` child are recorded;
-  // the perf index (perfIndex.ts) aggregates them. Spans also mirror to the dev log at `debug`.
-  const tracer = createVaultTracer(vaultPath, { log });
-  // ORCH-28 model-resilience: probe the live copilot CLI's accepted-model catalog and resolve the
-  // launch model from the (config-overridable) preference list BEFORE any decider is built, so every
-  // stage launches with a model THIS CLI version accepts — never a stale hardcoded pin that would
-  // reject pre-flight and kill the pipeline. Best-effort + never throws (a probe failure leaves the
-  // floor pin in place); a below-top-tier pick is logged loud (no silent downgrade). The eval
-  // `KB_COPILOT_MODEL` override still wins over the probed model.
-  await initLaunchModel({ preferences: stagingInstance.modelPreferences, override: stagingInstance.model, log: log.child({ scope: 'model' }) }).catch((err) =>
-    log.child({ scope: 'model' }).warn('model.probe-failed', { itemId: vaultPath, err }),
-  );
-  // SPEC-0048 per-agent overrides: apply the persisted picks (validated at set-time via the picker IPC).
-  // A stale per-agent id is caught at launch by the per-call `auto` fallback — narrower blast radius than
-  // the global, so we trust the stored value here rather than re-probe.
-  setAgentModelOverrides(stagingInstance.agentModels ?? {});
-  // SPEC-0048 SCALE-1/2: apply the configured global ceiling (env > Settings > cores-derived) to the
-  // shared semaphore, and resolve the per-stage caps (today's defaults overlaid with any overrides;
-  // Connect pinned to 1, SCALE-5) — each stage is sized below, live-adjustable via setActiveInstanceSettings.
-  const effectiveCeiling = applyCopilotCeiling(stagingInstance.copilotCeiling);
-  const stageCaps = resolveStageCaps(stagingInstance);
-  log.info('scale.applied', { ceiling: effectiveCeiling, caps: stageCaps });
-  const startedAt = Date.now();
-  let stagingWt: string;
-  try {
-    stagingWt = await ensureStagingWorktree(vaultPath); // working surface (on `staging`)
-  } catch (err) {
-    log.child({ scope: 'pipeline' }).error('startup.worktree-provision-failed', { itemId: vaultPath, err });
-    throw err; // unchanged behavior — but no longer silent
-  }
-  // ORCH-27 STARTUP-RECONCILE: heal a STALE canonical `index.lock` left by a prior crash/timed-out op
-  // BEFORE any stage drains — otherwise that orphaned lock makes every advance fatal (the #256 wedge).
-  // At startup no advance is in flight, so a present lock is never our live op; the triple-gate still
-  // refuses to clear a genuinely-live external lock (fail safe). Best-effort: a heal failure (or a
-  // kept live lock) must never block startup — the draining advance will surface a still-held lock.
-  await reconcileStaleIndexLock(stagingWt, {
-    isLiveInProcHolder: () => hasLiveIndexHolder(stagingWt),
-    log: log.child({ scope: 'lock' }),
-  }).catch((err) => log.child({ scope: 'lock' }).error('startup.lock-reconcile-failed', { itemId: vaultPath, err }));
-  // #515 BUG-2: heal a stuck CHERRY_PICK_HEAD/sequencer left by a crash/kill mid-advance — BEFORE any
-  // stage drains, so the first capture's plain `add inbox` + commit never silently concludes a stale,
-  // possibly half-applied cherry-pick under a "capture:" message.
-  await reconcileCherryPickSequencer(stagingWt, { log: log.child({ scope: 'lock' }) }).catch((err) =>
-    log.child({ scope: 'lock' }).error('startup.cherry-pick-reconcile-failed', { itemId: vaultPath, err }),
-  );
-  // The shared serialized canonical writer for this vault (§5). The watchdog logs a loud `lock.stuck`
-  // (scope `lock`) + flips the OBS-7 `stuck` flag if any section is held past the threshold — so a
-  // deadlocked/hung critical section surfaces (named by its label) instead of silently wedging (#163).
-  // #515: `Mutex.sectionTimeoutMs`/`RunOptions.timeoutMs` (stageLock.ts) give any FUTURE section a hard
-  // reject-and-release backstop, but deliberately NOT wired here as a blanket default (KB-QD review):
-  // this ONE lock is shared by every stage's heterogeneous sections (connect's linkOne/linkOrphansOnce,
-  // claims, compose, decompose, orchestrator…), each chaining a different number of `boundedGit` calls —
-  // there's no single constant that's provably ABOVE every section's git-call budget yet BELOW "actually
-  // wedged", and a timeout firing WHILE a git call is still in flight would let the next waiter start a
-  // concurrent write on the same working tree/index — the exact single-writer violation this issue
-  // fixes, not a mitigation of it. The safe, already-proven mechanism is `boundedGit`'s own per-call
-  // timeout: every git op in a `lock.run` section now goes through it, so a blocked call rejects on its
-  // OWN bound and the chain's `finally` releases normally — no orphaned in-flight write is possible. A
-  // per-section timeout is legitimate future work IF paired with a derived (not guessed) budget per
-  // section; until then this stays off.
-  const lock = new Mutex({ log: log.child({ scope: 'lock' }) });
-  // SPEC-0028 RESEARCH-1 / WS-B: seed a default Web researcher on a virgin (or pre-feature) vault so
-  // the research pipeline isn't INERT — an empty registry means nothing dispatches even once a
-  // `research-request` is emitted. Keyed on the registry FILE's absence (not emptiness), so a
-  // Principal who deliberately cleared all researchers is never re-seeded. Write + commit run under
-  // the canonical-writer lock (durability — the `.kb/researchers/` registry is tracked on `staging`
-  // and would otherwise be wiped by a staging reset; mirrors the jobs registry). Best-effort: a seed
-  // failure must never block startup.
-  try {
-    await lock.run(async () => {
-      if (await seedDefaultResearcherIfAbsent(stagingWt)) {
-        await commitControlFile(stagingWt, researcherRegistryPath(stagingWt), 'seed default web researcher (SPEC-0028)');
-        log.child({ scope: 'pipeline' }).info('startup.researcher-seeded', { templates: ['web'] });
-      }
-    }, 'seed:default-researcher');
-  } catch (err) {
-    log.child({ scope: 'pipeline' }).warn('startup.researcher-seed-failed', { itemId: vaultPath, err });
-  }
-  // STAGING-12: `main` IS the live Obsidian vault folder. Promoting on EVERY drain (~14–46s) made
-  // Obsidian's watcher re-index endlessly → nav/files/indexing HANG. So a stage's afterDrain no longer
-  // promotes directly — it REQUESTS a promotion, and the coalescer publishes in infrequent batched
-  // bursts (debounced by a quiescent window; capped so continuous processing still publishes), each a
-  // single commit run serialized under the canonical-writer lock (STAGING-3). Obsidian settles between.
-  // BUG-11 (#518): tracks consecutive promote() failures + the last cause, so `quiesceStatusForActive`
-  // can bound its forced-flush retries and surface an honest "Couldn't publish — <cause>" instead of
-  // hammering promote() every ~1s poll forever. A fixed object (not `active.quiesceFlush` directly) —
-  // this closure is created before `active` is assigned below.
-  const quiesceFlush: { attempts: number; error: string | null } = { attempts: 0, error: null };
-  const promoter = createCoalescingPromoter({
-    promote: async () => {
-      await lock.run(() => promote(vaultPath, undefined, undefined, log.child({ scope: 'promote' })), 'coalesced:promote'); // STAGING-12 coalesced; log surfaces ORCH-27 stale-lock heal
-      quiesceFlush.attempts = 0;
-      quiesceFlush.error = null;
-    },
-    quiescentMs: PROMOTE_QUIESCENT_MS,
-    maxWaitMs: PROMOTE_MAX_WAIT_MS,
-    onError: (err) => {
-      log.child({ scope: 'promote' }).warn('promote.coalesced-failed', { itemId: vaultPath, err });
-      quiesceFlush.attempts += 1;
-      quiesceFlush.error = err instanceof Error ? err.message : String(err);
-    },
-  });
-  // The promotion gate: publish the evergreen subset staging→main (SPEC-0021 STAGING-3/4). A stage
-  // runs it after a drain that changed an evergreen path (archive→sources; connect→entities); per
-  // STAGING-12 the per-drain calls coalesce into infrequent bursts (the actual `promote` runs later,
-  // under the lock, inside the coalescer) so `main` tracks the resolved graph without a watcher storm.
-  const promoteEvergreen = async (): Promise<void> => {
-    promoter.request();
-  };
-  // SENSE-4 Slice 2: classify each source's sensitivity at the ingest boundary so a confidently-public source
-  // lands `shareable` and public-web research egress lights up (SENSE-9). Wired with the deterministic,
-  // provenance-driven classifier (the safe default — no per-source egress, can't parse-fail, matching the
-  // enrich-trigger robustness ethos); the Copilot-backed classifier is built behind the same seam and enabled
-  // by passing a `run` to makeSensitivityClassifier.
-  const classify = makeSensitivityClassifier();
-  // SPEC-0052 MEDIA: extract a text body from dropped PDFs/images at the archive boundary (Copilot
-  // multimodal), so a dropped PDF actually enters the KB instead of a dead `![[raw.pdf]]` embed.
-  const orch = new Orchestrator(stagingWt, makeCopilotDecider({ vaultPath: stagingWt }), lock, promoteEvergreen, stageCaps.archive, log, tracer, classify, mediaExtractOptions());
-  // The four stages run on the staging worktree (root-agnostic) and serialize their canonical
-  // advances through the one shared lock (§5). Pipeline order is Decompose→Connect→Claims
-  // (SPEC-0020 reorder): Decompose emits candidates, Connect resolves them into evergreen
-  // `entities/` (carrying source-dir provenance Claims can read), Claims attaches claims to the
-  // resolved graph. They drain independently; the lock keeps their staging ff-advances from
-  // racing. Connect + Claims each carry the promotion gate as their afterDrain so resolved
-  // entities and their claims become visible on `main` (the archivist already promotes sources/).
-  // Per-stage concurrency cap (ORCH-20 / SPEC-0048 SCALE-2): >1 lets a stage run that many items'
-  // cognition concurrently, cutting wall-time on a backlog (claims/decompose dominate it). The
-  // process-wide `copilotConcurrency` semaphore bounds the TOTAL in-flight copilot subprocesses across
-  // all stages + jobs + researchers, so a higher cap can never fan out past the global ceiling. Each
-  // stage is sized from `stageCaps` (instance.json overrides over today's defaults) and live-adjustable
-  // via setActiveInstanceSettings. Connect now runs cap>1 too (SCALE-5 ephemeral-worktree migration);
-  // its resolve drain is per-item-ephemeral, while its link/dedup sweeps stay serial under the lock.
-  const decompose = new DecomposeStage(stagingWt, makeDecomposeDecider({ vaultPath: stagingWt }), lock, undefined, stageCaps.decompose, log, tracer);
-  // SPEC-0046 COMPOSE: the FINAL Enrich stage (after Claims). It (re)writes each entity node's
-  // encyclopedic prose body from that entity's cited claims — idempotent on the claims signature,
-  // with a deterministic blocks-only fallback. Declared first so Claims/Connect can poke it when
-  // the claims/links they own change. Its afterDrain promotes the (re)composed entity nodes to main.
-  const compose = new ComposeStage(stagingWt, makeComposeDecider({ vaultPath: stagingWt }), lock, undefined, promoteEvergreen, stageCaps.compose, log, tracer);
-  // Connect's afterDrain promotes the resolved/linked nodes, then pokes Compose: a links change
-  // means the prose's woven cross-links (COMPOSE-4) should be regenerated.
-  const connect = new ConnectStage(
-    stagingWt,
-    makeConnectDecider({ vaultPath: stagingWt }),
-    lock,
-    undefined,
-    async () => {
-      await promoteEvergreen();
-      void compose.poke();
-    },
-    log,
-    tracer,
-    stageCaps.connect, // SCALE-5: resolve-stage concurrency (no longer pinned to 1)
-  );
-  // Claims' afterDrain promotes the new claims, then pokes Connect: now that the entity's claims
-  // carry `relatesTo` hints, Connect's link-promotion pass turns them into `[[wikilinks]]`
-  // (CONNECT-12) and promotes the linked nodes. (Connect's own 30s sweep is the backstop.) It also
-  // pokes Compose: new claims → (re)compose the entity's prose (COMPOSE-7).
-  const claims = new ClaimsStage(
-    stagingWt,
-    makeClaimsDecider({ vaultPath: stagingWt }),
-    lock,
-    undefined,
-    async () => {
-      await promoteEvergreen();
-      void connect.poke();
-      void compose.poke();
-    },
-    stageCaps.claims,
-    log,
-    tracer,
-  );
-  // The autonomous-job scheduler (SPEC-0023): wakes registered jobs on their named-preset cadence,
-  // each a bounded, single-flight pass in its own worktree sharing the canonical-writer lock (a
-  // job's ff-advance never races a stage's; ORCH-18) and the promotion gate (evergreen job outputs
-  // reach `main`). Jobs run concurrently with the live pipeline (ORCH-17) — never blocking
-  // capture/Enrich. Inert until the Principal enables a job in the registry.
-  const jobs = new JobScheduler(stagingWt, createJobBehaviorResolver(stagingWt), lock, promoteEvergreen, log);
-  // SPEC-0028 RESEARCH-2/3: the researcher tick. Each tick first runs an inline sweep (routes any
-  // pending `research-request` signals a stage emitted through the dedup dispatcher), then a standing
-  // pass for every due scheduled researcher. Both execute via runResearcher — output is a cited
-  // secondary source via the ingest path (NOT the JobBehavior write-sink — Option (a), JOBS-10
-  // intact). The cognition is the Web SDK adapter behind the seam (egress-gated + SSRF-safe), wired
-  // with the resolved BYOA copilot cliPath so it runs in the packaged app, and the dev-log so a
-  // session failure is logged + surfaced as `research-failed` (#160), not a silent no-finding.
-  // Reaching outside the KB is read-only-world (AUTO-6).
-  // Wire the resolved BYOA copilot cliPath + the dev-log into BOTH researcher entry points via the one
-  // shared seam (#160 / BUG #65): without cliPath the packaged app can't spawn copilot → the SDK throws.
-  const researchers = new ResearcherScheduler(stagingWt, researchDepsOptions(log), lock, log);
-  // SPEC-0041 INTAKE: the proactive-intake tick. Each tick pulls every due connector's feed (RSS in
-  // Slice 1; M365-mail in Slice 2) and writes new items as immutable PRIMARY sources via the ingest
-  // path (origin:'external') — reusing the JOBS scheduling shape but NOT the JobBehavior write-sink
-  // (the researcherScheduler seam; JOBS-10 intact). Read-only w.r.t. the world (INTAKE-7). Inert
-  // until the Principal registers + enables a connector in `.kb/intake/registry.json`.
-  const intake = new IntakeScheduler(stagingWt, intakeDepsOptions(), lock, log);
-  // SPEC-0037 WATCH: live folder watchers. Each enabled, loop-safe folder gets a startup reconcile +
-  // a chokidar watcher whose stable-file events drive a non-destructive copy → INGEST. The loop-guard
-  // checks watched folders against the REAL vault root (vaultPath), never staging. Inert until the
-  // Principal registers + enables a folder in `.kb/watch/registry.json`.
-  const watch = new WatchScheduler(stagingWt, vaultPath, log, { lock });
-  active = {
-    vaultPath,
-    stagingWt,
-    orch,
-    decompose,
-    connect,
-    claims,
-    compose,
-    jobs,
-    researchers,
-    intake,
-    watch,
-    lock,
-    promoter,
-    quiesceFlush,
-    log,
-    quiescing: false,
-    statusCache: {
-      decompose: new CanonicalQueueCache(fastHeadSha),
-      connect: new CanonicalQueueCache(fastHeadSha),
-      claims: new CanonicalQueueCache(fastHeadSha),
-      // Conversion counts read BOTH roots (staging + the promoted-to main) — key on both shas so a
-      // promotion-only change (main's HEAD moves, staging's doesn't) still busts the memo.
-      conversion: new CanonicalQueueCache(async () => `${await fastHeadSha(stagingWt)}:${await fastHeadSha(vaultPath)}`),
-      claimsSetAside: new CanonicalQueueCache(fastHeadSha),
-      connectSetAside: new CanonicalQueueCache(fastHeadSha),
-      archiveSetAside: new CanonicalQueueCache(fastHeadSha),
-    },
-  };
-  const readyMs = Date.now() - startedAt; // when the Jobs/read IPC went live — independent of the reap
-  // #135 cascade recovery: at boot no ephemeral per-item worktree is legitimately in flight, so reap
-  // any leaked `<stage>-<ULID>` worktrees + their `kb/*-work-*` branches left by a crash/kill (the
-  // poison-loop's leak that degraded staging + wedged the Jobs UI). Best-effort. Runs AFTER `active`
-  // is set — so the read-only IPC (listJobs, getState) is live immediately and the reap no longer
-  // strands the Jobs UI behind an O(leaked-N) sequence of git spawns — but BEFORE startActiveStages,
-  // so live stages can't race the cleanup by spawning fresh ephemeral worktrees mid-sweep.
-  const reapStartedAt = Date.now();
-  const reaped = await reapEphemeralWorktrees(stagingWt, log.child({ scope: 'pipeline' })).catch((err) => {
-    log.child({ scope: 'pipeline' }).warn('startup.worktree-reap-failed', { itemId: vaultPath, err });
-    return { worktrees: 0, branches: 0 };
-  });
-  // OBS: startup latency, split so a slow reap (its O(leaked-N) git spawns) is attributable and never
-  // misread as a slow vault open. `readyMs` is the UI-live time; `reapMs` is the off-UI-path cleanup.
-  log.child({ scope: 'pipeline' }).info('startup.ready', {
-    itemId: vaultPath,
-    readyMs,
-    reapMs: Date.now() - reapStartedAt,
-    reapedWorktrees: reaped.worktrees,
-    reapedBranches: reaped.branches,
-  });
-  startActiveStages(active); // single source of truth for which loops run (shared with fullReplay)
-  return orch;
-}
-
-/** The archivist orchestrator for the loaded KB, or null if none is active. */
-export function activePipeline(): Orchestrator | null {
-  return active?.orch ?? null;
-}
-
-/** The active vault's `staging` worktree — where the full working-zone audit lives (per-item
- *  audit.jsonl, connect/, .kb/jobs, .kb/cache/ask, .kb/audit.jsonl), a superset of the evergreen archive
- *  promoted to `main`. The read root for the Audit & Activity views (SPEC-0029). Null if no active KB. */
-export function activeStagingRoot(): string | null {
-  return active?.stagingWt ?? null;
-}
-
-/** Newest of a set of ISO timestamps (ignoring undefined/unparseable). Undefined if none. */
-function newestTs(candidates: Array<string | undefined>): string | undefined {
-  let best: string | undefined;
-  let bestMs = -Infinity;
-  for (const ts of candidates) {
-    if (!ts) continue;
-    const ms = Date.parse(ts);
-    if (Number.isFinite(ms) && ms > bestMs) {
-      bestMs = ms;
-      best = ts;
-    }
-  }
-  return best;
-}
-
-/** List the live worktrees under `<vault>/.kb/cache/worktrees/` + the branch each is on (OBS-7). */
-async function listWorktrees(vaultPath: string): Promise<WorktreeInfo[]> {
-  const root = path.join(vaultPath, '.kb', 'cache', 'worktrees');
-  let entries: import('node:fs').Dirent[];
-  try {
-    entries = await fs.readdir(root, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const out: WorktreeInfo[] = [];
-  for (const e of entries) {
-    if (!e.isDirectory()) continue;
-    const wt = path.join(root, e.name);
-    let branch: string | undefined;
-    try {
-      // #506: was one git spawn PER worktree PER status tick (~2,500/hour at rest). `fastHeadBranch`
-      // reads `.git/HEAD` directly and only falls back to the (still #135-bounded) git spawn on an
-      // unrecognized on-disk shape.
-      branch = await fastHeadBranch(wt);
-    } catch {
-      /* not a worktree / detached / timed-out — leave branch undefined */
-    }
-    out.push({ path: path.join('.kb', 'cache', 'worktrees', e.name), ...(branch ? { branch } : {}) });
-  }
-  return out;
-}
-
-/**
- * The EXPENSIVE status compute (SPEC-0030 OBS-5/6/7/11/15) — gathers per-stage queue depths + busy
- * flags, the canonical-writer lock state, recent dev-log errors, the perf index, conversion counts,
- * and the worktrees (git enumeration), then hands them to the pure {@link assemblePipelineStatus}.
- *
- * OBS-24: this is the work that must NEVER run on the render path — its git/file reads can block
- * behind the pipeline's own git ops and trip the 8s load-guard under load (#256). It is run ONLY on a
- * background cadence by {@link statusStore}; the render path ({@link pipelineStatusForActive}) reads
- * the maintained snapshot instantly. Read-only (OBS-9). Null when no KB is open.
- */
-async function computePipelineStatus(): Promise<PipelineStatusView | null> {
-  if (!active) return null;
-  const { vaultPath, stagingWt, lock, orch, decompose, connect, claims, statusCache } = active;
-  const [archiveQ, decompQ, connectQ, claimsQ, archiveStatus, recentRaw, perf, worktrees, claimsSetAside, connectSetAside, archiveSetAside, conversion] = await Promise.all([
-    readQueue(stagingWt),
-    // #506: these three raw readers each re-walk their whole tree; HEAD-key them so an idle tick (no
-    // canonical commit since the last one) is a spawn-free sha read instead of a full re-walk.
-    statusCache.decompose.read(stagingWt, () => readDecomposeQueue(stagingWt)),
-    statusCache.connect.read(stagingWt, () => readConnectQueue(stagingWt)),
-    statusCache.claims.read(stagingWt, () => readClaimsQueue(stagingWt)),
-    orch.status(),
-    readRecentDevLogEntries(vaultPath, { limit: 25 }),
-    // OBS-12/13 path fix: the tracer WRITES spans to `vaultPath` (createVaultTracer(vaultPath), ~L288),
-    // so the perf index must READ from the SAME root — reading `stagingWt` found an empty/absent index
-    // and the Latency & Throughput panel showed "No Copilot calls recorded yet" while calls flowed.
-    loadPerfIndex(vaultPath),
-    listWorktrees(vaultPath),
-    statusCache.claimsSetAside.read(stagingWt, () => listSetAsideItems(stagingWt)), // OBS-17: claims poison items (canonical claims-path reader, CLAIMS-20)
-    statusCache.connectSetAside.read(stagingWt, () => listConnectSetAsideItems(stagingWt)), // OBS-17: connect poison blocks (CLAIMS-20 connect twin, #157)
-    statusCache.archiveSetAside.read(stagingWt, () => listArchiveSetAsideItems(stagingWt)), // #516 BUG-3 / OBS-17: archive poison units
-    statusCache.conversion.read(stagingWt, () => readConversionCounts(stagingWt, vaultPath)), // SPEC-0032 VIZ-3: funnel counts (staging state + promoted on main)
-  ]);
-  // Union every stage's set-aside items into the view (claims + connect + archive; future stages
-  // append here). Each stage maps its item to the generic {itemId, name, failures, rounds} source shape
-  // (archive has no review-cascade `rounds` concept, so it's always 0).
-  const setAsideItems = [
-    ...toSetAsideViews(claimsSetAside.map((i) => ({ itemId: i.entityId, name: i.name, failures: i.failures, rounds: i.rounds })), 'claims'),
-    ...toSetAsideViews(connectSetAside.map((i) => ({ itemId: i.blockKey, name: i.name, failures: i.failures, rounds: i.rounds })), 'connect'),
-    ...toSetAsideViews(archiveSetAside.map((i) => ({ itemId: i.id, name: i.name, failures: i.failures, rounds: 0 })), 'archive'),
-  ];
-
-  const recentErrors: RecentError[] = recentRaw.map((e) => ({
-    ts: e.ts,
-    level: e.level,
-    event: e.event,
-    ...(typeof e.scope === 'string' ? { stage: e.scope } : {}),
-    ...(typeof e.itemId === 'string' ? { itemId: e.itemId } : {}),
-    ...(typeof e.runId === 'string' ? { runId: e.runId } : {}),
-    ...(e.err?.message ? { message: e.err.message } : {}),
-  }));
-  const setAsideFor = (stage: string): number =>
-    recentErrors.filter((e) => e.stage === stage && e.event.includes('setaside')).length;
-  // #163: a stage is errored only if it has a FRESH error — a recovered stage's error ages out
-  // (was unbounded: any error in the last-N log lines kept the badge red forever).
-  const nowMs = Date.now();
-  const hasErrorFor = (stage: string): boolean => deriveStageError(recentErrors, stage, nowMs);
-
-  // PRIN-24: resolve the source-keyed stages' ids to human titles. Archive + decompose carry the
-  // SOURCE ULID being processed; resolve each to its `source.md` title via the ONE shared derivation
-  // (deriveSourceTitle / REVIEW-16). This is the fs title-LOAD the seam places HERE — in
-  // computePipelineStatus, on OBS-24's background cadence (never the render path) — so the resolved
-  // names bake into the cached snapshot and flow to The Line + the Status stations + the tray.
-  // Connect/claims ids are block keys / entity ids (not ULIDs), so they don't resolve to a source and
-  // the renderer guard (`displayItemName`) shows them as-is — never a raw ULID.
-  // OBS-26: only treat archive's persisted `processing` as a live current-item when a worker actually
-  // backs it (`orch.busy()`). The status file can retain `processing` if the orchestrator was killed
-  // mid-item — without this gate it shows as a perpetual in-progress ghost (a growing-forever dwell).
-  // No live drain ⇒ no current item / no in-flight carriage for it.
-  const orchBusy = orch.busy();
-  const archiveProcessing = orchBusy ? archiveStatus.processing : null;
-  const sourceTitles = await readSourceTitles(vaultPath, [
-    ...(archiveProcessing ? [archiveProcessing] : []),
-    ...archiveQ,
-    ...decompQ,
-  ]);
-  const archiveCurrent = archiveProcessing
-    ? displayItemName(sourceTitles.get(archiveProcessing), archiveProcessing)
-    : undefined;
-
-  const stages: StageInput[] = [
-    { stage: 'archive', queueDepth: archiveQ.length, setAside: setAsideFor('archive'), busy: orchBusy, hasError: hasErrorFor('archive'), ...(archiveCurrent ? { currentItem: archiveCurrent } : {}) },
-    { stage: 'decompose', queueDepth: decompQ.length, setAside: setAsideFor('decompose'), busy: decompose.busy(), hasError: hasErrorFor('decompose') },
-    { stage: 'connect', queueDepth: connectQ.length, setAside: setAsideFor('connect'), busy: connect.busy(), hasError: hasErrorFor('connect') },
-    { stage: 'claims', queueDepth: claimsQ.length, setAside: setAsideFor('claims'), busy: claims.busy(), hasError: hasErrorFor('claims') },
-  ];
-
-  // SPEC-0032 VIZ-2: in-flight carriages — each stage's queue items, `active` = the draining batch
-  // (`busy && index < cap`; the drain processes `queue[0..cap)`). Archive's active item is its
-  // `processing` (prepended; cap=1, only when a live worker backs it — OBS-26); connect drains 1 block
-  // at a time (cap=1); decompose/claims/archive carry their LIVE per-stage cap (SCALE-2, `stage.getCap()`).
-  // Source-keyed items carry the resolved title (PRIN-24).
-  const inFlight = buildInFlightRoster([
-    {
-      stage: 'archive',
-      items: [...(archiveProcessing ? [{ id: archiveProcessing, name: sourceTitles.get(archiveProcessing) }] : []), ...archiveQ.map((id) => ({ id, name: sourceTitles.get(id) }))],
-      busy: orchBusy, cap: orch.getCap(), since: archiveStatus.updatedAt ?? null,
-    },
-    { stage: 'decompose', items: decompQ.map((id) => ({ id, name: sourceTitles.get(id) })), busy: decompose.busy(), cap: decompose.getCap(), since: decompose.currentSince() },
-    { stage: 'connect', items: connectQ.map((cs) => ({ id: cs.blockKey })), busy: connect.busy(), cap: 1, since: connect.currentSince() },
-    { stage: 'claims', items: claimsQ.map((rel) => ({ id: path.basename(rel, '.md') })), busy: claims.busy(), cap: claims.getCap(), since: claims.currentSince() },
-  ]);
-
-  // Last activity: the newest of the archivist status, the spans-file mtime (any stage's last span),
-  // and the newest dev-log entry — so a quietly-working pipeline isn't mistaken for stalled (OBS-11).
-  const spansMtime = perf.source ? new Date(perf.source.mtimeMs).toISOString() : undefined;
-  const lastActivity = newestTs([archiveStatus.updatedAt ?? undefined, spansMtime, recentErrors[0]?.ts]);
-
-  // OBS-22: the memory/health readout (current RSS/heap + leak trend + last crash breadcrumb).
-  const health = await telemetryHealth();
-
-  return assemblePipelineStatus({ stages, lock: lock.state(), recentErrors, worktrees, perf, setAsideItems, conversion, inFlight, health, ...(lastActivity ? { lastActivity } : {}) });
-}
-
-// ── OBS-24: the maintained status snapshot ──────────────────────────────────────────────────────────
-//
-// The render path reads a continuously-maintained last-known-good snapshot instead of synchronously
-// recomputing. The expensive `computePipelineStatus` runs only on a background cadence; reads are
-// instant (no git/fs), so a status read can never block or trip the load-guard. The snapshot is
-// persisted per-vault so launch shows last-known-good instantly, then goes live.
-
-/** Background refresh cadence — matches the former render poll, now off the render path. */
-const STATUS_REFRESH_MS = 2500;
-
-/** Where the last-known-good status snapshot is persisted (gitignored cache; never promoted). */
-function statusSnapshotPath(vaultPath: string): string {
-  return path.join(vaultPath, '.kb', 'cache', 'status-snapshot.json');
-}
-
-/** Load the persisted last-known-good snapshot for `vaultPath` (sync — a small one-time read at
- *  activation, so launch can paint status instantly). Any error (missing/corrupt) → null. */
-function loadStatusSnapshot(vaultPath: string): PipelineStatusView | null {
-  try {
-    return JSON.parse(readFileSync(statusSnapshotPath(vaultPath), 'utf8')) as PipelineStatusView;
-  } catch {
-    return null;
-  }
-}
-
-/** Persist `view` as the new last-known-good snapshot (best-effort, off the render path). */
-async function saveStatusSnapshot(vaultPath: string, view: PipelineStatusView): Promise<void> {
-  const file = statusSnapshotPath(vaultPath);
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify(view), 'utf8');
-}
-
-/** The maintained status projection (OBS-24). Started/stopped with the stage sweeps. */
-const statusStore: StatusSnapshotStore = createStatusSnapshotStore({
-  compute: computePipelineStatus,
-  intervalMs: STATUS_REFRESH_MS,
-  load: () => (active ? loadStatusSnapshot(active.vaultPath) : null),
-  save: (view) => {
-    if (active) void saveStatusSnapshot(active.vaultPath, view).catch(() => {});
-  },
-  onError: (err) => active?.log.child({ scope: 'status' }).warn('status.snapshot-refresh-failed', { err }),
-  onUpdate: (view) => pushProjectionChanged('status', view.builtAt),
-});
-
-/**
- * The render-path status read (SPEC-0030 OBS-5/9, OBS-24). Returns the background-maintained
- * last-known-good snapshot **instantly** — no git/fs/compute here, so a status read can never block
- * or trip the 8s load-guard. The view's `builtAt` is its "as of" timestamp (a slightly-stale status
- * is honest; a timeout is not). Null until the first snapshot is computed/loaded.
- */
-export async function pipelineStatusForActive(): Promise<PipelineStatusView | null> {
-  return active ? statusStore.current() : null; // no active KB → null (don't serve a closed vault's stale snapshot)
-}
-
-/** OBS-24 test/diagnostic seam: force one background refresh + await it (e.g. an immediate post-action
- *  status update). Never called on the render path. */
-export function refreshStatusSnapshot(): Promise<void> {
-  return statusStore.refreshNow();
-}
-
-// ── SHELL-12: the maintained REVIEW-QUEUE projection ─────────────────────────────────────────────
-// The render path (`kb:listReviews` + the rail badge) reads this last-known-good projection INSTANTLY
-// — zero git/fs on the render path, so a busy stage or held canonical-writer lock can never stall the
-// Reviews surface. SHELL-12 (c) "update by push" is satisfied by the existing cheap poll now reading
-// the INSTANT projection (no live recompute the user waits on); a real main→renderer push is a ready
-// follow-on via the spine's `onUpdate` hook. The answer path (REVIEW-20, DEV-6) calls
-// `refreshReviewProjection()` after its fast verdict write so the next read sees fresh data.
-const REVIEW_REFRESH_MS = 2500;
-
-/** The review-queue compute (background cadence): the open "needs you" queue mapped to the view's
- *  summary shape. Null when no KB is open (the projection then shows nothing). */
-async function computeReviewSummaries(): Promise<ReviewSummary[] | null> {
-  if (!active) return null;
-  const reviews = await listActiveReviews();
-  return reviews.map(reviewToSummary); // pure, ENG-16-hardened fold (empty/missing subject can't throw)
-}
-
-/** The maintained review-queue projection (SHELL-12). Started/stopped with the stage sweeps. */
-const reviewStore: ProjectionStore<ReviewSummary[]> = createProjectionStore<ReviewSummary[]>({
-  compute: computeReviewSummaries,
-  intervalMs: REVIEW_REFRESH_MS,
-  onError: (err) => active?.log.child({ scope: 'reviews' }).warn('reviews.projection-refresh-failed', { err }),
-  onUpdate: (projection) => pushProjectionChanged('review', projection.builtAt),
-});
-
-/** The render-path review-queue read (SHELL-12): the background-maintained last-known-good projection,
- *  INSTANT — no git/fs/compute, so a Reviews read can never block on the backend. Null until first build. */
-export function reviewProjectionForActive(): Projection<ReviewSummary[]> | null {
-  return active ? reviewStore.current() : null; // no active KB → null (don't serve a closed vault's queue)
-}
-
-/** Post-answer refresh seam (REVIEW-20 / DEV-6): re-read the queue + push, so the renderer's optimistic
- *  remove reconciles against fresh data. Mirrors `refreshStatusSnapshot`. Never on the render path. */
-export function refreshReviewProjection(): Promise<void> {
-  return reviewStore.refreshNow();
-}
-
-// ── SPEC-0058 STATE-2: the maintained GRAPH projection ───────────────────────────────────────────
-// The shared knowledge-graph snapshot Explore + Health (+ Today) read INSTANTLY off the render path —
-// killing the per-mount live `entities/`+`claims/` walk (Explore's O(N+M) backlink scan, Health's
-// O(2N) re-walk) that made those views fail to load on a cold/large vault (the packaged P0). The
-// expensive `computeGraphProjection` (one O(N+E) pass, precomputed backlinks; #457) runs on the
-// background cadence; the render path serves the last-known-good snapshot, persisted for instant cold
-// start (STATE-11). This instantiates DEV-3's STATE-2 compute on the existing SHELL-12 backbone (same
-// store `statusStore`/`reviewStore` use); the CORE's STATE-6 canonical-advance invalidation + STATE-8
-// push + STATE-12 formal `status` field layer ADDITIVELY onto this same instance (DEV-5) — no rebuild.
-const GRAPH_REFRESH_MS = 5000; // richer compute than status/reviews → a calmer backstop cadence
-
-/** Where the last-known-good graph projection is persisted (gitignored cache; never promoted). */
-export function graphProjectionPath(vaultPath: string): string {
-  return path.join(vaultPath, '.kb', 'cache', 'graph-projection.json');
-}
-
-/** Load the persisted last-known-good graph projection. Async (#508 item 4 — was a `readFileSync` at
- *  vault-activation time; on a large vault the persisted JSON is big enough that a synchronous read
- *  briefly blocked the main thread on launch). `projectionStore.start()` races this against the first
- *  live refresh and only uses it if the live one hasn't already landed, so the async hop costs nothing
- *  observable. Any error (missing/corrupt) → null. Exported for direct testing (pure given `vaultPath`). */
-export async function loadGraphProjection(vaultPath: string): Promise<GraphProjection | null> {
-  try {
-    return JSON.parse(await fs.readFile(graphProjectionPath(vaultPath), 'utf8')) as GraphProjection;
-  } catch {
-    return null;
-  }
-}
-
-// #508 item 4: `entityMd`/`sourceMd` (every entity's + cited source's full raw markdown) are the
-// dominant byte-size of a GraphProjection — stringifying them on every 5s refresh was a synchronous
-// main-thread block (50ms-1s+) that stalled ALL IPC, and rewriting that much JSON to disk repeatedly
-// is real write amplification. The IN-MEMORY graph (served by graphProjectionForActive) keeps full
-// bodies — the render path's "zero fs" guarantee (readNode/readSource/linkTraversal) is unaffected,
-// only the ON-DISK snapshot shrinks. A cold-start load briefly serves body-less nodes (already-`stale`
-// by construction) until the first live refresh fills them in — seconds, not user-visible.
-export function stripBodiesForPersist(graph: GraphProjection): GraphProjection {
-  return { ...graph, entityMd: {}, sourceMd: {} };
-}
-
-/** The sha256 of the last-WRITTEN (body-stripped, `builtAt`-excluded) persisted graph, per vault path
- *  — the content-hash gate below. Keyed per-path (like `activityIndex.ts`'s file-read cache) rather than
- *  a bare global so two different vaults' content can never collide/mask each other. */
-const graphPersistedHash = new Map<string, string>();
-
-/** Persist `graph` as the new last-known-good (best-effort, off the render path) — but ONLY when its
- *  content actually changed (#508 item 4: "persist on content-hash change only"). A canonical advance
- *  that HEAD-gating (#505) can't skip — e.g. compose rewriting an entity's PROSE body — still forces a
- *  recompute, but the body-stripped persisted shape is often byte-identical to what's already on disk
- *  (bodies are exactly what's stripped), so the write itself would be pure waste without this gate.
- *  Exported for direct testing (pure given `vaultPath`+`graph`). */
-export async function saveGraphProjection(vaultPath: string, graph: GraphProjection): Promise<void> {
-  const stripped = stripBodiesForPersist(graph);
-  // builtAt always differs — exclude it from the hash (JSON.stringify drops an `undefined` value entirely).
-  const hash = createHash('sha256').update(JSON.stringify({ ...stripped, builtAt: undefined })).digest('hex');
-  if (graphPersistedHash.get(vaultPath) === hash) return;
-  graphPersistedHash.set(vaultPath, hash);
-  const file = graphProjectionPath(vaultPath);
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify(stripped), 'utf8');
-}
-
-// #505: the interval tick used to run the full O(N+M+S) `computeGraphProjection` walk every 5s
-// regardless of whether anything changed. HEAD-gate it with the SAME well-tested `CanonicalQueueCache`
-// primitive the stage drain loops already use (queueCache.test.ts covers hit/miss/HEAD-unreadable
-// directly) — a spawn-free sha read (`fastHeadSha`) costs a couple of small fs reads, so an idle vault's
-// 5s tick is nearly free instead of walking every entity/claim/source file for nothing. One instance,
-// reset per vault activation (module-level `active` swap) since it's only ever touched from here.
-const graphMemo = new CanonicalQueueCache<GraphProjection>(fastHeadSha);
-
-/** The graph-projection compute (background cadence): one precomputed-backlink pass over the EVERGREEN
- *  graph at the active vault root (STATE-7 — the settled main tree, like the rest of Explore/recall,
- *  never the `staging` worktree mid-write). Null when no KB is open. Returns the SAME object reference
- *  as the prior call when the canonical HEAD hasn't moved (`projectionStore`'s no-op fast path then
- *  skips the restamp/save/push too — a true no-op tick, not just a skipped walk). */
-async function computeGraph(): Promise<GraphProjection | null> {
-  if (!active) {
-    graphMemo.invalidate();
-    return null;
-  }
-  const vaultPath = active.vaultPath;
-  return graphMemo.read(vaultPath, () => computeGraphProjection(vaultPath));
-}
-
-/** The maintained graph projection (SPEC-0058 STATE-2). Started/stopped with the stage sweeps. */
-const graphStore: ProjectionStore<GraphProjection> = createProjectionStore<GraphProjection>({
-  compute: computeGraph,
-  intervalMs: GRAPH_REFRESH_MS,
-  load: () => (active ? loadGraphProjection(active.vaultPath) : null),
-  save: (graph) => {
-    if (active) void saveGraphProjection(active.vaultPath, graph).catch(() => {});
-  },
-  onError: (err) => active?.log.child({ scope: 'graph' }).warn('graph.projection-refresh-failed', { err }),
-  onUpdate: (projection) => pushProjectionChanged('graph', projection.builtAt),
-});
-
-/** The render-path graph read (SPEC-0058 STATE-2): the background-maintained last-known-good projection,
- *  INSTANT — no git/fs/compute, so an Explore/Health read can never block on the backend. Null until the
- *  first snapshot is computed/loaded (the IPC layer maps that to a calm `warming` status). */
-export function graphProjectionForActive(): Projection<GraphProjection> | null {
-  return active ? graphStore.current() : null; // no active KB → null (don't serve a closed vault's graph)
-}
-
-/** Post-mutation refresh seam (mirrors `refreshReviewProjection`): re-read the graph + push. DEV-5's
- *  STATE-6 layer will also drive this off the canonical advance. Never on the render path. */
-export function refreshGraphProjection(): Promise<void> {
-  return graphStore.refreshNow();
-}
-
-// ── SPEC-0058 Today: the maintained command-center HOME projection ─────────────────────────────────
-// "Today" is the v2 home — a calm one-glance state-of-the-library. It is a COMPOSITE of the reads the
-// other surfaces already maintain: the pipeline status (conversion stats + the Line ribbon + in-flight),
-// the graph projection (Connections), the review queue + open contradictions (the needs-you decisions),
-// the activity feed, and Health (dangling/orphans/thin). Like every v2 surface it is a maintained
-// projection (SPEC-0058 STATE-1/7) — the render path reads the INSTANT last-known-good snapshot, never
-// a live vault scan. The expensive parts (the Health walk + the activity-index rebuild) run here on the
-// background cadence; the three already-maintained projections (status/graph/reviews) are read instantly.
-const TODAY_REFRESH_MS = 8000; // a glance surface — a calm backstop cadence (push delivers fresher updates)
-
-/** One Line station → Today's slim ribbon shape (name/stage/state/glyph + a single pending count). The
- *  station model is byte-identical to the Status view's (shared `buildStations`); Today carries only the
- *  fields its compact ribbon renders. */
-function toTodayStation(s: ReturnType<typeof buildStations>[number]): TodayStation {
-  return { name: s.name, stage: s.stage, state: s.state, glyph: s.glyph, count: s.queued + s.inProgress };
-}
-
-/** The newest "composed" moment (compose/output actor) in the feed → ms-ago, else null (never composed). */
-function lastComposedAgoFrom(entries: ActivityFeedEntry[], nowMs: number): number | null {
-  const hit = entries.find((e) => e.actor === 'compose' || e.actor === 'output');
-  if (!hit) return null;
-  const ts = Date.parse(hit.ts);
-  return Number.isFinite(ts) ? Math.max(0, nowMs - ts) : null;
-}
-
-/** Gather one source defensively: a scan/read that throws degrades to `fallback` so a single failing
- *  source can never blank the whole Today projection (it just shows that section as empty/warming). */
-async function gatherSource<T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> {
-  try {
-    return await fn();
-  } catch (err) {
-    active?.log.child({ scope: 'today' }).warn('today.source-failed', { source: label, err });
-    return fallback;
-  }
-}
-
-/** The Today compute (background cadence): compose the maintained projections + the two background
- *  scans (health, activity) into the full Today projection. Reads the EVERGREEN vault root for health
- *  (STATE-7, like the rest of recall). Null when no KB is open. Every individual source is gathered
- *  defensively (graceful-degrade) and the pure `assembleTodayProjection` tolerates null/empty sources. */
-async function computeTodayProjection(): Promise<TodayProjection | null> {
-  const a = active;
-  if (!a) return null;
-  const nowMs = Date.now();
-  // Instant maintained reads (no scan) — the snapshots the status/graph/review stores already keep warm.
-  const status = statusStore.current(); // PipelineStatusView | null (instant, envelope already unwrapped)
-  const graph = graphProjectionForActive()?.data ?? null;
-  const openReviews = reviewProjectionForActive()?.data?.length ?? 0;
-  // Background scans (off the render path). DEV-2's Health re-point will later derive these off the graph
-  // projection, retiring the walk here; the composite shape is unchanged when it does.
-  const activity = await gatherSource<ActivityFeedEntry[]>(
-    'activity',
-    async () => buildFeed((await loadActivityIndex(a.stagingWt)).events),
-    [],
-  );
-  const health = await gatherSource(
-    'health',
-    async () => toHealthProjection(await buildHealthReport(makeReadOnlyTools(a.vaultPath)), new Date(nowMs).toISOString()),
-    null,
-  );
-  const contradictions = await gatherSource('contradictions', async () => (await readContradictionDirectives(a.stagingWt)).size, 0);
-  const sources: TodaySources = {
-    status,
-    graph,
-    health,
-    activity,
-    stations: status ? buildStations(status).map(toTodayStation) : ([] as TodayStation[]),
-    openReviews,
-    contradictions,
-    inFlight: status?.inFlight?.length ?? 0,
-    lastComposedAgoMs: lastComposedAgoFrom(activity, nowMs),
-    movedRecently: activity.length, // the curated recent feed IS the "moved through" window (honest v1)
-  };
-  return assembleTodayProjection(sources, nowMs);
-}
-
-/** The maintained Today projection (SPEC-0058). Started/stopped with the stage sweeps. */
-const todayStore: ProjectionStore<TodayProjection> = createProjectionStore<TodayProjection>({
-  compute: computeTodayProjection,
-  intervalMs: TODAY_REFRESH_MS,
-  onError: (err) => active?.log.child({ scope: 'today' }).warn('today.projection-refresh-failed', { err }),
-  onUpdate: (projection) => pushProjectionChanged('today', projection.builtAt),
-});
-
-/** The render-path Today read (SPEC-0058): the background-maintained last-known-good projection, INSTANT
- *  — no git/fs/compute, so a Today read can never block on the backend. Null until the first snapshot is
- *  computed (the IPC layer maps that to a calm warming state). */
-export function todayProjectionForActive(): Projection<TodayProjection> | null {
-  return active ? todayStore.current() : null; // no active KB → null (don't serve a closed vault's home)
-}
-
-/** Post-mutation refresh seam (mirrors `refreshGraphProjection`): re-read Today + push. Never on the
- *  render path. */
-export function refreshTodayProjection(): Promise<void> {
-  return todayStore.refreshNow();
-}
+import type { ComposeBacklogResult, JobView, JobConfigPatch, JobLastRun, RunJobResult, InstanceSettings, AgentView, ModelCatalogView, SetModelResult, ResearcherView, ResearcherConfigPatch, ResearcherLastRun, RunResearcherResult, SaveRecallOutputResult, PipelineControlRequest, PipelineControlResult } from '../kb/types';
+
+// Re-export the lifecycle core (#574) — every external importer (ipc.ts, tests) keeps using './pipeline'
+// unchanged; only this file + `pipelineLifecycle.ts` itself know the code actually moved.
+export {
+  MAX_QUIESCE_FLUSH_ATTEMPTS,
+  activeSnapshotDir,
+  activePipeline,
+  activeStagingRoot,
+  quiesceActive,
+  resumeActive,
+  isActiveQuiescing,
+  quiesceFlushDecision,
+  quiesceStatusForActive,
+  startPipeline,
+  stopPipeline,
+  stopPipelineForQuit,
+  fullReplay,
+} from './pipelineLifecycle';
+import { getActivePipeline, type ActivePipeline } from './pipelineLifecycle';
+
+// Re-export the maintained projections (#574) — same barrel guarantee as above.
+export {
+  type ProjectionPushEvent,
+  setProjectionPushSink,
+  pipelineStatusForActive,
+  refreshStatusSnapshot,
+  reviewProjectionForActive,
+  refreshReviewProjection,
+  graphProjectionPath,
+  loadGraphProjection,
+  stripBodiesForPersist,
+  saveGraphProjection,
+  graphProjectionForActive,
+  refreshGraphProjection,
+  todayProjectionForActive,
+  refreshTodayProjection,
+} from './pipelineProjections';
+import { refreshStatusSnapshot, refreshReviewProjection } from './pipelineProjections';
 
 /**
  * OBS-17 — act on a set-aside (poison) item from the Status view: **retry** (re-enqueue to re-derive)
@@ -1110,7 +109,7 @@ export function refreshTodayProjection(): Promise<void> {
  * Best-effort + honest: a stale/already-recovered item returns `{ok:false}` with a reason, never throws.
  */
 export async function pipelineControlForActive(req: PipelineControlRequest): Promise<PipelineControlResult> {
-  const a = active;
+  const a = getActivePipeline();
   if (!a) return { ok: false, message: 'No library open.' };
   try {
     let targets: SetAsideTarget[];
@@ -1159,6 +158,7 @@ export async function pipelineControlForActive(req: PipelineControlRequest): Pro
 
 /** The open "needs you" queue (SPEC-0018) — read from `staging`, where review state lives. */
 export async function listActiveReviews(): Promise<Review[]> {
+  const active = getActivePipeline();
   return active ? findOpenReviews(active.stagingWt) : [];
 }
 
@@ -1176,7 +176,7 @@ export async function listActiveReviews(): Promise<Review[]> {
  *     via the pipeline's own telemetry, never on the (already-returned) UI path.
  */
 export async function answerActiveReview(id: string, answerInput: unknown): Promise<AnswerReviewResult> {
-  const a = active;
+  const a = getActivePipeline();
   if (!a) return { ok: false, message: 'No active library.' };
   const result = await answerReviewInVault(a.stagingWt, a.lock, id, answerInput);
   if (result.ok) {
@@ -1196,7 +196,7 @@ export async function answerActiveReview(id: string, answerInput: unknown): Prom
 /** SPEC-0060 VUX-16 slice-1: apply a non-destructive Health remediation (relink / find-homes) on the
  *  active vault — under the canonical-writer lock, promoted so the next Health scan shows the fix. */
 export async function remediateActiveHealthFinding(req: HealthRemediateRequest): Promise<HealthRemediateResult> {
-  const a = active;
+  const a = getActivePipeline();
   if (!a) return { ok: false, message: 'No active library.' };
   return remediateHealthFindingInVault(a.stagingWt, a.vaultPath, a.lock, req, a.log);
 }
@@ -1204,7 +204,7 @@ export async function remediateActiveHealthFinding(req: HealthRemediateRequest):
 /** SPEC-0060 VUX-16 slice-1: dismiss (or restore) a Health finding on the active vault — persisted as an
  *  evergreen directive, promoted to `main` where the Health scan's dismiss filter reads it. */
 export async function dismissActiveHealthFinding(req: HealthDismissRequest): Promise<HealthDismissResult> {
-  const a = active;
+  const a = getActivePipeline();
   if (!a) return { ok: false, message: 'No active library.' };
   return dismissHealthFindingInVault(a.stagingWt, a.vaultPath, a.lock, req, new Date().toISOString(), a.log);
 }
@@ -1252,7 +252,7 @@ async function runAnsweredReviewEffects(a: ActivePipeline, id: string): Promise<
  * An ungrounded answer is allowed (F4) — the doc carries `grounded:false` + a prominent banner.
  */
 export async function saveRecallOutput(result: AskResult): Promise<SaveRecallOutputResult> {
-  const a = active;
+  const a = getActivePipeline();
   if (!a) return { ok: false, message: 'No active library.' };
   if (typeof result?.answer !== 'string' || result.answer.trim().length === 0) {
     return { ok: false, message: 'Nothing to save — the answer is empty.' };
@@ -1284,24 +284,28 @@ export async function saveRecallOutput(result: AskResult): Promise<SaveRecallOut
 // active-KB-guarded wrappers so the module above never needs the `active` singleton itself.
 
 export async function listJobsForActive(): Promise<JobView[]> {
+  const active = getActivePipeline();
   if (!active) return [];
   return jobsControlPanel.listJobs(active.stagingWt);
 }
 
 export async function setActiveJobConfig(patch: JobConfigPatch): Promise<JobView[]> {
+  const active = getActivePipeline();
   if (!active) return [];
-  return jobsControlPanel.setJobConfig(patch, { root: active.stagingWt, lock: active.lock, runNow: (id) => active!.jobs.runNow(id) });
+  return jobsControlPanel.setJobConfig(patch, { root: active.stagingWt, lock: active.lock, runNow: (id) => active.jobs.runNow(id) });
 }
 
 export async function runActiveJobNow(id: string): Promise<RunJobResult> {
+  const active = getActivePipeline();
   if (!active) return { ran: false, reason: 'no-kb' };
-  return jobsControlPanel.runJobNow(id, { root: active.stagingWt, lock: active.lock, runNow: (jobId) => active!.jobs.runNow(jobId) });
+  return jobsControlPanel.runJobNow(id, { root: active.stagingWt, lock: active.lock, runNow: (jobId) => active.jobs.runNow(jobId) });
 }
 
 /** VUX-17 (#524 §5 / #559): the Agents drill-in's past-runs timeline — a job's full journal
  *  (`.kb/jobs/<id>/journal.jsonl`), newest-first (readJournal returns oldest→newest; a timeline reads
  *  top-down as "most recent first", same convention as listResearcherRunsForActive below). */
 export async function jobHistoryForActive(id: string): Promise<JobLastRun[]> {
+  const active = getActivePipeline();
   if (!active) return [];
   const journal = await readJournal(active.stagingWt, id);
   return journal
@@ -1314,39 +318,43 @@ export async function jobHistoryForActive(id: string): Promise<JobLastRun[]> {
 // Full implementation lives in registries/instanceSettingsControlPanel.ts + registries/modelsControlPanel.ts (#528 ENG-7).
 
 export async function getActiveInstanceSettings(): Promise<InstanceSettings> {
-  return instanceSettingsControlPanel.getInstanceSettings(active?.stagingWt ?? null);
+  return instanceSettingsControlPanel.getInstanceSettings(getActivePipeline()?.stagingWt ?? null);
 }
 
 export async function setActiveInstanceSettings(settings: InstanceSettings): Promise<InstanceSettings> {
+  const active = getActivePipeline();
   if (!active) return defaultInstanceConfig();
   return instanceSettingsControlPanel.setInstanceSettings(settings, {
     root: active.stagingWt,
     lock: active.lock,
     log: active.log,
     applyLiveCaps: (caps) => {
-      active!.orch.setCap(caps.archive);
-      active!.decompose.setCap(caps.decompose);
-      active!.claims.setCap(caps.claims);
-      active!.compose.setCap(caps.compose);
-      active!.connect.setCap(caps.connect); // SCALE-5: Connect's resolve drain is now live-tunable too
+      active.orch.setCap(caps.archive);
+      active.decompose.setCap(caps.decompose);
+      active.claims.setCap(caps.claims);
+      active.compose.setCap(caps.compose);
+      active.connect.setCap(caps.connect); // SCALE-5: Connect's resolve drain is now live-tunable too
     },
   });
 }
 
 export async function listAgentsForActive(): Promise<AgentView[]> {
+  const active = getActivePipeline();
   return modelsControlPanel.listAgents(active ? { root: active.stagingWt, pipelineActive: true } : null);
 }
 
 export async function getModelCatalogForActive(): Promise<ModelCatalogView> {
-  return modelsControlPanel.getModelCatalog(active?.stagingWt ?? null);
+  return modelsControlPanel.getModelCatalog(getActivePipeline()?.stagingWt ?? null);
 }
 
 export async function setActiveModel(id: string | null): Promise<SetModelResult> {
+  const active = getActivePipeline();
   if (!active) return { ok: false, resolved: resolveCopilotModel() };
   return modelsControlPanel.setModel(id, { root: active.stagingWt, lock: active.lock, log: active.log });
 }
 
 export async function setActiveAgentModel(agentKey: string, id: string | null): Promise<SetModelResult> {
+  const active = getActivePipeline();
   if (!active) return { ok: false, resolved: resolveCopilotModel(undefined, agentKey) };
   return modelsControlPanel.setAgentModel(agentKey, id, { root: active.stagingWt, lock: active.lock, log: active.log });
 }
@@ -1359,16 +367,19 @@ function watchCtx(a: ActivePipeline): watchControlPanel.WatchCtx {
 }
 
 export async function listWatchFoldersForActive(): Promise<WatchFolderView[]> {
+  const active = getActivePipeline();
   if (!active) return [];
   return watchControlPanel.listWatchFolders(watchCtx(active));
 }
 
 export async function setActiveWatchFolder(patch: WatchFolderPatch): Promise<WatchFolderView[]> {
+  const active = getActivePipeline();
   if (!active) return [];
   return watchControlPanel.setWatchFolder(patch, watchCtx(active));
 }
 
 export async function removeActiveWatchFolder(id: string): Promise<WatchFolderView[]> {
+  const active = getActivePipeline();
   if (!active) return [];
   return watchControlPanel.removeWatchFolder(id, watchCtx(active));
 }
@@ -1381,26 +392,31 @@ function researchersCtx(a: ActivePipeline): researchersControlPanel.ResearchersC
 }
 
 export async function listResearchersForActive(): Promise<ResearcherView[]> {
+  const active = getActivePipeline();
   if (!active) return [];
   return researchersControlPanel.listResearchers(active.stagingWt);
 }
 
 export async function setActiveResearcherConfig(patch: ResearcherConfigPatch): Promise<ResearcherView[]> {
+  const active = getActivePipeline();
   if (!active) return [];
   return researchersControlPanel.setResearcherConfig(patch, researchersCtx(active));
 }
 
 export async function removeActiveResearcher(id: string): Promise<ResearcherView[]> {
+  const active = getActivePipeline();
   if (!active) return [];
   return researchersControlPanel.removeResearcher(id, researchersCtx(active));
 }
 
 export async function runActiveResearcherNow(id: string): Promise<RunResearcherResult> {
+  const active = getActivePipeline();
   if (!active) return { ran: false, reason: 'no-kb' };
   return researchersControlPanel.runResearcherNow(id, researchersCtx(active));
 }
 
 export async function listResearcherRunsForActive(id: string): Promise<ResearcherLastRun[]> {
+  const active = getActivePipeline();
   if (!active) return [];
   return researchersControlPanel.listResearcherRuns(active.stagingWt, id);
 }
@@ -1409,118 +425,39 @@ export async function listResearcherRunsForActive(id: string): Promise<Researche
 // Full implementation lives in registries/intakeControlPanel.ts + registries/sourceSensitivityControlPanel.ts (#528 ENG-7).
 
 export async function listIntakeConnectorsForActive(): Promise<IntakeConnectorView[]> {
+  const active = getActivePipeline();
   if (!active) return [];
   return intakeControlPanel.listIntakeConnectors(active.stagingWt);
 }
 
 export async function setActiveIntakeConnectorConfig(patch: IntakeConnectorConfigPatch): Promise<IntakeConnectorView[]> {
+  const active = getActivePipeline();
   if (!active) return [];
   return intakeControlPanel.setIntakeConnectorConfig(patch, { root: active.stagingWt, lock: active.lock });
 }
 
 export async function removeActiveIntakeConnector(id: string): Promise<IntakeConnectorView[]> {
+  const active = getActivePipeline();
   if (!active) return [];
   return intakeControlPanel.removeIntakeConnector(id, { root: active.stagingWt, lock: active.lock });
 }
 
 export async function runActiveIntakeConnectorNow(id: string): Promise<RunIntakeConnectorResult> {
+  const active = getActivePipeline();
   if (!active) return { ran: false, reason: 'no-kb' };
   return intakeControlPanel.runIntakeConnectorNow(id, active.stagingWt);
 }
 
 export async function setActiveSourceSensitivity(sourceId: string, label: string): Promise<{ ok: boolean; reason?: string; sensitivity?: string }> {
+  const active = getActivePipeline();
   if (!active) return { ok: false, reason: 'no-kb' };
   return sourceSensitivityControlPanel.setSourceSensitivity(sourceId, label, { root: active.stagingWt, lock: active.lock });
 }
 
 export async function getActiveSourceSensitivities(sourceIds: string[]): Promise<Record<string, SourceSensitivity>> {
+  const active = getActivePipeline();
   if (!active) return {};
   return sourceSensitivityControlPanel.getSourceSensitivities(active.stagingWt, sourceIds);
-}
-
-/** Stop and clear the active pipeline (used on shutdown / vault switch). */
-export function stopPipeline(): void {
-  if (active) {
-    const { promoter } = active;
-    stopAllStages(active); // also cancels the promotion timer
-    // STAGING-12: publish any pending coalesced batch best-effort (it captures vaultPath + lock, so it
-    // completes independent of `active`). Staging is the durable source of truth — if it doesn't land,
-    // the next session's first drain re-promotes (idempotent + additive), so nothing is lost.
-    void promoter.flushNow();
-  }
-  active = null;
-}
-
-/**
- * #515 BUG-2: stop the pipeline for an actual app quit, AWAITING the pending coalesced promote flush —
- * bounded by `timeoutMs` — before returning, so `main.ts`'s `before-quit` handler can hold the quit open
- * just long enough for an in-flight commit/promote to land cleanly instead of being SIGKILLed mid-write.
- * Best-effort past the deadline: staging is the durable source of truth, so an abandoned flush is simply
- * re-promoted (idempotent + additive) on the next session's first drain — never a correctness gap, only
- * a missed opportunity to publish a moment sooner.
- */
-export async function stopPipelineForQuit(timeoutMs = 2000): Promise<void> {
-  if (!active) return;
-  const { promoter } = active;
-  stopAllStages(active);
-  active = null;
-  await Promise.race([
-    promoter.flushNow().catch(() => {}),
-    new Promise<void>((resolve) => {
-      const t = setTimeout(resolve, timeoutMs);
-      if (typeof t.unref === 'function') t.unref();
-    }),
-  ]);
-}
-
-let replaying = false;
-
-/**
- * Full Replay (SPEC-0022 REPLAY): clean & rebuild the active KB. Principal-initiated only —
- * the IPC layer surfaces it behind a confirm dialog (REPLAY-1/2). Pauses the stage sweeps so
- * nothing re-derives mid-purge (an in-flight item's commit lands under the shared lock, then the
- * purge runs), performs the purge + epoch reset + promotion on `staging`→`main` (REPLAY-4/6/8),
- * then resumes the sweeps so the pipeline re-derives every Source from the start (REPLAY-9).
- * A second concurrent replay is refused (REPLAY-12).
- *
- * BUG-8 (#518): stopping the sweeps only cancels their TIMERS — it never awaits an item whose
- * off-lock `prepare()` was already mid-flight (e.g. a slow decompose/claims copilot call). Such an
- * item's advance could otherwise land AFTER this purge, applying now-stale, pre-epoch derived work
- * onto the freshly-reset tree. `bumpReplayEpoch()` is called FIRST, before anything else, so every
- * in-flight `prepare()` (which captures the epoch at its own start) is fenced: its advance — checked
- * inside the canonical-writer lock, the same lock `runFullReplay`'s purge holds — is dropped as
- * superseded rather than applied. The purged/reset source is already back in the queue regardless, so
- * dropping a stale advance never loses work, only avoids a redundant/stale duplicate.
- */
-export async function fullReplay(): Promise<FullReplayResult> {
-  if (!active) return { ok: false, message: 'No active library.' };
-  if (replaying) return { ok: false, message: 'A replay is already in progress.' };
-  replaying = true;
-  bumpReplayEpoch();
-  const { vaultPath, stagingWt, lock } = active;
-  // Pause every sweep before the purge; the in-flight commit (if any) drains as we take the lock.
-  stopAllStages(active);
-  try {
-    const counts = await runFullReplay(vaultPath, stagingWt, lock);
-    return {
-      ok: true,
-      replayId: counts.replayId,
-      sourcesReset: counts.sourcesReset,
-      purgedTrees: counts.purgedTrees,
-      message:
-        counts.sourcesReset > 0
-          ? `Cleaning & rebuilding — reset ${counts.sourcesReset} source(s) for reprocessing.`
-          : 'Nothing to rebuild — your library has no sources yet.',
-    };
-  } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : String(err) };
-  } finally {
-    // Auto-resume (REPLAY-9): restart the sweeps whether the replay succeeded or failed, so the
-    // pipeline is never left paused. Uses the SAME startActiveStages() as startPipeline, so the
-    // post-replay stage set always mirrors normal startup (no dormant-stage divergence).
-    if (active) startActiveStages(active);
-    replaying = false;
-  }
 }
 
 function composeCoverageMessage(stats: { total: number; composed: number; remaining: number }): string {
@@ -1535,6 +472,7 @@ function composeCoverageMessage(stats: { total: number; composed: number; remain
  * the staging worktree (the compose source of truth) so it reflects work composed but not yet promoted.
  */
 export async function composeBacklogStatus(): Promise<ComposeBacklogResult> {
+  const active = getActivePipeline();
   if (!active) return { ok: false, message: 'No active library.' };
   try {
     const stats = await composeBacklogStats(active.stagingWt);
@@ -1551,6 +489,7 @@ export async function composeBacklogStatus(): Promise<ComposeBacklogResult> {
  * the CURRENT coverage immediately; the backfill then runs in the background.
  */
 export async function composeBacklog(): Promise<ComposeBacklogResult> {
+  const active = getActivePipeline();
   if (!active) return { ok: false, message: 'No active library.' };
   const { stagingWt, lock, compose } = active;
   try {
