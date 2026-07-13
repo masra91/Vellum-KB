@@ -339,6 +339,46 @@
   --t: 0.18s var(--e-out);
 }
 
+/* Dark re-point (VUX-DARK #521) — finishes the re-point that already happened once for --viz-* above:
+   everywhere a v3 token has a direct --viz-* counterpart it's ALIASED (not hand-duplicated), so the two
+   palettes can never drift apart again. Only the four v3-only tokens with no --viz-* twin get a literal
+   dark value (rationale per token). Radii/easings stay in the light :root above — genuinely identical in
+   both themes (geometry/timing, not color); the shadow/ring trio alias to the --viz-shadow-* tokens and
+   --viz-ring so dark falls out for free instead of duplicating the literal dark shadow values again. */
+:root[data-theme='dark'] {
+  --vellum: var(--viz-field); --linen: var(--viz-panel);
+  /* Light --parchment reads as a RECESSED fill inside a linen card (skeleton shimmer, chat bubbles,
+     activity-event rows, segmented-control track) — one step darker than the ground, not lighter. On
+     dark, "recessed within panel" means one step darker than --viz-field itself. */
+  --parchment: #172631;
+  --viridian: var(--viz-patina); --viridian-2: var(--viz-sprout);
+  --deep: var(--viz-deep); --slate: var(--viz-accent); --mist: var(--viz-mist);
+  --gold: var(--viz-brass); /* unchanged hue — rationing is stricter on dark, not the hue */
+  /* Light --gold-deep exists because bare --gold fails AA for small text/icons on cream, so it's a
+     darker stand-in. On dark the failure mode inverts — a darkened gold would disappear against a
+     near-black panel — so --gold-deep must LIFT, not deepen. ≥4.5:1 against --viz-panel dark (#1e3340). */
+  --gold-deep: #d9b872;
+  --sprout: var(--viz-sprout);
+  --ember: var(--viz-ember); /* unchanged — glows harder on dark per the viz comment, no change needed */
+  --oxide: var(--viz-oxide);
+  --ink: var(--viz-ink);
+  /* Light --ink-2 sits between --ink and --stone (secondary headings, review-detail prose). Dark
+     counterpart sits the same relative distance between --viz-ink dark and --viz-ink-muted dark. */
+  --ink-2: #c9c2b0;
+  --stone: var(--viz-ink-muted);
+  /* VUX-CONFORM #524 §4 kept --faint's hex + decorative/large-text-only role (didn't mutate the value to
+     fix the 4 small-text AA sites — those moved to --stone instead). Its dark twin has no --viz-* alias
+     to borrow (no --viz-faint exists), so it's derived the same way #521 derives --ink-2: the same
+     relative distance between --stone dark (#93a39e) and --hair dark (#2e4350) that light --faint sits
+     between light --stone (#6a6456) and light --hair (#e0d6be). */
+  --faint: #6b7d7f;
+  --hair: var(--viz-rule);
+  --shadow-card: var(--viz-shadow-card);
+  --shadow-raise: var(--viz-shadow-raise);
+  --shadow-win: var(--viz-shadow-win);
+  --ring: var(--viz-ring);
+}
+
 /* ==============================================================================================
    VELLUM v3 — the two motion signatures (SPEC-0060 §5, VUX-6).
    • LOOM  (.vmark.loom / .is-working) — CONTINUOUS work: an endless outward pulse. "It is humming."
