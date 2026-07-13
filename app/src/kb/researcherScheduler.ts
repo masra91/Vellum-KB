@@ -21,15 +21,25 @@ import { ulid } from './ulid';
 import { Mutex } from './stageLock';
 import { noopDevLog, type DevLog } from './devlog';
 
-/** Is a researcher due for a standing pass? enabled + scheduled + (never-run OR last + interval ≤ now). */
+/** The pure due-check given an already-known last-run ms (`null` = never run) — no I/O. Shared by the
+ *  audit-derived slow path below and the scheduler's in-process fast path (#506). */
+function isDueGivenLast(r: ResearcherConfig, lastMs: number | null, now: number): boolean {
+  if (!r.enabled || r.schedule === 'off') return false;
+  if (lastMs === null) return true; // never run → due
+  const interval = PRESET_INTERVAL_MS[r.schedule];
+  return !Number.isFinite(lastMs) || now - lastMs >= interval;
+}
+
+/** Is a researcher due for a standing pass? enabled + scheduled + (never-run OR last + interval ≤ now).
+ *  #506: walks the WHOLE `audit.jsonl` per researcher per tick (`readEvents` → `readAllAuditEvents`) —
+ *  correct but expensive as audit history grows. `ResearcherScheduler.tick` prefers its in-process
+ *  `lastRunAt` memo once this process has run a researcher at least once; this audit-derived read is
+ *  the restart-safe fallback (first check after boot, or a memo miss). */
 export async function isResearcherDue(root: string, r: ResearcherConfig, now: number): Promise<boolean> {
   if (!r.enabled || r.schedule === 'off') return false;
-  const interval = PRESET_INTERVAL_MS[r.schedule];
   const events = await readEvents(root, { actors: ['researcher'], subjectId: r.id }); // newest-first
   const last = events[0];
-  if (!last) return true; // never run → due
-  const lastMs = Date.parse(last.ts);
-  return !Number.isFinite(lastMs) || now - lastMs >= interval;
+  return isDueGivenLast(r, last ? Date.parse(last.ts) : null, now);
 }
 
 /** The synthetic standing request a scheduled researcher runs against (its topic/label/prompt). */
@@ -47,6 +57,10 @@ export class ResearcherScheduler {
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
   private sweeping = false; // single-flight for the inline sweep (across ticks)
+  // #506: in-process due-check memo — once THIS process has run a researcher, its due-check is a pure
+  // in-memory comparison instead of a fresh `readEvents` walk of the whole audit log every 60s tick.
+  // Not persisted (restart-safe by design: a cold process falls back to the audit-derived `isResearcherDue`).
+  private readonly lastRunAt = new Map<string, number>();
 
   /** `root` is the staging worktree (where the registry + audit live + researchers write). `opts`
    *  carries the injected cognition (self-nomination runner, Web SDK options, or a `researchFn`
@@ -92,7 +106,11 @@ export class ResearcherScheduler {
       const researchers = await readResearcherRegistry(this.root);
       for (const r of researchers) {
         if (this.inFlight.has(r.id)) continue; // single-flight (JOBS-6 analogue)
-        if (!(await isResearcherDue(this.root, r, now))) continue;
+        // #506: prefer the in-process memo (no I/O) once this process has run `r` before; else fall
+        // back to the restart-safe audit-derived check.
+        const memoLast = this.lastRunAt.get(r.id);
+        const due = memoLast !== undefined ? isDueGivenLast(r, memoLast, now) : await isResearcherDue(this.root, r, now);
+        if (!due) continue;
         fired.push(r.id);
         await this.runStanding(r, now);
       }
@@ -130,6 +148,7 @@ export class ResearcherScheduler {
       // time, so cadence is computed against the scheduler clock, not wall-clock.
       // Template-aware cognition (Web/Code), same selection the inline dispatcher uses.
       await runResearcher(this.root, r, standingRequest(r, ulid(now), ts), { research: selectResearchFn(this.root, r, this.opts), now: () => ts });
+      this.lastRunAt.set(r.id, now); // #506: record completion for the next tick's in-process due-check
     } catch (err) {
       this.log.child({ scope: 'researcher-scheduler' }).error('standing-pass-failed', { itemId: r.id, err });
     } finally {

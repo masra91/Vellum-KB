@@ -34,6 +34,7 @@ import { epochScopedLines } from './replayEpoch';
 import { withConcurrentAdvance, withEphemeralWorktree, advanceOrCollide, canonicalHead, DEFAULT_STAGE_CAP, type PrepareContext } from './canonicalAdvance';
 import { noopDevLog, type DevLog } from './devlog';
 import { noopTracer, noopActiveSpan, STAGE_RUN_OP, type Tracer, type ActiveSpan } from './tracing';
+import { CanonicalQueueCache } from './queueCache';
 
 const STAGE = 'compose';
 /** Default attempts (per claims-signature) before an un-composable entity is set aside (ORCH-12). */
@@ -376,6 +377,10 @@ export class ComposeStage {
   private pending = false;
   private current: Promise<void> | null = null;
   private drainStartedAt: string | null = null;
+  // #506: compose was the one Enrich stage without its sibling claims/connect/decompose's HEAD-keyed
+  // queue memo — every drain pass re-walked the full compose queue even when idle. Both call sites in
+  // drainOnce share it (mirrors DecomposeStage.queueCache).
+  private readonly queueCache = new CanonicalQueueCache<string[]>();
 
   /**
    * @param afterDrain optional hook run (serialized under the shared lock) after a drain that
@@ -436,6 +441,12 @@ export class ComposeStage {
     return this.drainStartedAt;
   }
 
+  /** #506 perf proof/telemetry: how many queue reads were served from the canonical-HEAD memo
+   *  (`hits` = walks skipped) vs recomputed (`misses` = a real walk ran). Mirrors the sibling stages. */
+  queueCacheStats(): { hits: number; misses: number } {
+    return { hits: this.queueCache.hits, misses: this.queueCache.misses };
+  }
+
   poke(): Promise<void> {
     this.pending = true;
     if (!this.draining) {
@@ -460,7 +471,7 @@ export class ComposeStage {
   }
 
   private async drainOnce(): Promise<void> {
-    let queue = await readComposeQueue(this.root, this.maxAttempts);
+    let queue = await this.queueCache.read(this.root, () => readComposeQueue(this.root, this.maxAttempts));
     // A backlog sweep (COMPOSE-9) vs a live poke: more than one batch's worth pending ⇒ we're
     // backfilling the existing corpus, so emit progress.
     const backfill = queue.length > this.cap;
@@ -501,7 +512,7 @@ export class ComposeStage {
       // debounces these requests into infrequent bursts (afterDrain = `promoter.request()`), so this is
       // never a per-entity promotion storm against the live Obsidian vault (the #319 P1).
       if (batchComposed > 0 && this.afterDrain) await this.lock.run(() => this.afterDrain!(), 'compose:afterDrain');
-      queue = await readComposeQueue(this.root, this.maxAttempts);
+      queue = await this.queueCache.read(this.root, () => readComposeQueue(this.root, this.maxAttempts));
       if (backfill) this.log.info('compose.backfill-progress', { composed: composedTotal, remaining: queue.length });
     }
     // Bounded-per-pass: a backlog remains (we hit the sweep cap) → continue on the next drain pass

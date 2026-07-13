@@ -16,8 +16,28 @@ import type { ScreenshotMode, ScreenshotResult, ScreenshotHandle } from '../kb/t
 
 const execFileP = promisify(execFile);
 
-/** Temp-PNG handles this process issued (the ONLY paths kb:quickCapture will read for a screenshot). */
-const issued = new Set<string>();
+/** Temp-PNG handles this process issued (the ONLY paths kb:quickCapture will read for a screenshot),
+ *  mapped to when each was issued (ms) — backs the abandoned-capture TTL sweep below (#506). */
+const issued = new Map<string, number>();
+
+/** #506: a Quick Capture sheet the user opens then closes WITHOUT submitting leaks its temp PNG
+ *  forever (never consumed, never removed) plus its `issued` entry. Evict + delete anything older
+ *  than this on the next capture/paste call — bounded growth without a dedicated timer. */
+export const ABANDONED_SHOT_TTL_MS = 10 * 60 * 1000; // 10 minutes — comfortably longer than any real capture flow
+
+/** Evict + delete any issued handle older than the TTL. Exported for tests (injectable clock) and so
+ *  a caller can also run it proactively on a slower cadence. Returns how many were evicted. */
+export async function sweepAbandonedScreenshots(now: () => number = Date.now): Promise<number> {
+  const cutoff = now() - ABANDONED_SHOT_TTL_MS;
+  let evicted = 0;
+  for (const [handle, issuedAt] of issued) {
+    if (issuedAt > cutoff) continue;
+    issued.delete(handle);
+    await fs.rm(handle, { force: true }).catch(() => {});
+    evicted++;
+  }
+  return evicted;
+}
 
 const MODE_FLAG: Record<ScreenshotMode, string> = { full: '-x', region: '-i', window: '-w' };
 
@@ -69,6 +89,7 @@ function screenRecordingStatus(): 'granted' | 'denied' | 'unsupported' {
  * error). On success the handle is registered for a one-time `consumeScreenshotHandle` on submit.
  */
 export async function captureScreenshot(mode: ScreenshotMode): Promise<ScreenshotResult> {
+  await sweepAbandonedScreenshots(); // #506: evict any prior abandoned handle before issuing a new one
   const status = screenRecordingStatus();
   if (status !== 'granted') return { status, image: null };
 
@@ -90,7 +111,7 @@ export async function captureScreenshot(mode: ScreenshotMode): Promise<Screensho
   } catch {
     return { status: 'cancelled', image: null }; // no file produced (cancelled)
   }
-  issued.add(shot.handle);
+  issued.set(shot.handle, Date.now());
   return { status: 'granted', image: shot };
 }
 
@@ -99,13 +120,14 @@ export async function captureScreenshot(mode: ScreenshotMode): Promise<Screensho
  * sheet can load it the same way as a screenshot. Null when the clipboard has no image. Cross-platform.
  */
 export async function clipboardImageHandle(): Promise<ScreenshotHandle | null> {
+  await sweepAbandonedScreenshots(); // #506: evict any prior abandoned handle before issuing a new one
   try {
     const img = clipboard.readImage();
     if (img.isEmpty()) return null;
     await fs.mkdir(shotDir(), { recursive: true });
     const shot = newShot('pasted-image');
     await fs.writeFile(shot.handle, img.toPNG());
-    issued.add(shot.handle);
+    issued.set(shot.handle, Date.now());
     return shot;
   } catch {
     return null;

@@ -31,11 +31,11 @@ import { makeCopilotDecider } from '../kb/copilotAgent';
 import { makeSensitivityClassifier } from '../kb/sensitivityClassifier';
 import { DecomposeStage, readDecomposeQueue } from '../kb/decomposeStage';
 import { makeDecomposeDecider } from '../kb/decomposeAgent';
-import { ClaimsStage, readClaimsQueue, listSetAsideItems, retryClaimsItem, dismissClaimsItem } from '../kb/claimsStage';
+import { ClaimsStage, readClaimsQueue, listSetAsideItems, retryClaimsItem, dismissClaimsItem, type SetAsideItem } from '../kb/claimsStage';
 import { makeClaimsDecider } from '../kb/claimsAgent';
 import { ComposeStage, readComposeQueue, reopenComposeSetAside, composeBacklogStats } from '../kb/composeStage';
 import { makeComposeDecider } from '../kb/composeAgent';
-import { ConnectStage, readConnectQueue, listConnectSetAsideItems, retryConnectItem, dismissConnectItem } from '../kb/connectStage';
+import { ConnectStage, readConnectQueue, listConnectSetAsideItems, retryConnectItem, dismissConnectItem, type ConnectSetAsideItem } from '../kb/connectStage';
 import { makeConnectDecider } from '../kb/connectAgent';
 import { Mutex } from '../kb/stageLock';
 import { createVaultDevLog, readRecentDevLogEntries, type DevLog } from '../kb/devlog';
@@ -49,9 +49,12 @@ import { assemblePipelineStatus, toSetAsideViews, deriveStageError, buildInFligh
 import { displayItemName } from '../kb/pipelineStatusLabels';
 import { readSourceTitles } from '../kb/sourceTitleRead';
 import { planSetAsideAction, type SetAsideTarget } from '../kb/pipelineControl';
-import { readConversionCounts } from '../kb/conversionCounts';
+import { readConversionCounts, type ConversionCounts } from '../kb/conversionCounts';
 import { ensureStagingWorktree } from '../kb/stagingWorktree';
 import { reapEphemeralWorktrees, boundedGit } from '../kb/canonicalAdvance';
+import { fastHeadSha, fastHeadBranch } from '../kb/gitHeadFast';
+import { CanonicalQueueCache } from '../kb/queueCache';
+import type { CandidateSet } from '../kb/connectAgent';
 import { reconcileStaleIndexLock, hasLiveIndexHolder } from '../kb/canonicalLockHeal';
 import { promote } from '../kb/staging';
 import {
@@ -141,6 +144,18 @@ interface ActivePipeline {
   promoter: CoalescingPromoter; // STAGING-12: coalesces per-drain promotion into infrequent batched bursts
   log: DevLog; // the vault dev-log — reused by Run-now so a researcher failure is logged (#160)
   quiescing: boolean; // SPEC-0045 QUIESCE: true once "Prepare for shutdown" paused new work (drain in progress)
+  // #506: the status tick used to re-walk decompose/connect/claims' queues + conversion counts + set-
+  // asides from scratch every 2.5s even when nothing had changed. HEAD-keyed memos (own instances, not
+  // shared with the stages' internal drain-loop caches) so an idle tick costs a spawn-free sha read
+  // instead of a full tree walk. One instance per active vault (mirrors the per-stage `queueCache` fields).
+  statusCache: {
+    decompose: CanonicalQueueCache<string[]>;
+    connect: CanonicalQueueCache<CandidateSet[]>;
+    claims: CanonicalQueueCache<string[]>;
+    conversion: CanonicalQueueCache<ConversionCounts>;
+    claimsSetAside: CanonicalQueueCache<SetAsideItem[]>;
+    connectSetAside: CanonicalQueueCache<ConnectSetAsideItem[]>;
+  };
 }
 
 // STAGING-12 promotion cadence — `main` is the live Obsidian vault, so promote in infrequent bursts,
@@ -478,7 +493,33 @@ export async function startPipeline(vaultPath: string): Promise<Orchestrator> {
   // checks watched folders against the REAL vault root (vaultPath), never staging. Inert until the
   // Principal registers + enables a folder in `.kb/watch/registry.json`.
   const watch = new WatchScheduler(stagingWt, vaultPath, log);
-  active = { vaultPath, stagingWt, orch, decompose, connect, claims, compose, jobs, researchers, intake, watch, lock, promoter, log, quiescing: false };
+  active = {
+    vaultPath,
+    stagingWt,
+    orch,
+    decompose,
+    connect,
+    claims,
+    compose,
+    jobs,
+    researchers,
+    intake,
+    watch,
+    lock,
+    promoter,
+    log,
+    quiescing: false,
+    statusCache: {
+      decompose: new CanonicalQueueCache(fastHeadSha),
+      connect: new CanonicalQueueCache(fastHeadSha),
+      claims: new CanonicalQueueCache(fastHeadSha),
+      // Conversion counts read BOTH roots (staging + the promoted-to main) — key on both shas so a
+      // promotion-only change (main's HEAD moves, staging's doesn't) still busts the memo.
+      conversion: new CanonicalQueueCache(async () => `${await fastHeadSha(stagingWt)}:${await fastHeadSha(vaultPath)}`),
+      claimsSetAside: new CanonicalQueueCache(fastHeadSha),
+      connectSetAside: new CanonicalQueueCache(fastHeadSha),
+    },
+  };
   const readyMs = Date.now() - startedAt; // when the Jobs/read IPC went live — independent of the reap
   // #135 cascade recovery: at boot no ephemeral per-item worktree is legitimately in flight, so reap
   // any leaked `<stage>-<ULID>` worktrees + their `kb/*-work-*` branches left by a crash/kill (the
@@ -546,8 +587,10 @@ async function listWorktrees(vaultPath: string): Promise<WorktreeInfo[]> {
     const wt = path.join(root, e.name);
     let branch: string | undefined;
     try {
-      // #135 cascade: time-bounded so a broken/leaked worktree can't hang the read-only status path.
-      branch = (await boundedGit(wt).revparse(['--abbrev-ref', 'HEAD'])).trim();
+      // #506: was one git spawn PER worktree PER status tick (~2,500/hour at rest). `fastHeadBranch`
+      // reads `.git/HEAD` directly and only falls back to the (still #135-bounded) git spawn on an
+      // unrecognized on-disk shape.
+      branch = await fastHeadBranch(wt);
     } catch {
       /* not a worktree / detached / timed-out — leave branch undefined */
     }
@@ -568,12 +611,14 @@ async function listWorktrees(vaultPath: string): Promise<WorktreeInfo[]> {
  */
 async function computePipelineStatus(): Promise<PipelineStatusView | null> {
   if (!active) return null;
-  const { vaultPath, stagingWt, lock, orch, decompose, connect, claims } = active;
+  const { vaultPath, stagingWt, lock, orch, decompose, connect, claims, statusCache } = active;
   const [archiveQ, decompQ, connectQ, claimsQ, archiveStatus, recentRaw, perf, worktrees, claimsSetAside, connectSetAside, conversion] = await Promise.all([
     readQueue(stagingWt),
-    readDecomposeQueue(stagingWt),
-    readConnectQueue(stagingWt),
-    readClaimsQueue(stagingWt),
+    // #506: these three raw readers each re-walk their whole tree; HEAD-key them so an idle tick (no
+    // canonical commit since the last one) is a spawn-free sha read instead of a full re-walk.
+    statusCache.decompose.read(stagingWt, () => readDecomposeQueue(stagingWt)),
+    statusCache.connect.read(stagingWt, () => readConnectQueue(stagingWt)),
+    statusCache.claims.read(stagingWt, () => readClaimsQueue(stagingWt)),
     orch.status(),
     readRecentDevLogEntries(vaultPath, { limit: 25 }),
     // OBS-12/13 path fix: the tracer WRITES spans to `vaultPath` (createVaultTracer(vaultPath), ~L288),
@@ -581,9 +626,9 @@ async function computePipelineStatus(): Promise<PipelineStatusView | null> {
     // and the Latency & Throughput panel showed "No Copilot calls recorded yet" while calls flowed.
     loadPerfIndex(vaultPath),
     listWorktrees(vaultPath),
-    listSetAsideItems(stagingWt), // OBS-17: claims poison items (canonical claims-path reader, CLAIMS-20)
-    listConnectSetAsideItems(stagingWt), // OBS-17: connect poison blocks (CLAIMS-20 connect twin, #157)
-    readConversionCounts(stagingWt, vaultPath), // SPEC-0032 VIZ-3: funnel counts (staging state + promoted on main)
+    statusCache.claimsSetAside.read(stagingWt, () => listSetAsideItems(stagingWt)), // OBS-17: claims poison items (canonical claims-path reader, CLAIMS-20)
+    statusCache.connectSetAside.read(stagingWt, () => listConnectSetAsideItems(stagingWt)), // OBS-17: connect poison blocks (CLAIMS-20 connect twin, #157)
+    statusCache.conversion.read(stagingWt, () => readConversionCounts(stagingWt, vaultPath)), // SPEC-0032 VIZ-3: funnel counts (staging state + promoted on main)
   ]);
   // Union every stage's set-aside items into the view (claims + connect; future stages append here).
   // Each stage maps its item to the generic {itemId, name, failures, rounds} source shape.
@@ -792,12 +837,31 @@ async function saveGraphProjection(vaultPath: string, graph: GraphProjection): P
   await fs.writeFile(file, JSON.stringify(graph), 'utf8');
 }
 
+// #505: the interval tick used to run the full O(N+M+S) `computeGraphProjection` walk every 5s
+// regardless of whether anything changed. HEAD-gate it: a spawn-free sha read (`fastHeadSha`) costs a
+// couple of small fs reads, so an idle vault's 5s tick is nearly free instead of walking every entity/
+// claim/source file for nothing. `lastHeadSha`/`lastResult` are this closure's memo, reset per vault
+// activation (module-level `active` swap) since they're only ever touched from here.
+let graphMemoHead: string | null = null;
+let graphMemoResult: GraphProjection | null = null;
+
 /** The graph-projection compute (background cadence): one precomputed-backlink pass over the EVERGREEN
  *  graph at the active vault root (STATE-7 — the settled main tree, like the rest of Explore/recall,
- *  never the `staging` worktree mid-write). Null when no KB is open. */
+ *  never the `staging` worktree mid-write). Null when no KB is open. Returns the SAME object reference
+ *  as the prior call when the canonical HEAD hasn't moved (`projectionStore`'s no-op fast path then
+ *  skips the restamp/save/push too — a true no-op tick, not just a skipped walk). */
 async function computeGraph(): Promise<GraphProjection | null> {
-  if (!active) return null;
-  return computeGraphProjection(active.vaultPath);
+  if (!active) {
+    graphMemoHead = null;
+    graphMemoResult = null;
+    return null;
+  }
+  const head = await fastHeadSha(active.vaultPath).catch((): null => null);
+  if (head !== null && head === graphMemoHead && graphMemoResult !== null) return graphMemoResult;
+  const result = await computeGraphProjection(active.vaultPath);
+  graphMemoHead = head;
+  graphMemoResult = result;
+  return result;
 }
 
 /** The maintained graph projection (SPEC-0058 STATE-2). Started/stopped with the stage sweeps. */

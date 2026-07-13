@@ -308,6 +308,22 @@ export class Orchestrator {
   }
 
   private async drainOnce(): Promise<void> {
+    // #506: an idle sweep took the canonical lock TWICE (normalize, then afterDrain below) even with a
+    // totally empty inbox. A cheap unlocked readdir first: nothing on disk (no canonical units, no
+    // foreign drops) means normalize has nothing to adopt and the drain loop has nothing to do, so skip
+    // straight past both lock.run calls. Anything present still goes through the full normalize+drain
+    // path unchanged (normalizeInbox's own readdir stays the source of truth for what's foreign vs
+    // canonical — this is only a "is there ANYTHING at all" fast exit).
+    let precheck: string[];
+    try {
+      precheck = await fs.readdir(path.join(path.resolve(this.root), 'inbox'));
+    } catch {
+      precheck = [];
+    }
+    if (precheck.length === 0) {
+      await this.updateStatus(0, null);
+      return;
+    }
     // ORCH-14: adopt any foreign drops into canonical units before draining.
     await this.lock.run(() => normalizeInbox(this.root), 'normalize');
     let queue = await readQueue(this.root);

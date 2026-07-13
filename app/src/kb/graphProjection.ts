@@ -16,7 +16,8 @@
 // function `(RecallTools) → GraphProjection` plus its read adapter, plugged into that store as `compute`.
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { makeReadOnlyTools } from './recallTools';
+import { parseEntityNode } from './connectDoc';
+import { parseClaimMd, makeReadOnlyTools } from './recallTools';
 import type { RecallTools, EntityHit, ClaimHit, LinkHit, GrepHit } from './recall';
 
 /** A precomputed, serializable snapshot of the evergreen knowledge graph (STATE-2). Carries exactly what
@@ -60,27 +61,87 @@ export async function computeGraphProjection(root: string, now: () => string = (
   root = path.resolve(root);
   const tools = makeReadOnlyTools(root);
 
-  // One scan of all (parsing) entities (the same call Explore/Health make), held as the projection's entity set.
-  const entities = await tools.entityLookup({ query: '', limit: ENTITY_SCAN_LIMIT });
-
-  // Read each entity node once (its md serves predicates for Explore + link/thin scan for Health).
-  const entityMd: Record<string, string> = {};
-  for (const e of entities) {
-    const md = await tools.readNode({ rel: e.rel });
-    if (typeof md === 'string') entityMd[e.rel] = md;
+  // ONE walk of entities/ + claims/, each file read EXACTLY ONCE (#505 — collectAllClaims used to call
+  // claimsForEntity per entity, and EACH call re-walked + re-parsed every claim file: O(N·M) reads. The
+  // old code also re-read every entity/claim file a THIRD time for the backlink source set. Here the
+  // raw content backs BOTH the parsed entity/claim data AND the backlink scan below — total reads are
+  // exactly N (entities) + M (claims) + S (cited sources), never N×M.
+  const rawEntities: Array<{ rel: string; md: string }> = [];
+  for (const rel of await walkMdFiles(root, 'entities')) {
+    try {
+      rawEntities.push({ rel, md: await fs.readFile(path.join(root, rel), 'utf8') });
+    } catch {
+      /* unreadable — skip */
+    }
+  }
+  const rawClaims: Array<{ rel: string; md: string }> = [];
+  for (const rel of await walkMdFiles(root, 'claims')) {
+    try {
+      rawClaims.push({ rel, md: await fs.readFile(path.join(root, rel), 'utf8') });
+    } catch {
+      /* unreadable — skip */
+    }
   }
 
-  const claims = await collectAllClaims(tools, entities);
+  // Parse entities (foreign/malformed nodes skipped, mirrors recallTools' allEntities), sorted + capped
+  // EXACTLY like the live `entityLookup({query:'', limit: ENTITY_SCAN_LIMIT})` scan (equivalence, #468).
+  const parsedEntities: EntityHit[] = [];
+  for (const { rel, md } of rawEntities) {
+    try {
+      const node = parseEntityNode(md);
+      parsedEntities.push({
+        rel,
+        id: node.id,
+        kind: node.kind,
+        name: node.name,
+        aliases: node.aliases,
+        confidence: node.confidence,
+        tags: node.tags,
+        derivedFrom: node.derivedFrom,
+      });
+    } catch {
+      /* foreign / malformed node — skip, matches allEntities() */
+    }
+  }
+  const entities = parsedEntities
+    .sort((a, b) => b.confidence - a.confidence || a.name.localeCompare(b.name))
+    .slice(0, ENTITY_SCAN_LIMIT);
+
+  const rawEntityMdByRel = new Map(rawEntities.map((f) => [f.rel, f.md]));
+  const entityMd: Record<string, string> = {};
+  for (const e of entities) {
+    const md = rawEntityMdByRel.get(e.rel);
+    if (md !== undefined) entityMd[e.rel] = md;
+  }
+
+  // Parse claims (malformed skipped, matches allClaims()) — one pass, no per-entity re-walk.
+  const claims: ClaimHit[] = [];
+  for (const { rel, md } of rawClaims) {
+    try {
+      const c = parseClaimMd(md);
+      claims.push({
+        rel,
+        id: c.id,
+        subject: c.subject,
+        status: c.status,
+        confidence: c.confidence,
+        statement: c.statement,
+        derivedFrom: c.derivedFrom,
+        mentions: c.mentions,
+        relatesTo: c.relatesTo,
+      });
+    } catch {
+      /* malformed claim — skip, matches allClaims() */
+    }
+  }
 
   // PRECOMPUTE backlinks against the SAME source set the live `linkTraversal.incoming` walks: EVERY `.md`
-  // under entities/+claims/, read RAW (not just the parsed entities/claims). This is the QD fast-follow on
+  // under entities/+claims/, RAW (not just the parsed entities/claims). This is the QD fast-follow on
   // #468: a `[[validEntity]]` inside a MALFORMED entity (skipped by `entityLookup`) or an ORPHAN claim
   // (subject merged away, so `claimsForEntity` never returns it) is an incoming backlink the live walk counts
-  // — the projection must too, or it diverges on a large/merged vault. (Consumers `buildNeighborhood`/
-  // `buildHealthReport` happen to filter non-entity sources, so #468's rendered output was already correct;
-  // this makes the raw `linkTraversal` adapter faithful, the right invariant for a drop-in tool surface.)
-  // The O(N·(N+M)) cost lives HERE, once per refresh, never on the render path.
-  const sourceFiles = await readAllGraphFiles(root);
+  // — the projection must too, or it diverges on a large/merged vault. Reuses the raw content already read
+  // above instead of a second walk (was a full third re-read of every entity/claim file — #505).
+  const sourceFiles = [...rawEntities, ...rawClaims];
   const backlinks: Record<string, LinkHit[]> = {};
   for (const e of entities) {
     const target = `[[${e.rel}]]`;
@@ -97,23 +158,6 @@ export async function computeGraphProjection(root: string, now: () => string = (
   }
 
   return { entities, entityMd, backlinks, claims, sourceMd, builtAt: now() };
-}
-
-/** Read EVERY `.md` under `entities/` + `claims/` raw (rel + content) — the backlink-source SUPERSET the
- *  live `linkTraversal.incoming` walks, INCLUDING files that don't parse as a valid entity/claim. Mirrors
- *  recallTools' private walkFiles + readFile; unreadable files are skipped (best-effort), exactly like live. */
-async function readAllGraphFiles(root: string): Promise<Array<{ rel: string; md: string }>> {
-  const out: Array<{ rel: string; md: string }> = [];
-  for (const dir of ['entities', 'claims']) {
-    for (const rel of await walkMdFiles(root, dir)) {
-      try {
-        out.push({ rel, md: await fs.readFile(path.join(root, rel), 'utf8') });
-      } catch {
-        /* unreadable — skip, like live */
-      }
-    }
-  }
-  return out;
 }
 
 /** Recursively list `.md` rel-paths under `root/dir` (skips dotdirs; a missing dir → []). Mirrors the
@@ -140,19 +184,7 @@ async function walkMdFiles(root: string, dir: string): Promise<string[]> {
 /** The same generous entity cap the live read surface uses (recallTools/explorePanel ENTITY_SCAN_LIMIT). */
 const ENTITY_SCAN_LIMIT = 2000;
 
-/** Collect every claim across all entities, deduped by claim rel (the projection holds the full claim set
- *  so `claimsForEntity` is a pure in-memory filter). Uses the live `claimsForEntity` per entity — bounded
- *  and run ONCE at compute time, never on the render path. */
-async function collectAllClaims(tools: RecallTools, entities: EntityHit[]): Promise<ClaimHit[]> {
-  const byRel = new Map<string, ClaimHit>();
-  for (const e of entities) {
-    const cs = await tools.claimsForEntity({ entity: e.rel, limit: CLAIM_COLLECT_LIMIT });
-    for (const c of cs) if (!byRel.has(c.rel)) byRel.set(c.rel, c);
-  }
-  return [...byRel.values()];
-}
-
-/** A high per-entity claim cap for the one-time collection pass (well above any real entity's claim count). */
+/** A high per-entity claim cap for `claimsForEntity` reads (well above any real entity's claim count). */
 const CLAIM_COLLECT_LIMIT = 1000;
 
 /**

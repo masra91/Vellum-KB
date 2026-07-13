@@ -79,6 +79,11 @@ export function createProjectionStore<T>(deps: ProjectionStoreDeps<T>): Projecti
     try {
       const next = await deps.compute();
       if (next !== null) {
+        // A HEAD-gated compute (#505/#506) that finds nothing changed returns the SAME reference it
+        // returned last time instead of redoing the expensive work — a true no-op: no restamp, no
+        // save, no push. Every other store's compute always builds a fresh object, so this branch is
+        // dead weight for them (reference equality never holds by construction) — safe by default.
+        if (projection && next === projection.data) return;
         set(next, false);
         try {
           deps.save?.(next);
