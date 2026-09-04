@@ -1,0 +1,76 @@
+summary: {'info': 0, 'low': 3, 'moderate': 4, 'high': 36, 'critical': 3, 'total': 46}
+high      @electron-forge/cli                 direct=True range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/core', '@electron-forge/core-utils', '@electron-forge/shared-types'] fix=@electron-forge/cli@6.4.2 major=True
+high      @electron-forge/core                direct=False range=<=8.0.0-alpha.8 via=['@electron-forge/core-utils', '@electron-forge/maker-base', '@electron-forge/plugin-base'] fix=True
+high      @electron-forge/core-utils          direct=False range=<=8.0.0-alpha.8 via=['@electron-forge/shared-types', '@electron/rebuild'] fix=@electron-forge/cli@6.4.2 major=True
+high      @electron-forge/maker-base          direct=False range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/shared-types'] fix=True
+high      @electron-forge/maker-deb           direct=True range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/maker-base', '@electron-forge/shared-types'] fix=@electron-forge/maker-deb@6.4.2 major=True
+high      @electron-forge/maker-rpm           direct=True range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/maker-base', '@electron-forge/shared-types'] fix=@electron-forge/maker-rpm@6.4.2 major=True
+high      @electron-forge/maker-squirrel      direct=True range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/maker-base', '@electron-forge/shared-types'] fix=@electron-forge/maker-squirrel@6.4.2 major=True
+high      @electron-forge/maker-zip           direct=True range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/maker-base', '@electron-forge/shared-types'] fix=@electron-forge/maker-zip@6.4.2 major=True
+high      @electron-forge/plugin-auto-unpack-natives direct=True range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/plugin-base', '@electron-forge/shared-types'] fix=@electron-forge/plugin-auto-unpack-natives@6.4.2 major=True
+high      @electron-forge/plugin-base         direct=False range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/shared-types'] fix=True
+high      @electron-forge/plugin-fuses        direct=True range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/plugin-base', '@electron-forge/shared-types'] fix=@electron-forge/plugin-fuses@6.4.2 major=True
+high      @electron-forge/plugin-vite         direct=True range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/plugin-base', '@electron-forge/shared-types'] fix=@electron-forge/plugin-vite@6.4.2 major=True
+high      @electron-forge/publisher-base      direct=False range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/shared-types'] fix=True
+high      @electron-forge/shared-types        direct=False range=<=8.0.0-alpha.8 via=['@electron/packager', '@electron/rebuild'] fix=@electron-forge/plugin-fuses@6.4.2 major=True
+high      @electron-forge/template-base       direct=False range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/core-utils', '@electron-forge/shared-types'] fix=True
+high      @electron-forge/template-vite       direct=False range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/shared-types', '@electron-forge/template-base'] fix=True
+high      @electron-forge/template-vite-typescript direct=False range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/shared-types', '@electron-forge/template-base'] fix=True
+high      @electron-forge/template-webpack    direct=False range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/shared-types', '@electron-forge/template-base'] fix=True
+high      @electron-forge/template-webpack-typescript direct=False range=7.0.0 - 8.0.0-alpha.8 via=['@electron-forge/shared-types', '@electron-forge/template-base'] fix=True
+high      @electron/node-gyp                  direct=False range=* via=['make-fetch-happen', 'tar'] fix=@electron-forge/plugin-fuses@6.4.2 major=True
+high      @electron/packager                  direct=False range=18.0.0 - 20.0.0 via=['extract-zip'] fix=@electron-forge/plugin-fuses@6.4.2 major=True
+high      @electron/rebuild                   direct=False range=3.2.10 - 4.0.2 via=['@electron/node-gyp', 'tar'] fix=@electron-forge/plugin-fuses@6.4.2 major=True
+low       @inquirer/editor                    direct=False range=<=4.2.15 via=['external-editor'] fix=@electron-forge/cli@6.4.2 major=True
+low       @inquirer/prompts                   direct=False range=<=6.0.1 via=['@inquirer/editor'] fix=@electron-forge/cli@6.4.2 major=True
+high      @mapbox/node-pre-gyp                direct=False range=<=1.0.11 via=['tar'] fix=True
+critical  @vitest/coverage-v8                 direct=True range=<=3.2.5 via=['vitest'] fix=@vitest/coverage-v8@3.2.7 major=False
+moderate  @xmldom/xmldom                      direct=False range=0.9.0 - 0.9.11 via=['@xmldom/xmldom'] fix=True
+      - xmldom: XML fragment injection via invalid EntityReference.nodeName during requireWellFormed serialization
+high      brace-expansion                     direct=False range=<=1.1.17 || 2.0.0 - 2.1.3 || 4.0.0 - 5.0.8 via=['brace-expansion', 'brace-expansion', 'brace-expansion'] fix=True
+      - brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash
+      - brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash
+high      browserslist                        direct=False range=<=4.28.6 via=['browserslist', 'browserslist'] fix=True
+      - Browserslist: Unbounded memory growth (no cache eviction) via distinct query results, leading to eventual OOM
+      - Browserslist: Uncaught crash / prototype write via untrusted browserslist-stats.json custom stats (normalizeStats)
+high      cacache                             direct=False range=14.0.0 - 18.0.4 via=['tar'] fix=True
+moderate  dompurify                           direct=True range=<=3.4.12 via=['dompurify', 'dompurify', 'dompurify'] fix=dompurify@3.4.14 major=False
+      - DOMPurify: Cross-realm IN_PLACE sanitization leaves executable markup intact via realm-bound `instanceof` checks
+      - DOMPurify: IN_PLACE mode preserves attributes of a clobbered root element, allowing XSS via attacker-controlled root DOM
+high      electron                            direct=True range=1.3.1 - 40.10.2 || 41.0.0-alpha.1 - 41.7.1 || 42.0.0-alpha.1 - 42.5.0 || 43.0.0-alpha.1 - 43.0.0-beta.8 via=['electron', 'extract-zip'] fix=electron@42.11.2 major=False
+      - Electron: ProtocolResponse.url reuses the default session cache instead of the registering session
+moderate  esbuild                             direct=False range=<=0.24.2 via=['esbuild'] fix=vite@8.2.2 major=True
+      - esbuild enables any website to send any requests to the development server and read the response
+low       external-editor                     direct=False range=>=1.1.1 via=['tmp'] fix=@electron-forge/cli@6.4.2 major=True
+high      extract-zip                         direct=False range=* via=['extract-zip'] fix=@electron-forge/plugin-fuses@6.4.2 major=True
+      - extract-zip unvalidated symlink path traversal
+high      fast-uri                            direct=False range=3.0.0 - 3.1.5 via=['fast-uri', 'fast-uri', 'fast-uri'] fix=True
+      - fast-uri vulnerable to host confusion via literal backslash authority delimiter
+      - fast-uri vulnerable to host confusion via backslash authority introducer
+high      ip-address                          direct=False range=<=10.3.0 via=['ip-address', 'ip-address', 'ip-address'] fix=True
+      - ip-address: Address4 decodes leading-zero octets as decimal while resolvers decode them as octal, allowing SSRF and trust-boundary bypass
+      - ip-address: a CIDR suffix on the parsed address suppresses special-use classification and can bypass SSRF and trust-boundary checks
+high      js-yaml                             direct=True range=4.0.0 - 4.3.0 via=['js-yaml', 'js-yaml', 'js-yaml'] fix=js-yaml@4.3.2 major=False
+      - js-yaml has prototype pollution in merge (<<)
+      - JS-YAML: Quadratic-complexity DoS in merge key handling via repeated aliases
+high      make-fetch-happen                   direct=False range=7.1.1 - 14.0.0 via=['cacache'] fix=True
+high      nanoid                              direct=False range=<3.3.18 via=['nanoid'] fix=True
+      - nanoid: custom generators can loop indefinitely when size is zero
+moderate  postcss                             direct=False range=<=8.5.22 via=['postcss'] fix=True
+      - PostCSS: incomplete fix of GHSA-6g55-p6wh-862q — attacker-controlled sourceMappingURL reads arbitrary .map files when `from` is unset
+critical  tar                                 direct=False range=<=7.5.20 via=['tar', 'tar', 'tar'] fix=@electron-forge/plugin-fuses@6.4.2 major=True
+      - node-tar Vulnerable to Arbitrary File Creation/Overwrite via Hardlink Path Traversal
+      - node-tar is Vulnerable to Arbitrary File Overwrite and Symlink Poisoning via Insufficient Path Sanitization
+high      tmp                                 direct=False range=<=0.2.5 via=['tmp', 'tmp'] fix=@electron-forge/cli@6.4.2 major=True
+      - tmp allows arbitrary temporary file / directory write via symbolic link `dir` parameter
+      - tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape
+high      undici                              direct=False range=7.0.0 - 7.28.0 via=['undici', 'undici', 'undici'] fix=True
+      - undici vulnerable to downstream response desynchronization via retry interceptor
+      - undici vulnerable to cross-user information disclosure and parse-time crash via degenerate private cache directives
+high      vite                                direct=True range=<=6.4.2 via=['vite', 'vite', 'vite'] fix=vite@8.2.2 major=True
+      - Vite Vulnerable to Path Traversal in Optimized Deps `.map` Handling
+      - launch-editor: NTLMv2 hash disclosure via UNC path handling on Windows
+critical  vitest                              direct=True range=<3.2.6 via=['vitest'] fix=@vitest/coverage-v8@3.2.7 major=False
+      - When Vitest UI server is listening, arbitrary file can be read and executed
+
+[exited with code 0]
