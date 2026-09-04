@@ -1,0 +1,82 @@
+=== knip ===
+src/kb/obsidianConfig.ts: buildAppearanceConfig
+src/kb/perfIndex.ts: COPILOT_OP, STAGE_RUN_OP, PERF_INDEX_VERSION, DEFAULT_SPAN_WINDOW, DEFAULT_SLOW_COUNT, DEFAULT_SPANS_TAIL_BYTES, writePerfIndexCache
+src/kb/recall.ts: TOOL_NAMES, SUBMIT_ANSWER_TOOL, DEFAULT_MAX_TOOL_CALLS
+src/kb/reflectAgent.ts: REFLECT_PROMPT_VERSION
+src/kb/replay.ts: PURGE_DIRS
+src/kb/researchM365Agent.ts: SUBMIT_FINDINGS_TOOL
+src/kb/researchNotebook.ts: NOTEBOOK_AREAS_CAP, NOTEBOOK_FRONTIER_CAP
+src/kb/researchOrient.ts: ORIENT_DEFAULT_SENSITIVITY, orientSubject
+src/kb/researchWebAgent.ts: WEB_FETCH_TOOL_NAME, WEB_SEARCH_TOOL_NAME
+src/kb/researchersPanel.ts: EGRESS_TIER_HINTS
+src/kb/sensitivityClassifier.ts: DEFAULT_SENSITIVITY
+src/kb/stageLock.ts: LockSectionTimeoutError
+src/kb/staging.ts: EVERGREEN_PATHS
+src/kb/tracing.ts: DEFAULT_SPANS_MAX_BYTES, DEFAULT_SPANS_MAX_FILES
+src/kb/watchConnectors.ts: DEFAULT_WATCH_MAX_DEPTH
+src/kb/watchRun.ts: watchLedgerPath, readWatchLedger, writeWatchLedger
+src/kb/workiqMcp.ts: WORKIQ_MCP_SUBCOMMAND
+src/main/libraryIndexRuntime.ts: resetLibraryIndexRuntimeForTests
+src/main/pipeline.ts: refreshStatusSnapshot, refreshReviewProjection, refreshGraphProjection, refreshTodayProjection, listActiveReviews
+src/main/pipelineProjections.ts: refreshGraphProjection, refreshTodayProjection
+src/main/researchWiring.ts: codeResearchOptions, m365MailIntakeOptions
+src/shell/loadGuard.ts: WARMING_AFTER_MS
+src/shell/views.ts: VIEW_JOBS, VIEW_RESEARCHERS
+src/shell/views/activityView.ts: controlsHtml, bodyHtml, splitSummary
+Unused exported types (51)
+eval/dedupFixtures.ts: ConnectDedupCandidate, ConnectDedupExisting, ReflectDedupNode
+eval/runner/baseline.ts: CheckState, DeltaKind, ScorecardDelta
+eval/runner/judge.ts: JudgeRun
+eval/runner/scenario.ts: EvalCapability, SeedSpec, ScenarioExpect
+src/kb/audit.ts: AuditProvenance
+src/kb/azRead.ts: AzPrStatus
+src/kb/canonicalLockHeal.ts: ExternalGitScan
+src/kb/claimDedup.ts: DedupGroup
+src/kb/claimsStage.ts: AnsweredReviewState, ClaimsTerminalReason
+src/kb/compose.ts: ComposeSentence
+src/kb/composeAgent.ts: ComposeClaimInput, CopilotRunner
+src/kb/composeStage.ts: ComposeState
+src/kb/connect.ts: ClusterDecision
+src/kb/connectAgent.ts: CopilotRunner
+src/kb/connectStage.ts: ConnectTerminalReason, ConnectState
+src/kb/decomposeAgent.ts: CopilotRunner
+src/kb/dedupEval.ts: ItemPair, ConsolidationProposal
+src/kb/explorePanel.ts: ExploreCitation, ExploreProjectionData
+src/kb/ghRead.ts: PrState
+src/kb/healthPanel.ts: HealthFindingClass
+src/kb/healthProjection.ts: HealthStatus
+src/kb/healthRemediation.ts: HealthRemediationAction
+src/kb/ingest.ts: TextPayload, FilePayload, ClipProvenance
+src/kb/intakeConnectors.ts: IntakeFetchContext
+src/kb/intakeSourcingPanel.ts: IntakeOutcomeKind
+src/kb/lineStations.ts: PendingBar, FunnelRail, CellRole, CarriageModel
+src/kb/lineage.ts: LineageKind
+src/kb/mediaExtract.ts: MediaVisionSession
+src/kb/memorySampler.ts: ProcMetric, SamplerLog
+src/kb/pathContainment.ts: ContainmentOk, ContainmentErr
+src/kb/perfIndex.ts: CopilotLatency, StageThroughput, WhereTimeGoes, SlowOp, SpansSource
+src/kb/recall.ts: ToolName
+src/kb/reflectAgent.ts: CopilotRunner
+src/kb/researchDispatcher.ts: ResearchOutcome
+src/kb/researchNotebook.ts: NotebookSource, NotebookFrontier
+src/kb/researchOrient.ts: OrientGate
+src/kb/researchersPanel.ts: ResearchOutcomeKind, WorkIqCardState
+src/kb/reviews.ts: ReviewCandidateGloss, ReviewItemRef, ReviewAnswer
+src/kb/sensitivity.ts: SensitivityMeta
+src/kb/sensitivityClassifier.ts: SensitivityClass
+src/kb/sensitivityOverride.ts: SensitivityOverride
+src/kb/sourceOpen.ts: SourceLocation
+src/kb/tracing.ts: SpanFields
+src/kb/types.ts: HealthRemediateRequest, HealthRemediateResult, HealthDismissRequest, HealthDismissResult, AuditSubjects, StageStatus, RecentError, WorktreeInfo, ConversionCounts, InFlightItem, HealthReadout, MemorySample, MemTrend, CrashBreadcrumb, ReviewSubjectCandidate, CaptureTextInput, CaptureFileInput, CaptureScreenshotInput, TodayGreeting, RecallEffort
+src/kb/watchConnectors.ts: WatchScanEntry
+src/kb/watchRun.ts: WatchLedger, WatchFileStat
+src/kb/workDepth.ts: WorkDepth, DepthProfile
+src/main/pipeline.ts: ProjectionPushEvent
+src/main/quickCaptureAgent.ts: AccessibilityStatus
+src/main/registries/instanceSettingsControlPanel.ts: LiveStageCaps (instanceSettingsControlPanel)
+src/shell/views/activityGlyph.ts: ActivityKind
+Duplicate exports (3)
+src/kb/archivist.ts: deterministicDecide, deterministicDecider
+src/kb/researchers.ts: RESEARCH_INSTANCE_CEILING, MAX_TOOL_CALLS
+src/shell/views.ts: VIEW_TODAY, DEFAULT_VIEW_ID
+knip exit: 1
