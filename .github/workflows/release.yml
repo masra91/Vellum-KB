@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22.23.4'
       # KB-QD-2 review nit (#560): pass GitHub context values through env vars rather than
       # interpolating `${{ }}` directly into a run body — the GHA-recommended hygiene pattern (avoids
       # a literal-text-substitution-before-shell-parsing footgun on attacker-controlled ref/repo names,
@@ -82,7 +82,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22.23.4'
           cache: npm
           cache-dependency-path: app/package-lock.json
       - run: npm ci

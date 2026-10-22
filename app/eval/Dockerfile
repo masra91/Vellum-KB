@@ -6,7 +6,7 @@
 # creds, nothing is COPYed in. Scoped eval BYOA creds are injected ONLY at run time, e.g.:
 #   docker run --rm -e COPILOT_TOKEN=<scoped-eval-token> kb-eval
 # so the image stays freely shareable and the Principal's creds never enter it.
-FROM node:22.12.0-bookworm-slim
+FROM node:22.23.4-bookworm-slim
 
 # git is a hard runtime dep — the pipeline + staging worktrees shell out to it.
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
